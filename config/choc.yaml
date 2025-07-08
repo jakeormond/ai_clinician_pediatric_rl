@@ -1,6 +1,8 @@
 DATAFRAME_PATH: "/home/jake/Documents/AI_Clinician/choc_data/combined_data/hourly/combined_hourly_features_phoenix_sepsis.parquet"
 FEATURES_TO_USE_PATH: "/home/jake/Documents/AI_Clinician/choc_code/dataframes/features_to_use.csv"
 
+PROPORTIONS_TO_USE: 0.80
+
 TARGETS: ["intake", "vis"]
 
 REWARD: "phoenix_sepsis_score"

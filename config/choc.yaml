@@ -4,6 +4,9 @@ FEATURES_TO_USE_PATH: "/home/jake/Documents/AI_Clinician/choc_code/dataframes/fe
 TARGETS: ["intake", "vis"]
 
 REWARD: "phoenix_sepsis_score"
+FLIP_REWARD: True
+
+TERMINAL_REWARD: False
 
 TIME_COL: "EVENT_END_DT_TM"
 ENCOUNTER_COL: "MASKED_ENCNTR_ID"

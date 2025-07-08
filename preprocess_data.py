@@ -108,6 +108,9 @@ def main():
 
     dataframe, features_to_use_df = load_dataset(config, proporition_w_data=0.8)
 
+    # create train, test, and validation splits
+    
+    
     dataset = split_into_rl_dataset(dataframe, config)
     
     pass

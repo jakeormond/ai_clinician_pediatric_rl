@@ -2,12 +2,22 @@
 Loads the ICU datasets (currently either MIMIC IV or choc) and stores it in a replay buffer.
 
 """
+<<<<<<< HEAD
+=======
+import os
+from typing import Dict, List
+>>>>>>> 52f592a32fb1c93b2555f6d286ae3923b113e711
 
 
 import numpy as np
 import pandas as pd
 import torch
+<<<<<<< HEAD
 import os
+=======
+
+TensorBatch = List[torch.Tensor]
+>>>>>>> 52f592a32fb1c93b2555f6d286ae3923b113e711
 
 ai_clinician_dir = "/home/jake/Documents/AI_Clinician/"
 
@@ -142,7 +152,11 @@ def icu_replay_buffer(hospital = "choc", device = "cuda" if torch.cuda.is_availa
     """
     if hospital == "choc":
         data_path = os.path.join(ai_clinician_dir, "choc_data", 
+<<<<<<< HEAD
             "combined_data", "combined_hourly_features_sepsis_proportion_0.80.parquet")
+=======
+            "combined_data", "hourly", "combined_hourly_features_sepsis_proportion_0.80.parquet")
+>>>>>>> 52f592a32fb1c93b2555f6d286ae3923b113e711
         
         dataset = pd.read_parquet(data_path)
         
@@ -154,10 +168,18 @@ def icu_replay_buffer(hospital = "choc", device = "cuda" if torch.cuda.is_availa
         dataset = pd.read_csv(data_path, compression='gzip')
 
     # convert the dataset into np arrays of observations, actions, rewards, next_observations, and terminals
+<<<<<<< HEAD
 
 
 def main():  
     
+=======
+    pass
+
+
+def main():  
+    replay_buffer = icu_replay_buffer(hospital = "choc")
+>>>>>>> 52f592a32fb1c93b2555f6d286ae3923b113e711
     
       
 

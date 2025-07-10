@@ -20,27 +20,19 @@ ai_clinician_dir = "/home/jake/Documents/AI_Clinician/"
 class ReplayBuffer:
     def __init__(
         self,
-        state_dim: int,
-        action_dim: int,
-        buffer_size: int,
+        rl_dataset: Dict[str, np.ndarray], # should contain keys: 'observations', 'actions', 'rewards', 'next_observations', 'terminals'
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
     ):
-        self._buffer_size = buffer_size
-        self._pointer = 0
-        self._size = 0
-
-        self._states = torch.zeros(
-            (buffer_size, state_dim), dtype=torch.float32, device=device
-        )
-        self._actions = torch.zeros(
-            (buffer_size, action_dim), dtype=torch.float32, device=device
-        )
-        self._rewards = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
-        self._next_states = torch.zeros(
-            (buffer_size, state_dim), dtype=torch.float32, device=device
-        )
-        self._dones = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
         self._device = device
+
+        self._states = self._to_tensor(rl_dataset["observations"])
+        self._actions = self._to_tensor(rl_dataset["actions"])
+        self._rewards = self._to_tensor(rl_dataset["rewards"])
+        self._next_states = self._to_tensor(rl_dataset["next_observations"])
+        self._dones = self._to_tensor(rl_dataset["terminated"])
+        self._size = self._states.shape[0]       
+
+        print(f"Replay buffer initialized with {self._size} transitions.")
 
     def _to_tensor(self, data: np.ndarray) -> torch.Tensor:
         return torch.tensor(data, dtype=torch.float32, device=self._device)
@@ -60,23 +52,17 @@ class ReplayBuffer:
         self._next_states[:n_transitions] = self._to_tensor(data["next_observations"])
         self._dones[:n_transitions] = self._to_tensor(data["terminals"][..., None])
         self._size += n_transitions
-        self._pointer = min(self._size, n_transitions)
 
         print(f"Dataset size: {n_transitions}")
 
     def sample(self, batch_size: int) -> TensorBatch:
-        indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
+        indices = np.random.randint(0, self._size, size=batch_size)
         states = self._states[indices]
         actions = self._actions[indices]
         rewards = self._rewards[indices]
         next_states = self._next_states[indices]
         dones = self._dones[indices]
         return [states, actions, rewards, next_states, dones]
-
-    def add_transition(self):
-        # Use this method to add new data into the replay buffer during fine-tuning.
-        # I left it unimplemented since now we do not do fine-tuning.
-        raise NotImplementedError
 
 
 def main():  
@@ -87,7 +73,9 @@ def main():
     
     processed_data = DataProcessor(config, proportion_w_data=0.8, random_state=42)
     
-    ReplayBuffer(processed_data.train_data)
+    training_buffer = ReplayBuffer(processed_data.train_data)
+
+    data_sample = training_buffer.sample(batch_size=32)
 
     pass
 

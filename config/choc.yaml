@@ -8,6 +8,7 @@ TARGETS: ["intake", "vis"]
 REWARD: "phoenix_sepsis_score"
 FLIP_REWARD: True
 
+TERMINAL_REWARD_COL: "mortality"
 TERMINAL_REWARD: False
 
 TIME_COL: "EVENT_END_DT_TM"

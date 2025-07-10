@@ -17,8 +17,7 @@ class DataProcessor:
                  test_size=0.2, 
                  val_size=0.0,
                  normalize_obs = True,
-                 normalize_actions = True,
-                 random_state=42):
+                 normalize_actions = True):
         
         self.config = config
         self.reward_feature = config["REWARD"]
@@ -32,7 +31,7 @@ class DataProcessor:
         else:
             self.include_val = False
         
-        self.random_state = random_state
+        self.random_state = config["SEED"]
         
         self._load_dataset()
         self._split_and_process()

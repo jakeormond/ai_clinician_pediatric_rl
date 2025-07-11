@@ -3,26 +3,21 @@ import pandas as pd
 import time
 import pyarrow
 from sklearn.model_selection import train_test_split
-
-
-def load_config(config_path):
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
-
+from utilities import load_config
 
 class DataProcessor:
     def __init__(self, 
                  config, 
-                 proportion_w_data=0.8, 
                  test_size=0.2, 
                  val_size=0.0,
                  normalize_obs = True,
                  normalize_actions = True):
         
         self.config = config
-        self.reward_feature = config["REWARD"]
-        self.action_features = config["TARGETS"]
-        self.proportion_w_data = proportion_w_data
+        self.reward_feature = config["reward"]
+        self.flip_reward = config["flip_reward"]
+        self.action_features = config["targets"]
+        self.proportion_w_data = config["proportions_to_use"]
         self.test_size = test_size
         self.val_size = val_size
 
@@ -31,10 +26,10 @@ class DataProcessor:
         else:
             self.include_val = False
         
-        self.random_state = config["SEED"]
+        self.random_state = config["seed"]
         
-        self._load_dataset()
-        self._split_and_process()
+        self, dataframe = self._load_dataset()
+        self._split_and_process(dataframe)
         
         self.normalize_obs = normalize_obs
         self.normalize_actions = normalize_actions
@@ -43,22 +38,22 @@ class DataProcessor:
             self._normalize_data()
 
     def _load_dataset(self):
-        dataframe = pd.read_parquet(self.config["DATAFRAME_PATH"])
-        features_to_use_df = pd.read_csv(self.config["FEATURES_TO_USE_PATH"])
+        dataframe = pd.read_parquet(self.config["dataframe_path"])
+        features_to_use_df = pd.read_csv(self.config["features_to_use_path"])
 
-        dataframe = pd.read_parquet(self.config["DATAFRAME_PATH"])
+        dataframe = pd.read_parquet(self.config["dataframe_path"])
         
-        features_to_use_df = pd.read_csv(self.config["FEATURES_TO_USE_PATH"])
+        features_to_use_df = pd.read_csv(self.config["features_to_use_path"])
 
-        # drop terminal reward column if TERMINAL_REWARD is False
-        if not self.config["TERMINAL_REWARD"]:
-            if self.config["TERMINAL_REWARD_COL"] in features_to_use_df['feature'].values:
-                features_to_use_df = features_to_use_df[features_to_use_df['feature'] != self.config["TERMINAL_REWARD_COL"]]
+        # drop terminal reward column if terminal_reward is False
+        if not self.config["terminal_reward"]:
+            if self.config["terminal_reward_col"] in features_to_use_df['feature'].values:
+                features_to_use_df = features_to_use_df[features_to_use_df['feature'] != self.config["terminal_reward_col"]]
         
         # drop any rows where "do not use" is 1
         features_to_use_df = features_to_use_df[features_to_use_df['do not use'] != 1]
 
-        # drop any rows where "propition_sepsis" is less than proportion_w_data and
+        # drop any rows where "proportion_sepsis" is less than proportion_w_data and
         # imputation_method is "interpolation"
         features_to_use_df = features_to_use_df[
             (features_to_use_df['proportion_sepsis'] >= self.proportion_w_data) |   
@@ -71,30 +66,32 @@ class DataProcessor:
         self.obs_features = [f for f in features if f not in self.action_features]
         # save the actions features
 
-        # add to these the ENCOUNTER_COL, TIME_COL, and the REWARD
-        features_to_keep = [self.config["ENCOUNTER_COL"], self.config["TIME_COL"], \
-                                        self.config["REWARD"]] + features
+        # add to these the encounter_col, time_col, and the reward
+        features_to_keep = [self.config["encounter_col"], self.config["time_col"], \
+                                        self.config["reward"]] + features
 
-        self.dataframe = dataframe[features_to_keep].copy()
+        dataframe = dataframe[features_to_keep].copy()
         
-        n_encounter_ids_before = dataframe[self.config["ENCOUNTER_COL"]].nunique()
+        n_encounter_ids_before = dataframe[self.config["encounter_col"]].nunique()
         n_rows_before = dataframe.shape[0]  
 
         # remove rows with NaN values anywhere in the dataframe
-        self.dataframe = self.dataframe.dropna()
-        self.dataframe = self.dataframe.reset_index(drop=True)
+        dataframe = dataframe.dropna()
+        dataframe = dataframe.reset_index(drop=True)
 
-        n_encounter_ids_after = self.dataframe[self.config["ENCOUNTER_COL"]].nunique()
-        n_rows_after = self.dataframe.shape[0]
+        n_encounter_ids_after = dataframe[self.config["encounter_col"]].nunique()
+        n_rows_after = dataframe.shape[0]
 
         print(f"Removed {n_encounter_ids_before - n_encounter_ids_after} "
-              f"encounter IDs and {n_rows_before - n_rows_after} rows with NaN values.")
+                f"encounter IDs and {n_rows_before - n_rows_after} rows with NaN values.")
         print(f"Remaining encounter IDs: {n_encounter_ids_after}, Remaining rows: {n_rows_after}")       
 
-       
-    def _split_and_process(self):
+        return self, dataframe
 
-        encounter_ids = self.dataframe[self.config["ENCOUNTER_COL"]].unique()
+        
+    def _split_and_process(self, dataframe):
+
+        encounter_ids = dataframe[self.config["encounter_col"]].unique()
 
         # First split off the test set
         train_ids, test_ids = train_test_split(
@@ -113,10 +110,10 @@ class DataProcessor:
         else:
             val_ids = None
 
-        train_data_dataframe = self.dataframe[self.dataframe[self.config["ENCOUNTER_COL"]].isin(train_ids)]
-        test_data_dataframe = self.dataframe[self.dataframe[self.config["ENCOUNTER_COL"]].isin(test_ids)]
+        train_data_dataframe = dataframe[dataframe[self.config["encounter_col"]].isin(train_ids)].copy()
+        test_data_dataframe = dataframe[dataframe[self.config["encounter_col"]].isin(test_ids)].copy()
         if self.include_val:
-            val_dataframe = self.dataframe[self.dataframe[self.config["ENCOUNTER_COL"]].isin(val_ids)]
+            val_dataframe = dataframe[self.dataframe[self.config["encounter_col"]].isin(val_ids)].copy()
         else:
             val_dataframe = None
 
@@ -158,25 +155,34 @@ class DataProcessor:
 
         # we piece off the rewards and actions and then will have the observations left
 
-        rewards = dataframe[self.config["REWARD"]].copy()    
-        actions = dataframe[self.config["TARGETS"]].copy()
-        observations = dataframe.drop(columns=[self.config["REWARD"]] + self.config["TARGETS"]).copy()
+        rewards = dataframe[self.config["reward"]].copy()    
+        # process the rewards
+        if self.flip_reward:
+            rewards = -rewards
+
+        # now compute hourly change in reward
+        rewards = rewards.diff().fillna(0)
+        first_indices = dataframe.groupby(self.config["encounter_col"]).head(1).index
+        rewards.loc[first_indices] = 0        
+        
+        actions = dataframe[self.config["targets"]].copy()
+        observations = dataframe.drop(columns=[self.config["reward"]] + self.config["targets"]).copy()
 
         # compute terminated
         # terminate is 0 everywhere except the final timestep for each patient
         dataframe = dataframe.copy()
         dataframe['terminated'] = 0
-        dataframe.loc[dataframe.groupby(self.config["ENCOUNTER_COL"]).tail(1).index, 'terminated'] = 1
+        dataframe.loc[dataframe.groupby(self.config["encounter_col"]).tail(1).index, 'terminated'] = 1
         terminated = dataframe['terminated'].copy()
 
         # get the next observations
         next_observations = observations.copy()
 
-        # get the indices of all the trajectory starst, i.e. the first index of each patient
-        trajectory_starts = dataframe.groupby(self.config["ENCOUNTER_COL"]).head(1).index
+        # get the indices of all the trajectory starts, i.e. the first index of each patient
+        trajectory_starts = dataframe.groupby(self.config["encounter_col"]).head(1).index
 
         # get the trajectory ends, i.e. the last index of each patient
-        trajectory_ends = dataframe.groupby(self.config["ENCOUNTER_COL"]).tail(1).index
+        trajectory_ends = dataframe.groupby(self.config["encounter_col"]).tail(1).index
 
         # for observations and actions, we remove the trajectory ends
         observations = observations.drop(index=trajectory_ends)
@@ -188,10 +194,10 @@ class DataProcessor:
         terminated = terminated.drop(index=trajectory_starts)
 
         # remove the encounter and time columns from observations and next_observations 
-        observations = observations.drop(columns=[self.config["ENCOUNTER_COL"], 
-                                                        self.config["TIME_COL"]])
-        next_observations = next_observations.drop(columns=[self.config["ENCOUNTER_COL"], 
-                                                                    self.config["TIME_COL"]])
+        observations = observations.drop(columns=[self.config["encounter_col"], 
+                    self.config["time_col"]])
+        next_observations = next_observations.drop(columns=[self.config["encounter_col"], 
+                        self.config["time_col"]])
 
         # convert to numpy arrays
         observations = observations.to_numpy()  
@@ -240,13 +246,15 @@ class DataProcessor:
         
             print("Action normalization complete.")
 
+
 def main():
     hospital = 'choc'  # or 'mimic'
     config_path = f"config/{hospital}.yaml"
     config = load_config(config_path)
 
     tick = time.time()
-    processed_data = DataProcessor(config, proportion_w_data=0.8, random_state=42)
+    processed_data = DataProcessor(config, 
+                    test_size=0.2, val_size=0.0,)
     tock = time.time()
     print(f"Data processing took {tock - tick:.2f} seconds.")
     

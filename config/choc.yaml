@@ -1,23 +1,26 @@
-HOSPITAL: "CHOC"
+hospital: "CHOC"
 
-PROJECT_NAME: "AI_Clinician_Pediatric_RL"
-GROUP_NAME: "any_percent_behaviour_cloning"
-NAME: "CODE_DEVELOPMENT"
+project_name: "AI_Clinician_Pediatric_RL"
+group_name: "any_percent_behaviour_cloning"
+name: "CODE_DEVELOPMENT"
 
-DATAFRAME_PATH: "/home/jake/Documents/AI_Clinician/choc_data/combined_data/hourly/combined_hourly_features_phoenix_sepsis.parquet"
-FEATURES_TO_USE_PATH: "/home/jake/Documents/AI_Clinician/choc_code/dataframes/features_to_use.csv"
+dataframe_path: "/home/jake/Documents/AI_Clinician/choc_data/combined_data/hourly/combined_hourly_features_phoenix_sepsis.parquet"
+features_to_use_path: "/home/jake/Documents/AI_Clinician/choc_code/dataframes/features_to_use.csv"
 
-SEED: 42
+seed: 42
 
-PROPORTIONS_TO_USE: 0.80
+proportions_to_use: 0.90
 
-TARGETS: ["intake", "vis"]
+targets: ["intake", "vis"]
 
-REWARD: "phoenix_sepsis_score"
-FLIP_REWARD: True
+reward: "phoenix_sepsis_score"
+flip_reward: True
 
-TERMINAL_REWARD_COL: "mortality"
-TERMINAL_REWARD: False
+terminal_reward_col: "mortality"
+terminal_reward: False
 
-TIME_COL: "EVENT_END_DT_TM"
-ENCOUNTER_COL: "MASKED_ENCNTR_ID"
+time_col: "EVENT_END_DT_TM"
+encounter_col: "MASKED_ENCNTR_ID"
+
+normalize_obs: True
+normalize_actions: True

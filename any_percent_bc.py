@@ -88,6 +88,31 @@ def train(dataset: Dict, config: TrainConfig):
     # get the best trajectories
     best_trajectories = keep_best_trajectories(dataset.train_data, config.frac, config.discount)
 
+    # corl provides an option to normalize here, but I prenormalized in the data_processor. Further, 
+    # I'm not sure there are any reasons not to normalize the data, so I don't require this option. 
+
+    replay_buffer = ReplayBuffer(best_trajectories)
+
+    # corl provides an option to set a checkpoint path here
+    # the checkpoint path should be set by the TrainConfig dataclass
+    # with a unique identifier for the run
+    # We can implement this later 
+
+    # get the max action from the dataset
+    max_action = np.max(np.abs(dataset.train_data["actions"]))
+
+    # set seeds
+    seed = config.seed
+    set_seed(seed)
+
+    # create the actor
+    state_dim = dataset.train_data["observations"].shape[1]
+    action_dim = dataset.train_data["actions"].shape[1]
+    actor = Actor(state_dim, action_dim, max_action).to(config.device)
+    actor_optimizer = torch.optim.Adam(actor.parameters(), lr=3e-4)
+
+
+
 
     pass
 

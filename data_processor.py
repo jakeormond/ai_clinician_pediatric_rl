@@ -216,6 +216,9 @@ class DataProcessor:
     
 
     def _normalize_data(self):
+        # FIX THIS CODE!!!!!!!!!!!!!!!!!!!!!!!
+        # We should apply min max normalization to all drugs!!!!!!!!
+
         # This function will normalize the observations using the mean and std of the training set
         # It will return the normalized observations
         if self.normalize_obs:

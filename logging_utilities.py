@@ -11,7 +11,6 @@ def wandb_init(config: dict) -> None:
         name=config["name"],
         id=str(uuid.uuid4()),
     )
-    wandb.run.save()
 
 
 def keep_best_trajectories(

@@ -18,9 +18,9 @@ class TrainConfig:
     
     # Non-default arguments (required fields, must come first)
     hospital: str
-    project_name: str
-    group_name: str
-    experiment_name: str
+    project: str
+    group: str
+    experiment: str
 
     dataframe_path: str
     features_to_use_path: str
@@ -44,6 +44,7 @@ class TrainConfig:
     
     # Default arguments (optional fields)
     device: str = "cuda"    
+    name: str = ""
     eval_freq: int = int(5e3)  # How often (time steps) we evaluate
     n_episodes: int = 100  # How many episodes run during evaluation
     load_model: Optional[str] = None

@@ -1,0 +1,15 @@
+Iteration 0, Validation Loss: 0.0053
+Iteration 5000, Validation Loss: 0.0004
+Iteration 10000, Validation Loss: 0.0005
+Iteration 15000, Validation Loss: 0.0007
+Iteration 20000, Validation Loss: 0.0008
+Iteration 25000, Validation Loss: 0.0004
+Iteration 30000, Validation Loss: 0.0006
+Iteration 35000, Validation Loss: 0.0008
+Iteration 40000, Validation Loss: 0.0026
+Iteration 45000, Validation Loss: 0.0004
+Iteration 50000, Validation Loss: 0.0016
+Early stopping at iteration 50000 due to no improvement in validation loss.
+Replay buffer initialized with 609919 transitions.
+Final Test Loss: 0.0005
+Final model saved to /home/jake/Documents/AI_Clinician/model_checkpoints/percent_behaviour_cloning-fd0d14b9/final_model.pt

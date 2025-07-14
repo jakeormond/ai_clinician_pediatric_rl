@@ -1,0 +1,21 @@
+2025-07-14 20:30:40,314 INFO    MainThread:15307 [wandb_setup.py:_flush():80] Current SDK version is 0.21.0
+2025-07-14 20:30:40,315 INFO    MainThread:15307 [wandb_setup.py:_flush():80] Configure stats pid to 15307
+2025-07-14 20:30:40,316 INFO    MainThread:15307 [wandb_setup.py:_flush():80] Loading settings from /home/jake/.config/wandb/settings
+2025-07-14 20:30:40,316 INFO    MainThread:15307 [wandb_setup.py:_flush():80] Loading settings from /home/jake/Documents/AI_Clinician/ai_clinician_pediatric_rl/wandb/settings
+2025-07-14 20:30:40,316 INFO    MainThread:15307 [wandb_setup.py:_flush():80] Loading settings from environment variables
+2025-07-14 20:30:40,316 INFO    MainThread:15307 [wandb_init.py:setup_run_log_directory():703] Logging user logs to /home/jake/Documents/AI_Clinician/ai_clinician_pediatric_rl/wandb/run-20250714_203040-a3560d21-8b79-41e6-aa08-4e203601d67c/logs/debug.log
+2025-07-14 20:30:40,317 INFO    MainThread:15307 [wandb_init.py:setup_run_log_directory():704] Logging internal logs to /home/jake/Documents/AI_Clinician/ai_clinician_pediatric_rl/wandb/run-20250714_203040-a3560d21-8b79-41e6-aa08-4e203601d67c/logs/debug-internal.log
+2025-07-14 20:30:40,317 INFO    MainThread:15307 [wandb_init.py:init():830] calling init triggers
+2025-07-14 20:30:40,317 INFO    MainThread:15307 [wandb_init.py:init():835] wandb.init called with sweep_config: {}
+config: {'hospital': 'CHOC', 'project': 'AI_Clinician_Pediatric_RL', 'group': 'any_percent_behaviour_cloning', 'experiment': 'CODE_DEVELOPMENT', 'dataframe_path': '/home/jake/Documents/AI_Clinician/choc_data/combined_data/hourly/combined_hourly_features_phoenix_sepsis.parquet', 'features_to_use_path': '/home/jake/Documents/AI_Clinician/choc_code/dataframes/features_to_use.csv', 'model_type': 'percent_behaviour_cloning', 'seed': 42, 'checkpoints_path': '/home/jake/Documents/AI_Clinician/model_checkpoints/percent_behaviour_cloning-0cb7be28', 'targets': ['intake', 'vis'], 'reward': 'phoenix_sepsis_score', 'flip_reward': True, 'terminal_reward_col': 'mortality', 'terminal_reward': False, 'time_col': 'EVENT_END_DT_TM', 'encounter_col': 'MASKED_ENCNTR_ID', 'normalize_obs': True, 'normalize_actions': True, 'device': 'cuda', 'name': 'percent_behaviour_cloning-0cb7be28', 'eval_freq': '5e3', 'n_episodes': 100, 'load_model': None, 'max_timesteps': '1e6', 'batch_size': 256, 'discount': 0.999, 'frac': 0.2, 'max_traj_len': 1000, 'proportions_to_use': 0.9, '_wandb': {}}
+2025-07-14 20:30:40,317 INFO    MainThread:15307 [wandb_init.py:init():871] starting backend
+2025-07-14 20:30:40,555 INFO    MainThread:15307 [wandb_init.py:init():874] sending inform_init request
+2025-07-14 20:30:40,562 INFO    MainThread:15307 [wandb_init.py:init():882] backend started and connected
+2025-07-14 20:30:40,567 INFO    MainThread:15307 [wandb_init.py:init():953] updated telemetry
+2025-07-14 20:30:40,581 INFO    MainThread:15307 [wandb_init.py:init():977] communicating run to backend with 90.0 second timeout
+2025-07-14 20:30:41,331 INFO    MainThread:15307 [wandb_init.py:init():1029] starting run threads in backend
+2025-07-14 20:30:41,699 INFO    MainThread:15307 [wandb_run.py:_console_start():2458] atexit reg
+2025-07-14 20:30:41,699 INFO    MainThread:15307 [wandb_run.py:_redirect():2306] redirect: wrap_raw
+2025-07-14 20:30:41,700 INFO    MainThread:15307 [wandb_run.py:_redirect():2375] Wrapping output streams.
+2025-07-14 20:30:41,700 INFO    MainThread:15307 [wandb_run.py:_redirect():2398] Redirects installed.
+2025-07-14 20:30:41,706 INFO    MainThread:15307 [wandb_init.py:init():1075] run started, returning control to user process

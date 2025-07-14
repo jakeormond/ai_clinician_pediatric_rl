@@ -183,12 +183,15 @@ def train(dataset: Dict, config: TrainConfig):
     trainer = BC(**kwargs)
 
     # corl code has option to load a checkpoint here
-    if config.load_model != "":
+    if config.load_model is not None:
         policy_file = Path(config.load_model)
         trainer.load_state_dict(torch.load(policy_file))
         actor = trainer.actor
 
     wandb_init(asdict(config))
+
+    # create the directory for checkpoints if it doesn't exist
+    os.makedirs(config.checkpoints_path, exist_ok=True)
 
     best_val_loss = float("inf")
     patience = 5  # Number of iterations to wait before stopping
@@ -213,7 +216,7 @@ def train(dataset: Dict, config: TrainConfig):
                 best_val_loss = val_loss
                 patience_counter = 0
                 # Optionally save the best model
-                save_path = Path(config.checkpoint_path) / "best_model.pt"
+                save_path = Path(config.checkpoints_path) / "best_model.pt"
                 torch.save(trainer.state_dict(), save_path)
 
             else:
@@ -237,7 +240,7 @@ def train(dataset: Dict, config: TrainConfig):
     wandb.log({"test_loss": test_loss})
 
     # Save the final model
-    final_save_path = Path(config.checkpoint_path) / "final_model.pt"
+    final_save_path = Path(config.checkpoints_path) / "final_model.pt"
     torch.save(trainer.state_dict(), final_save_path)
     print(f"Final model saved to {final_save_path}")
 
@@ -265,10 +268,6 @@ def main():
     train(processed_data, train_cfg)
 
     
-    
-
-    
-    pass
 
 
 

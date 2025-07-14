@@ -15,18 +15,45 @@ TensorBatch = List[torch.Tensor]
 
 @dataclass
 class TrainConfig:
-    model_type: str = None  # Type of model to train
-    device: str = "cuda"
-    seed: int = None  # Sets all seeds
+    
+    # Non-default arguments (required fields, must come first)
+    hospital: str
+    project_name: str
+    group_name: str
+    experiment_name: str
+
+    dataframe_path: str
+    features_to_use_path: str
+    
+    model_type: str  # Type of model to train
+    seed: int # Sets all seeds
+    checkpoints_path: str  # Save path
+
+    targets: List[str] 
+    reward: str
+    flip_reward: bool
+
+    terminal_reward_col: str
+    terminal_reward: bool
+
+    time_col: str
+    encounter_col: str
+
+    normalize_obs: bool
+    normalize_actions: bool  
+    
+    # Default arguments (optional fields)
+    device: str = "cuda"    
     eval_freq: int = int(5e3)  # How often (time steps) we evaluate
     n_episodes: int = 100  # How many episodes run during evaluation
+    load_model: Optional[str] = None
     max_timesteps: int = 1e6  # Max time steps to run environment
-    checkpoints_path: Optional[str] = None  # Save path
     batch_size: int = 256  # Batch size for all networks
     discount: float = 0.99  # Discount factor
-    frac: float = 0.2  # Best data fraction to use
+    frac: Optional[float] = 0.2  # Best data fraction to use
     max_traj_len: int = 1000  # Max trajectory length
 
+    proportions_to_use: float = 0.90     
    
 
     def __post_init__(self):

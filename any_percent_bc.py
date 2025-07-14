@@ -1,4 +1,7 @@
 from typing import Any, Dict, List, Optional, Tuple, Union
+from dataclasses import asdict
+from pathlib import Path
+import os
 
 import pyrallis
 
@@ -6,9 +9,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import wandb
 
 from utilities import load_config, set_seed
 from training_utilities import TrainConfig
+from logging_utilities import wandb_init
 from data_processor import DataProcessor
 from replay_buffer import ReplayBuffer
 
@@ -52,7 +57,7 @@ def keep_best_trajectories(
     dataset["actions"] = dataset["actions"][order]
     dataset["next_observations"] = dataset["next_observations"][order]
     dataset["rewards"] = dataset["rewards"][order]
-    dataset["terminals"] = dataset["terminals"][order]
+    dataset["terminated"] = dataset["terminated"][order]
 
     return dataset
 
@@ -79,6 +84,56 @@ class Actor(nn.Module):
     def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
         state = torch.tensor(state.reshape(1, -1), device=device, dtype=torch.float32)
         return self(state).cpu().data.numpy().flatten()
+    
+
+class BC:
+    def __init__(
+        self,
+        max_action: np.ndarray,
+        actor: nn.Module,
+        actor_optimizer: torch.optim.Optimizer,
+        discount: float = 0.99,
+        device: str = "cpu",
+    ):
+        self.actor = actor
+        self.actor_optimizer = actor_optimizer
+        self.max_action = max_action
+        self.discount = discount
+
+        self.total_it = 0
+        self.device = device
+
+    
+    
+    def train(self, batch: TensorBatch) -> Dict[str, float]:
+        log_dict = {}
+        self.total_it += 1
+
+        state, action, _, _, _ = batch
+
+        # Compute actor loss
+        pi = self.actor(state)
+        actor_loss = F.mse_loss(pi, action)
+        log_dict["actor_loss"] = actor_loss.item()
+        # Optimize the actor
+        self.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        self.actor_optimizer.step()
+
+        return log_dict
+
+    def state_dict(self) -> Dict[str, Any]:
+        return {
+            "actor": self.actor.state_dict(),
+            "actor_optimizer": self.actor_optimizer.state_dict(),
+            "total_it": self.total_it,
+        }
+
+    def load_state_dict(self, state_dict: Dict[str, Any]):
+        self.actor.load_state_dict(state_dict["actor"])
+        self.actor_optimizer.load_state_dict(state_dict["actor_optimizer"])
+        self.total_it = state_dict["total_it"]
+
 
 
 def train(dataset: Dict, config: TrainConfig):
@@ -92,6 +147,7 @@ def train(dataset: Dict, config: TrainConfig):
     # I'm not sure there are any reasons not to normalize the data, so I don't require this option. 
 
     replay_buffer = ReplayBuffer(best_trajectories)
+    val_replay_buffer = ReplayBuffer(dataset.val_data)
 
     # corl provides an option to set a checkpoint path here
     # the checkpoint path should be set by the TrainConfig dataclass
@@ -111,10 +167,81 @@ def train(dataset: Dict, config: TrainConfig):
     actor = Actor(state_dim, action_dim, max_action).to(config.device)
     actor_optimizer = torch.optim.Adam(actor.parameters(), lr=3e-4)
 
+    # the training class requires a dictionary of keyword arguments
+    kwargs = {
+        "max_action": max_action,
+        "actor": actor,
+        "actor_optimizer": actor_optimizer,
+        "discount": config.discount,
+        "device": config.device,
+    }
+
+    print("---------------------------------------")
+    print(f"Training BC, Hosp: {config.hospital}, Seed: {seed}")
+    print("---------------------------------------")
+
+    trainer = BC(**kwargs)
+
+    # corl code has option to load a checkpoint here
+    if config.load_model != "":
+        policy_file = Path(config.load_model)
+        trainer.load_state_dict(torch.load(policy_file))
+        actor = trainer.actor
+
+    wandb_init(asdict(config))
+
+    best_val_loss = float("inf")
+    patience = 5  # Number of iterations to wait before stopping
+    patience_counter = 0
+
+    for t in range(config.max_timesteps):
+        batch = replay_buffer.sample(config.batch_size)
+        # batch = [b.to(config.device) for b in batch] # this line is not needed since the replay buffer returns tensors on the correct device
+
+        log_dict = trainer.train(batch)
+        wandb.log(log_dict, step=trainer.total_it)
+
+        if t % config.eval_freq == 0:
+            val_batch = val_replay_buffer.sample(config.batch_size)
+            with torch.no_grad():
+                val_loss = F.mse_loss(trainer.actor(val_batch[0]), val_batch[1]).item()
+            wandb.log({"val_loss": val_loss}, step=trainer.total_it)
+            print(f"Iteration {t}, Validation Loss: {val_loss:.4f}")
+
+            # Early stopping logic
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+                # Optionally save the best model
+                save_path = Path(config.checkpoint_path) / "best_model.pt"
+                torch.save(trainer.state_dict(), save_path)
+
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    print(f"Early stopping at iteration {t} due to no improvement in validation loss.")
+                    break
+            
+            if config.checkpoints_path is not None:
+                torch.save(
+                    trainer.state_dict(),
+                    os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
+                )
+
+    # Final evaluation on the test set
+    test_replay_buffer = ReplayBuffer(dataset.test_data)
+    test_batch = test_replay_buffer.sample(config.batch_size)
+    with torch.no_grad():
+        test_loss = F.mse_loss(trainer.actor(test_batch[0]), test_batch[1]).item()
+    print(f"Final Test Loss: {test_loss:.4f}")
+    wandb.log({"test_loss": test_loss})
+
+    # Save the final model
+    final_save_path = Path(config.checkpoint_path) / "final_model.pt"
+    torch.save(trainer.state_dict(), final_save_path)
+    print(f"Final model saved to {final_save_path}")
 
 
-
-    pass
 
 # we can use pyrallis to parse command line arguments and load configurations when
 # we're further along in the project
@@ -123,12 +250,14 @@ def main():
     hospital = 'choc'  # or 'mimic'
     data_config_path = f"config/{hospital}.yaml"
     data_config = load_config(data_config_path)
-    processed_data = DataProcessor(data_config)
+    processed_data = DataProcessor(data_config, test_size = 0.15, val_size = 0.15)
     
     any_percent_bc_config_path = f"config/any_percent_bc.yaml"
     any_percent_bc_cfg = load_config(any_percent_bc_config_path)
-    # add data_config['SEED'] to any_percent_bc_cfg
+    # merge the data_config into any_percent_bc_cfg
+    any_percent_bc_cfg.update(data_config)
     any_percent_bc_cfg['seed'] = data_config['seed']
+    any_percent_bc_cfg['hospital'] = data_config['hospital']
     
     train_cfg = TrainConfig(**any_percent_bc_cfg)  # Convert to TrainConfig dataclass
     print(train_cfg)

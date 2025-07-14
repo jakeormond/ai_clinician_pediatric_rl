@@ -1,3 +1,10 @@
+"""
+to do: check the vis scores, i think there are some outliers that are far too high. 
+
+"""
+
+
+
 import yaml
 import pandas as pd
 import time
@@ -9,7 +16,7 @@ class DataProcessor:
     def __init__(self, 
                  config, 
                  test_size=0.2, 
-                 val_size=0.0,
+                 val_size=0.2,
                  normalize_obs = True,
                  normalize_actions = True):
         
@@ -113,7 +120,7 @@ class DataProcessor:
         train_data_dataframe = dataframe[dataframe[self.config["encounter_col"]].isin(train_ids)].copy()
         test_data_dataframe = dataframe[dataframe[self.config["encounter_col"]].isin(test_ids)].copy()
         if self.include_val:
-            val_dataframe = dataframe[self.dataframe[self.config["encounter_col"]].isin(val_ids)].copy()
+            val_dataframe = dataframe[dataframe[self.config["encounter_col"]].isin(val_ids)].copy()
         else:
             val_dataframe = None
 
@@ -123,11 +130,22 @@ class DataProcessor:
         if self.include_val:
             zero_cols_val = [col for col in val_dataframe.columns if (val_dataframe[col] == 0).all()]
 
-        if len(zero_cols_train) > 0 or len(zero_cols_test) > 0:
-            raise ValueError(
-                f"Found all-zero columns in train or test data: "
-                f"train: {zero_cols_train}, test: {zero_cols_test}"
-            )
+        # if len(zero_cols_train) > 0 or len(zero_cols_test) > 0:
+        #     raise ValueError(
+        #         f"Found all-zero columns in train or test data: "
+        #         f"train: {zero_cols_train}, test: {zero_cols_test}"
+        #     )
+
+        drop_cols = set(zero_cols_train + zero_cols_test)
+        if self.include_val:
+            drop_cols.update(zero_cols_val)
+
+        if len(drop_cols) > 0:
+            print(f"Dropping all-zero columns: {drop_cols}")
+            train_data_dataframe = train_data_dataframe.drop(columns=drop_cols)
+            test_data_dataframe = test_data_dataframe.drop(columns=drop_cols)
+            if self.include_val:
+                val_dataframe = val_dataframe.drop(columns=drop_cols)
 
         # split the dataframes into the arrays needed for RL
         self.train_data = self._split_into_rl_dataset(train_data_dataframe)
@@ -235,17 +253,15 @@ class DataProcessor:
                 
             print("Observation normalization complete.")
         
-        if self.normalize_actions:
-            self.mean_actions = self.train_data['actions'].mean(axis=0)
-            self.std_actions = self.train_data['actions'].std(axis=0)
+        if self.normalize_actions: # these should be 0 to 1, since we
+            # have many zeros
+            self.max_actions = self.train_data['actions'].max(axis=0)
 
-            self.train_data['actions'] = (self.train_data['actions'] 
-                                          - self.mean_actions) / self.std_actions
-            self.test_data['actions'] = (self.test_data['actions'] 
-                                         - self.mean_actions) / self.std_actions
+            self.train_data['actions'] = self.train_data['actions'] / self.max_actions
+            self.test_data['actions'] = (self.test_data['actions'] / self.max_actions)
+
             if self.include_val:
-                self.val_data['actions'] = (self.val_data['actions'] 
-                                            - self.mean_actions) / self.std_actions
+                self.val_data['actions'] = (self.val_data['actions'] / self.max_actions) 
         
             print("Action normalization complete.")
 

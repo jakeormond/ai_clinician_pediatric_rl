@@ -2,7 +2,7 @@ hospital: "CHOC"
 
 project_name: "AI_Clinician_Pediatric_RL"
 group_name: "any_percent_behaviour_cloning"
-name: "CODE_DEVELOPMENT"
+experiment_name: "CODE_DEVELOPMENT"
 
 dataframe_path: "/home/jake/Documents/AI_Clinician/choc_data/combined_data/hourly/combined_hourly_features_phoenix_sepsis.parquet"
 features_to_use_path: "/home/jake/Documents/AI_Clinician/choc_code/dataframes/features_to_use.csv"

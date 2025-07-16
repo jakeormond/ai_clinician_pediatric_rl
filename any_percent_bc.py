@@ -72,7 +72,8 @@ class Actor(nn.Module):
             nn.Linear(256, 256),
             nn.ReLU(),
             nn.Linear(256, action_dim),
-            nn.Tanh(),
+            # nn.Tanh(),
+            nn.Sigmoid(), # I've change the activation since drugs are scaled to [0, 1]
         )
 
         self.max_action = max_action

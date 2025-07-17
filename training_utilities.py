@@ -45,10 +45,10 @@ class TrainConfig:
     # Default arguments (optional fields)
     device: str = "cuda"    
     name: str = ""
-    eval_freq: int = int(5e3)  # How often (time steps) we evaluate
+    eval_freq: int = 5  # How often (epochs) we evaluate
     n_episodes: int = 100  # How many episodes run during evaluation
     load_model: Optional[str] = None
-    max_timesteps: int = 1e6  # Max time steps to run environment
+    n_epochs: int = 1000  # Max time steps to run environment
     batch_size: int = 256  # Batch size for all networks
     discount: float = 0.99  # Discount factor
     frac: Optional[float] = 0.2  # Best data fraction to use

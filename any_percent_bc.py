@@ -198,19 +198,25 @@ def train(dataset: Dict, config: TrainConfig):
     patience = 5  # Number of iterations to wait before stopping
     patience_counter = 0
 
-    for t in range(config.max_timesteps):
-        batch = replay_buffer.sample(config.batch_size)
-        # batch = [b.to(config.device) for b in batch] # this line is not needed since the replay buffer returns tensors on the correct device
+    num_batches = len(replay_buffer) // config.batch_size
 
-        log_dict = trainer.train(batch)
-        wandb.log(log_dict, step=trainer.total_it)
+    for e in range(config.n_epochs): # previously max_timesteps
+        for batch_idx in range(num_batches):
+            if batch_idx % 100 == 0:
+                print(f"Epoch {e}, Batch {batch_idx}/{num_batches}")
+        
+            batch = replay_buffer.sample(config.batch_size)
+            # batch = [b.to(config.device) for b in batch] # this line is not needed since the replay buffer returns tensors on the correct device
 
-        if t % config.eval_freq == 0:
+            log_dict = trainer.train(batch)
+            wandb.log(log_dict, step=trainer.total_it)
+
+        if e % config.eval_freq == 0:
             val_batch = val_replay_buffer.sample(config.batch_size)
             with torch.no_grad():
                 val_loss = F.mse_loss(trainer.actor(val_batch[0]), val_batch[1]).item()
             wandb.log({"val_loss": val_loss}, step=trainer.total_it)
-            print(f"Iteration {t}, Validation Loss: {val_loss:.4f}")
+            print(f"Epoch {e}, Validation Loss: {val_loss:.4f}")
 
             # Early stopping logic
             if val_loss < best_val_loss:
@@ -223,13 +229,13 @@ def train(dataset: Dict, config: TrainConfig):
             else:
                 patience_counter += 1
                 if patience_counter >= patience:
-                    print(f"Early stopping at iteration {t} due to no improvement in validation loss.")
+                    print(f"Early stopping at epoch {e} due to no improvement in validation loss.")
                     break
             
             if config.checkpoints_path is not None:
                 torch.save(
                     trainer.state_dict(),
-                    os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
+                    os.path.join(config.checkpoints_path, f"checkpoint_{e}.pt"),
                 )
 
     # Final evaluation on the test set

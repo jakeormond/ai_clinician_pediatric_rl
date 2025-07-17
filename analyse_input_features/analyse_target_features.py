@@ -154,17 +154,22 @@ def iv_input_analysis(dataframe: pd.DataFrame, features_to_use: pd.DataFrame):
         sns.kdeplot(log_data, ax=axes[1 + i*5], fill=True)
         axes[1 + i*5].set_title(f"log_{feature}")
 
-        sqrt_data = np.sqrt(feature_data_temp + 1e-5)  # add a small constant to avoid log(0)
-        sns.kdeplot(sqrt_data, ax=axes[2 + i*5], fill=True)
-        axes[2 + i*5].set_title(f"sqrt_{feature}")
+        cuberoot_data = np.cbrt(feature_data_temp)  # add a small constant to avoid log(0)
+        sns.kdeplot(cuberoot_data, ax=axes[2 + i*5], fill=True)
+        axes[2 + i*5].set_title(f"cbrt_{feature}")
 
         box_data = boxcox(feature_data_temp + 1e-5)  # add a small constant to avoid log(0)
         sns.kdeplot(box_data, ax=axes[3 + i*5], fill=True)
         axes[3 + i*5].set_title(f"box_{feature}")
 
-        cuberoot_data = np.cbrt(feature_data_temp + 1e-5)  # add a small constant to avoid log(0)
-        sns.kdeplot(cuberoot_data, ax=axes[4 + i*5], fill=True)
-        axes[4 + i*5].set_title(f"cuberoot_{feature}")
+        if i == 0:
+            pt = PowerTransformer(method='yeo-johnson')
+            yeo_data = pt.fit_transform(feature_data_temp.values.reshape(-1, 1)).flatten()
+        else:
+            yeo_data = pt.transform(feature_data_temp.values.reshape(-1, 1)).flatten()
+
+        sns.kdeplot(yeo_data, ax=axes[4 + i*5], fill=True)
+        axes[4 + i*5].set_title(f"yeo_{feature}")
 
     plt.tight_layout()
     # plt.show()
@@ -187,9 +192,9 @@ def main():
 
     dataframe = pd.read_parquet(data_config["dataframe_path"])
 
-    vasoactive_inotropes_analysis(dataframe, features_to_use)
+    # vasoactive_inotropes_analysis(dataframe, features_to_use)
 
-    # iv_input_analysis(dataframe, features_to_use)
+    iv_input_analysis(dataframe, features_to_use)
 
     pass
 

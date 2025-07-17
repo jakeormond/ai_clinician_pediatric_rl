@@ -11,7 +11,10 @@ seed: 42
 
 proportions_to_use: 0.90
 
-targets: ["intake", "vis"]
+actions: ["intake", "vis"]
+create_binary_actions: True
+transform_actions: True
+action_transforms: ["yeo-johnson", "yeo-johnson"]
 
 reward: "phoenix_sepsis_score"
 flip_reward: True

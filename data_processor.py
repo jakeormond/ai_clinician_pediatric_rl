@@ -7,10 +7,12 @@ to do: check the vis scores, i think there are some outliers that are far too hi
 
 import yaml
 import pandas as pd
+import numpy as np
 import time
 import pyarrow
 from sklearn.model_selection import train_test_split
 from utilities import load_config
+from sklearn.preprocessing import PowerTransformer
 
 class DataProcessor:
     def __init__(self, 
@@ -18,12 +20,18 @@ class DataProcessor:
                  test_size=0.2, 
                  val_size=0.2,
                  normalize_obs = True,
-                 normalize_actions = True):
+                 normalize_actions = True,
+                 transform_targets = True):
         
         self.config = config
-        self.reward_feature = config["reward"]
+        self.reward = config["reward"]
         self.flip_reward = config["flip_reward"]
-        self.action_features = config["targets"]
+
+        self.actions = config["actions"]
+        self.create_binary_actions = config["create_binary_actions"]
+        self.transform_actions = config["transform_actions"]
+        self.action_transforms = config["action_transforms"]
+
         self.proportion_w_data = config["proportions_to_use"]
         self.test_size = test_size
         self.val_size = val_size
@@ -37,12 +45,41 @@ class DataProcessor:
         
         self, dataframe = self._load_dataset()
         self._split_and_process(dataframe)
-        
+
+        if self.create_binary_actions:
+            self._create_binary_actions()
+
+        if self.transform_actions: # this has to occur before normalization
+            self._transform_actions()
+
         self.normalize_obs = normalize_obs
         self.normalize_actions = normalize_actions
 
         if self.normalize_obs or self.normalize_actions:
             self._normalize_data()
+
+        # combine actions and binary actions
+        if self.create_binary_actions:
+            self.train_data['actions'] = \
+                np.concatenate((self.train_data['actions'], 
+                           self.train_data['binary_actions']), axis=1)
+            
+            # remove the binary actions from train_data
+            self.train_data.pop('binary_actions', None)
+
+
+            self.test_data['actions'] = \
+                np.concatenate((self.test_data['actions'], 
+                           self.test_data['binary_actions']), axis=1)
+            self.test_data.pop('binary_actions', None)
+
+            if self.include_val:
+                self.val_data['actions'] = \
+                    np.concatenate((self.val_data['actions'], 
+                               self.val_data['binary_actions']), axis=1) 
+                self.val_data.pop('binary_actions', None)      
+                
+            
 
     def _load_dataset(self):
         dataframe = pd.read_parquet(self.config["dataframe_path"])
@@ -70,7 +107,7 @@ class DataProcessor:
         # save lists of the observation features, actions, and rewards
         features = features_to_use_df['feature'].tolist()
         # drop self.action_features from obs_features
-        self.obs_features = [f for f in features if f not in self.action_features]
+        self.obs_features = [f for f in features if f not in self.actions]
         # save the actions features
 
         # add to these the encounter_col, time_col, and the reward
@@ -183,8 +220,8 @@ class DataProcessor:
         first_indices = dataframe.groupby(self.config["encounter_col"]).head(1).index
         rewards.loc[first_indices] = 0        
         
-        actions = dataframe[self.config["targets"]].copy()
-        observations = dataframe.drop(columns=[self.config["reward"]] + self.config["targets"]).copy()
+        actions = dataframe[self.config["actions"]].copy()
+        observations = dataframe.drop(columns=[self.config["reward"]] + self.config["actions"]).copy()
 
         # compute terminated
         # terminate is 0 everywhere except the final timestep for each patient
@@ -233,12 +270,31 @@ class DataProcessor:
         }
     
 
+    def _create_binary_actions(self):
+        
+        self.train_data['binary_actions'] = self.train_data['actions'].copy()
+        self.test_data['binary_actions'] = self.test_data['actions'].copy()
+        if self.include_val:
+            self.val_data['binary_actions'] = self.val_data['actions'].copy()        
+        
+        for i, action in enumerate(self.actions):
+            # create a binary action for each action, where 1 means the action was given
+            # and 0 means it was not given
+            self.train_data['binary_actions'][:, i] = \
+                (self.train_data['binary_actions'][:, i] != 0).astype(int)
+            self.test_data['binary_actions'][:, i] = \
+                (self.test_data['binary_actions'][:, i] != 0).astype(int)
+            if self.include_val:
+                self.val_data['binary_actions'][:, i] = \
+                    (self.val_data['binary_actions'][:, i] != 0).astype(int)
+
+
     def _normalize_data(self):
         # FIX THIS CODE!!!!!!!!!!!!!!!!!!!!!!!
         # We should apply min max normalization to all drugs!!!!!!!!
 
         # This function will normalize the observations using the mean and std of the training set
-        # It will return the normalized observations
+        # It will return the normalized observations (centred at 0)
         if self.normalize_obs:
             self.mean_obs = self.train_data['observations'].mean(axis=0)
             self.std_obs = self.train_data['observations'].std(axis=0)
@@ -254,17 +310,53 @@ class DataProcessor:
             print("Observation normalization complete.")
         
         if self.normalize_actions: # these should be 0 to 1, since we
-            # have many zeros
+            # have many zeros. Note min can be negative because of transforms
+            self.min_actions = self.train_data['actions'].min(axis=0)            
             self.max_actions = self.train_data['actions'].max(axis=0)
 
-            self.train_data['actions'] = self.train_data['actions'] / self.max_actions
-            self.test_data['actions'] = (self.test_data['actions'] / self.max_actions)
+            self.train_data['actions'] = (self.train_data['actions'] - self.min_actions) / \
+                                          (self.max_actions - self.min_actions)
 
+            self.test_data['actions'] = (self.test_data['actions'] - self.min_actions) / \
+                                          (self.max_actions - self.min_actions)
             if self.include_val:
-                self.val_data['actions'] = (self.val_data['actions'] / self.max_actions) 
-        
+                self.val_data['actions'] = (self.val_data['actions'] - self.min_actions) / \
+                                          (self.max_actions - self.min_actions)
+                  
             print("Action normalization complete.")
 
+
+    def _transform_actions(self):
+
+        n_targets = len(self.actions)
+
+        for i, target in enumerate(self.actions):
+            target_transform = self.config["action_transforms"][i]
+
+            if target_transform == "yeo-johnson": # mo other transforms yet implemented
+                pt = PowerTransformer(method='yeo-johnson')
+
+                train_target_data = self.train_data['actions'][:, i]
+                train_target_no_zeros = train_target_data[train_target_data != 0]
+                n_feature_rows = len(train_target_no_zeros)
+                n_rows = len(train_target_data)
+                print(f"Feature: {target}, Rows with data: {n_feature_rows} out of {n_rows} ({n_feature_rows / n_rows * 100:.2f}%)")
+
+                # fit to the non-zero data in the training set
+                pt.fit(train_target_no_zeros.reshape(-1, 1))
+
+                # transform the training data
+                self.train_data['actions'][:, i] = pt.transform(
+                    self.train_data['actions'][:, i].reshape(-1, 1)).flatten()
+                # transform the test data
+                self.test_data['actions'][:, i] = pt.transform(
+                    self.test_data['actions'][:, i].reshape(-1, 1)).flatten()
+                if self.include_val:
+                    self.val_data['actions'][:, i] = pt.transform(
+                        self.val_data['actions'][:, i].reshape(-1, 1)).flatten()
+                    
+                print(f"Transformed target {target} with Yeo-Johnson transform.")
+                
 
 def main():
     hospital = 'choc'  # or 'mimic'

@@ -1,7 +1,7 @@
     model_type: "percent_behaviour_cloning"
-    eval_freq: 5000  # How often (time steps) we evaluate
+    eval_freq: 5  # How often (epochs) we evaluate
     n_episodes: 100  # How many episodes run during evaluation
-    max_timesteps: 1000000  # Max time steps to run environment
+    n_epochs: 1000  # Max time steps to run environment
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
     batch_size: 256  # Batch size for all networks
     discount: 0.999  # Discount factor

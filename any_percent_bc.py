@@ -107,6 +107,9 @@ class BC:
     
     
     def train(self, batch: TensorBatch) -> Dict[str, float]:
+
+
+        
         log_dict = {}
         self.total_it += 1
 

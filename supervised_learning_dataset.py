@@ -3,6 +3,10 @@ Prepares data for supervised learning by creating a dataset class.
 Will handle cross validation splits and data normalization.
 Splits data into X and y (as opposed to the observations, actions,
 and rewards in the RL setting).
+
+Create a DataSet object that holds the full dataset, and then 
+CVSplit objects that hold the encounter IDs for the splits
+and methods to access the data in the DataSet object.
 """
 
 
@@ -17,6 +21,8 @@ from utilities import load_config
 from sklearn.preprocessing import PowerTransformer
 from sklearn.model_selection import KFold
 
+
+# this class holds the complete dataset
 class DataProcessorSupervised:
     def __init__(self, 
                  config, 
@@ -195,82 +201,7 @@ class DataProcessorSupervised:
         else:
             self.val_data = None
 
-        
-    def _split_into_rl_dataset(self, dataframe):
-        # This function will split the dataframe into the format needed for RL
-        # It will return a dictionary with the following keys:
-        # - observations
-        # - actions
-        # - rewards
-        # - terminations
-        # - next_observations
-        # 
-        # state and action come from a given timestep, reward, next_state and terminated 
-        # come from the next timestep.
-        # Therefore, each trajectory will actually be length n_timesteps - 1. So observations
-        # and actions will have indices 0 to n_timesteps - 2, next_observations and rewards 
-        # and terminated will have indices 1 to n_timesteps - 1.
 
-        # we piece off the rewards and actions and then will have the observations left
-
-        rewards = dataframe[self.config["reward"]].copy()    
-        # process the rewards
-        if self.flip_reward:
-            rewards = -rewards
-
-        # now compute hourly change in reward
-        rewards = rewards.diff().fillna(0)
-        first_indices = dataframe.groupby(self.config["encounter_col"]).head(1).index
-        rewards.loc[first_indices] = 0        
-        
-        actions = dataframe[self.config["actions"]].copy()
-        observations = dataframe.drop(columns=[self.config["reward"]] + self.config["actions"]).copy()
-
-        # compute terminated
-        # terminate is 0 everywhere except the final timestep for each patient
-        dataframe = dataframe.copy()
-        dataframe['terminated'] = 0
-        dataframe.loc[dataframe.groupby(self.config["encounter_col"]).tail(1).index, 'terminated'] = 1
-        terminated = dataframe['terminated'].copy()
-
-        # get the next observations
-        next_observations = observations.copy()
-
-        # get the indices of all the trajectory starts, i.e. the first index of each patient
-        trajectory_starts = dataframe.groupby(self.config["encounter_col"]).head(1).index
-
-        # get the trajectory ends, i.e. the last index of each patient
-        trajectory_ends = dataframe.groupby(self.config["encounter_col"]).tail(1).index
-
-        # for observations and actions, we remove the trajectory ends
-        observations = observations.drop(index=trajectory_ends)
-        actions = actions.drop(index=trajectory_ends)
-
-        # for rewards, next_observations, and terminated, we remove the trajectory starts
-        rewards = rewards.drop(index=trajectory_starts)
-        next_observations = next_observations.drop(index=trajectory_starts)
-        terminated = terminated.drop(index=trajectory_starts)
-
-        # remove the encounter and time columns from observations and next_observations 
-        observations = observations.drop(columns=[self.config["encounter_col"], 
-                    self.config["time_col"]])
-        next_observations = next_observations.drop(columns=[self.config["encounter_col"], 
-                        self.config["time_col"]])
-
-        # convert to numpy arrays
-        observations = observations.to_numpy()  
-        actions = actions.to_numpy()
-        rewards = rewards.to_numpy()
-        next_observations = next_observations.to_numpy()
-        terminated = terminated.to_numpy()
-
-        return {
-            "observations": observations,
-            "actions": actions,
-            "rewards": rewards,
-            "next_observations": next_observations,
-            "terminated": terminated
-        }
     
 
     def _create_binary_actions(self):
@@ -448,7 +379,12 @@ def outer_training_loop(config):
         test_df = dataset[dataset[config["encounter_col"]].isin(test_encounters)].copy()
 
         print(f"Fold {fold}: Train encounters={len(train_encounters)}, Test encounters={len(test_encounters)}")
+        
         # Proceed with your training/validation logic for this fold
+        inner_cv = InnerCV(train_df, config, n_splits=5)
+        for inner_fold, inner_train_df, inner_val_df in inner_cv.split():
+
+            # 
 
         # 
 

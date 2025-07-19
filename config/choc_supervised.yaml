@@ -9,21 +9,12 @@ features_to_use_path: "/home/jake/Documents/AI_Clinician/choc_code/dataframes/fe
 
 seed: 42
 
-proportions_to_use: 0.90
+proportions_to_use: 0.80
 
-actions: ["intake", "vis"]
-create_binary_actions: True
-transform_actions: True
-action_transforms: ["yeo-johnson", "yeo-johnson"]
-
-reward: "phoenix_sepsis_score"
-flip_reward: True
-
-terminal_reward_col: "mortality"
-terminal_reward: False
+target_col: "mortality"
 
 time_col: "EVENT_END_DT_TM"
 encounter_col: "MASKED_ENCNTR_ID"
 
-normalize_obs: True
-normalize_actions: True
+
+

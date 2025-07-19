@@ -1,4 +1,6 @@
 """
+Creates DataProcessor class to process data for RL training.
+
 to do: check the vis scores, i think there are some outliers that are far too high. 
 
 """

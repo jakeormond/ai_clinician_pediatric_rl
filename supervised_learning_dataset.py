@@ -22,7 +22,7 @@ from utilities import load_config
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import PowerTransformer
-from sklearn.model_selection import KFold, GridSearchCV
+from sklearn.model_selection import KFold, GridSearchCV, GroupKFold
 from sklearn.metrics import accuracy_score, roc_auc_score, precision_score, recall_score, f1_score
 import xgboost as xgb
 
@@ -221,10 +221,13 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
               f"Test outer encounters={len(outer_test_encounters)}")
         
         # Prepare outer train data
-        X_outer_train, y_outer_train, _ = dataset.modeling_data(outer_train_encounters)
+        X_outer_train, y_outer_train, encounters_and_times = dataset.modeling_data(outer_train_encounters)
+
+        # make the groups for the GroupKFold splits
+        groups = encounters_and_times[config["encounter_col"]].values
 
         # Inner CV for hyperparameter tuning
-        kf_inner = KFold(n_splits=5, shuffle=True, random_state=config["seed"])
+        kf_inner = GroupKFold(n_splits=5)
         
         pipe = Pipeline([
             ('scaler', StandardScaler()),
@@ -232,7 +235,7 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
         ])
             
         grid_search = GridSearchCV(pipe, param_grid, cv=kf_inner, scoring='accuracy', verbose=2)
-        grid_search.fit(X_outer_train, y_outer_train)
+        grid_search.fit(X_outer_train, y_outer_train, groups=groups)
 
         # Get best hyperparameters from inner CV
         best_params = grid_search.best_params_

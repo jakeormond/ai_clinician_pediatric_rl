@@ -28,6 +28,74 @@ import xgboost as xgb
 
 EXPERIMENTS_DIR = "/home/jake/Documents/AI_Clinician/experiments"
 
+
+# plots
+def plot_roc_curve(y_true, y_pred_proba, experiment_dir):
+    from sklearn.metrics import roc_curve, auc
+    import matplotlib.pyplot as plt
+
+    fpr, tpr, _ = roc_curve(y_true, y_pred_proba)
+    roc_auc = auc(fpr, tpr)
+
+    plt.figure()
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = {:.2f})'.format(roc_auc))
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver Operating Characteristic')
+    plt.legend(loc='lower right')
+    plt.savefig(os.path.join(experiment_dir, 'roc_curve.png'))
+    plt.close()
+
+def plot_precision_recall_curve(y_true, y_pred_proba, experiment_dir):
+    from sklearn.metrics import precision_recall_curve
+    import matplotlib.pyplot as plt
+
+    precision, recall, _ = precision_recall_curve(y_true, y_pred_proba)
+
+    plt.figure()
+    plt.plot(recall, precision, color='blue', lw=2)
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curve')
+    plt.savefig(os.path.join(experiment_dir, 'precision_recall_curve.png'))
+    plt.close()
+
+def plot_calibration_curve(y_true, y_pred_proba, experiment_dir):
+    from sklearn.calibration import calibration_curve
+    import matplotlib.pyplot as plt
+
+    fraction_of_positives, mean_predicted_value = calibration_curve(y_true, y_pred_proba, n_bins=10)
+
+    plt.figure()
+    plt.plot(mean_predicted_value, fraction_of_positives, "s-", label="Calibration Curve")
+    plt.plot([0, 1], [0, 1], "k:", label="Perfectly calibrated")
+    plt.xlabel("Mean predicted value")
+    plt.ylabel("Fraction of positives")
+    plt.title("Calibration Curve")
+    plt.legend()
+    plt.savefig(os.path.join(experiment_dir, 'calibration_curve.png'))
+    plt.close()
+
+def plot_confusion_matrix(y_true, y_pred, experiment_dir):
+    from sklearn.metrics import confusion_matrix
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    cm = confusion_matrix(y_true, y_pred)
+    
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Predicted Negative', 'Predicted Positive'], 
+                yticklabels=['Actual Negative', 'Actual Positive'])
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.title('Confusion Matrix')
+    plt.savefig(os.path.join(experiment_dir, 'confusion_matrix.png'))
+    plt.close()
+
+
 # this class holds the complete dataset, the folds can 
 # access the data they need using the encounter IDs
 # and the methods in this class
@@ -38,11 +106,10 @@ class Dataset:
         self.target_col = config["target_col"]
         self.encounter_col = config["encounter_col"]
         self.time_col = config["time_col"]
-
+        self.config = config
         
         self._load_dataset()
         self._transform_target()
-
 
     def _load_dataset(self):
         self.dataframe = pd.read_parquet(self.config["dataframe_path"])
@@ -54,7 +121,7 @@ class Dataset:
         # drop any rows where "proportion_sepsis" is less than proportion_w_data and
         # imputation_method is "interpolation"
         features_to_use_df = features_to_use_df[
-            (features_to_use_df['proportion_sepsis'] >= self.proportion_w_data) |   
+            (features_to_use_df['proportion_sepsis'] >= self.config["proportion_w_data"]) |   
             (features_to_use_df['imputation_method'] != 'interpolation')
         ]
 
@@ -65,9 +132,8 @@ class Dataset:
         # make list of features
         features = features_to_use_df['feature'].tolist()
 
-        # add to these the encounter_col, time_col, and the reward
-        features_to_keep = [self.config["encounter_col"], self.config["time_col"], \
-                                        self.config["target_col"]] + features
+        # add to these the encounter_col, time_col,
+        features_to_keep = [self.config["encounter_col"], self.config["time_col"]] + features
 
         self.dataframe = self.dataframe[features_to_keep].copy()
         
@@ -118,45 +184,54 @@ class Dataset:
         
         modeling_data = self.dataframe[self.dataframe[self.encounter_col].isin(encounter_ids)].copy()
         
-        encounters_and_times = modeling_data[[self.encounter_col, self.time_col]].drop_duplicates()
+        encounters_and_times = modeling_data[[self.encounter_col, self.time_col]]
         
-        X_train = modeling_data.drop(columns=[self.encounter_col, self.time_col, self.target])
-        y_train = modeling_data[self.target]
+        X_train = modeling_data.drop(columns=[self.encounter_col, self.time_col, self.target_col])
+        y_train = modeling_data[self.target_col]
                 
         return X_train, y_train, encounters_and_times   
+    
+    def encounter_ids(self):
+        """
+        Returns the unique encounter IDs in the dataset.
+        """
+        return self.dataframe[self.encounter_col].unique()
 
 
 def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
 
     if model_type == "xgb":
-        with open("config/xgboost_grid_search.yaml") as f:
+        with open("config/xgboost_grid_search_test.yaml") as f:
             param_grid = yaml.safe_load(f)
+    
+    # save a copy of param_grid to the experiment directory
+    with open(os.path.join(experiment_dir, "param_grid.json"), "w") as f:
+        json.dump(param_grid, f)
 
-    encounter_ids = dataset[config["encounter_col"]].unique()
-    print(f"Number of unique encounter IDs: {len(encounter_ids)}")
+    print(f"Number of unique encounter IDs: {len(dataset.encounter_ids())}")
     
     # split encounter_ids into 5 folds
     kf_outer = KFold(n_splits=5, shuffle=True, random_state=config["seed"])
 
-    for outer_fold, (outer_train_id, outer_test_id) in enumerate(kf_outer.split(encounter_ids)):
-        outer_train_encounters = encounter_ids[outer_train_id]
-        outer_test_encounters = encounter_ids[outer_test_id]
+    for outer_fold, (outer_train_id, outer_test_id) in enumerate(kf_outer.split(dataset.encounter_ids())):
+        outer_train_encounters = dataset.encounter_ids()[outer_train_id]
+        outer_test_encounters = dataset.encounter_ids()[outer_test_id]
 
         print(f"Outer Loop Fold {outer_fold}: Train outer encounters={len(outer_train_encounters)}, "
               f"Test outer encounters={len(outer_test_encounters)}")
         
         # Prepare outer train data
-        X_outer_train, y_outer_train = dataset.modeling_data(outer_train_encounters)
+        X_outer_train, y_outer_train, _ = dataset.modeling_data(outer_train_encounters)
 
         # Inner CV for hyperparameter tuning
         kf_inner = KFold(n_splits=5, shuffle=True, random_state=config["seed"])
         
         pipe = Pipeline([
             ('scaler', StandardScaler()),
-            ('model', xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss'))
+            ('model', xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss', verbosity=1))
         ])
             
-        grid_search = GridSearchCV(pipe, param_grid, cv=kf_inner, scoring='accuracy')
+        grid_search = GridSearchCV(pipe, param_grid, cv=kf_inner, scoring='accuracy', verbose=2)
         grid_search.fit(X_outer_train, y_outer_train)
 
         # Get best hyperparameters from inner CV
@@ -195,9 +270,9 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
 
         if outer_fold == 0:
             # create the arrays to hold the predictions and test scores
-            all_true_labels = np.zeros((len(encounter_ids),))
-            all_predictions = np.zeros((len(encounter_ids),))
-            all_pred_proba = np.zeros((len(encounter_ids),))
+            all_true_labels = np.zeros((len(dataset.encounter_ids()),))
+            all_predictions = np.zeros((len(dataset.encounter_ids()),))
+            all_pred_proba = np.zeros((len(dataset.encounter_ids()),))
         
         # store the predictions and test scores
         all_true_labels[outer_test_id] = y_outer_test
@@ -221,23 +296,43 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
         }
         with open(os.path.join(experiment_dir, f"metrics_fold_{outer_fold}.json"), "w") as f:
             json.dump(metrics, f)
+
+    # Save all predictions and true labels for the outer test set
+    np.save(os.path.join(experiment_dir, "all_true_labels.npy"), all_true_labels)
+    np.save(os.path.join(experiment_dir, "all_predictions.npy"), all_predictions)
+    np.save(os.path.join(experiment_dir, "all_pred_proba.npy"), all_pred_proba)
+
+    # calculate overall metrics
+    overall_accuracy = accuracy_score(all_true_labels, all_predictions)
+    overall_roc_auc = roc_auc_score(all_true_labels, all_pred_proba)
+    overall_precision = precision_score(all_true_labels, all_predictions)
+    overall_recall = recall_score(all_true_labels, all_predictions)
+    overall_f1 = f1_score(all_true_labels, all_predictions)
+
+    overall_metrics = {
+        "overall_accuracy": overall_accuracy,
+        "overall_roc_auc": overall_roc_auc,
+        "overall_precision": overall_precision,
+        "overall_recall": overall_recall,
+        "overall_f1": overall_f1
+    }
+    with open(os.path.join(experiment_dir, "overall_metrics.json"), "w") as f:
+        json.dump(overall_metrics, f)
+
+    # plot ROC curve, precision-recall curve, calibration curve, and confusion matrix
+    plot_roc_curve(all_true_labels, all_pred_proba, experiment_dir)
+    plot_precision_recall_curve(all_true_labels, all_pred_proba, experiment_dir)
+    plot_calibration_curve(all_true_labels, all_pred_proba, experiment_dir)
+    plot_confusion_matrix(all_true_labels, all_predictions, experiment_dir)
+
     
-        
-
-
-
-
-
-
-
-
 def main():
     hospital = 'choc'  # or 'mimic'
     config_path = f"config/{hospital}_supervised.yaml"
     config = load_config(config_path)
 
     dataset = Dataset(config)
-    print(f"Dataset loaded with {len(dataset)} rows and {len(dataset.columns)} columns")
+    print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
           
     # train the model using the outer training loop
     model_type = "xgb" 

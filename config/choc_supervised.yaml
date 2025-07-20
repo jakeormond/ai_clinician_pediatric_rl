@@ -9,7 +9,7 @@ features_to_use_path: "/home/jake/Documents/AI_Clinician/choc_code/dataframes/fe
 
 seed: 42
 
-proportions_to_use: 0.80
+proportion_w_data: 0.80
 
 target_col: "mortality"
 prediction_time: "all"

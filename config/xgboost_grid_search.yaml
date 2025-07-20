@@ -1,0 +1,9 @@
+param_grid:
+  n_estimators: [100, 300, 500]
+  max_depth: [3, 5, 7]
+  learning_rate: [0.01, 0.1, 0.3]
+  subsample: [0.7, 0.9, 1.0]
+  colsample_bytree: [0.7, 0.9, 1.0]
+  reg_alpha: [0, 0.1, 1]
+  reg_lambda: [1, 5, 10]
+  scale_pos_weight: [1, 5, 10]

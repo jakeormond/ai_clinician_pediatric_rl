@@ -9,101 +9,46 @@ CVSplit objects that hold the encounter IDs for the splits
 and methods to access the data in the DataSet object.
 """
 
-
-
+import os
 import yaml
+import json
+import joblib
 import pandas as pd
 import numpy as np
 import time
 import pyarrow
 from sklearn.model_selection import train_test_split
 from utilities import load_config
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import PowerTransformer
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, GridSearchCV
+from sklearn.metrics import accuracy_score, roc_auc_score, precision_score, recall_score, f1_score
+import xgboost as xgb
 
+EXPERIMENTS_DIR = "/home/jake/Documents/AI_Clinician/experiments"
 
-# this class holds the complete dataset
-class DataProcessorSupervised:
+# this class holds the complete dataset, the folds can 
+# access the data they need using the encounter IDs
+# and the methods in this class
+class Dataset:
     def __init__(self, 
-                 config, 
-                 cv_folds=5, 
-                 test_size=0.2,
-                 normalize_obs = True,
-                 normalize_actions = True,
-                 transform_targets = True):
+                 config):
         
-        self.config = config
-        self.reward = config["reward"]
-        self.flip_reward = config["flip_reward"]
+        self.target_col = config["target_col"]
+        self.encounter_col = config["encounter_col"]
+        self.time_col = config["time_col"]
 
-        self.actions = config["actions"]
-        self.create_binary_actions = config["create_binary_actions"]
-        self.transform_actions = config["transform_actions"]
-        self.action_transforms = config["action_transforms"]
-
-        self.proportion_w_data = config["proportions_to_use"]
-        self.test_size = test_size
-        self.val_size = val_size
-
-        if self.val_size > 0.0:
-            self.include_val = True
-        else:
-            self.include_val = False
         
-        self.random_state = config["seed"]
-        
-        self, dataframe = self._load_dataset()
-        self._split_and_process(dataframe)
+        self._load_dataset()
+        self._transform_target()
 
-        if self.create_binary_actions:
-            self._create_binary_actions()
-
-        if self.transform_actions: # this has to occur before normalization
-            self._transform_actions()
-
-        self.normalize_obs = normalize_obs
-        self.normalize_actions = normalize_actions
-
-        if self.normalize_obs or self.normalize_actions:
-            self._normalize_data()
-
-        # combine actions and binary actions
-        if self.create_binary_actions:
-            self.train_data['actions'] = \
-                np.concatenate((self.train_data['actions'], 
-                           self.train_data['binary_actions']), axis=1)
-            
-            # remove the binary actions from train_data
-            self.train_data.pop('binary_actions', None)
-
-
-            self.test_data['actions'] = \
-                np.concatenate((self.test_data['actions'], 
-                           self.test_data['binary_actions']), axis=1)
-            self.test_data.pop('binary_actions', None)
-
-            if self.include_val:
-                self.val_data['actions'] = \
-                    np.concatenate((self.val_data['actions'], 
-                               self.val_data['binary_actions']), axis=1) 
-                self.val_data.pop('binary_actions', None)      
-                
-            
 
     def _load_dataset(self):
-        dataframe = pd.read_parquet(self.config["dataframe_path"])
+        self.dataframe = pd.read_parquet(self.config["dataframe_path"])
         features_to_use_df = pd.read_csv(self.config["features_to_use_path"])
 
-        dataframe = pd.read_parquet(self.config["dataframe_path"])
-        
-        features_to_use_df = pd.read_csv(self.config["features_to_use_path"])
-
-        # drop terminal reward column if terminal_reward is False
-        if not self.config["terminal_reward"]:
-            if self.config["terminal_reward_col"] in features_to_use_df['feature'].values:
-                features_to_use_df = features_to_use_df[features_to_use_df['feature'] != self.config["terminal_reward_col"]]
-        
-        # drop any rows where "do not use" is 1
+         # drop any rows where "do not use" is 1
         features_to_use_df = features_to_use_df[features_to_use_df['do not use'] != 1]
 
         # drop any rows where "proportion_sepsis" is less than proportion_w_data and
@@ -113,287 +58,177 @@ class DataProcessorSupervised:
             (features_to_use_df['imputation_method'] != 'interpolation')
         ]
 
-        # save lists of the observation features, actions, and rewards
+        # drop all features in the action_feature_sets
+        for feature_set in self.config["action_feature_sets"]:
+            features_to_use_df = features_to_use_df[features_to_use_df['feature_set'] != feature_set]
+
+        # make list of features
         features = features_to_use_df['feature'].tolist()
-        # drop self.action_features from obs_features
-        self.obs_features = [f for f in features if f not in self.actions]
-        # save the actions features
 
         # add to these the encounter_col, time_col, and the reward
         features_to_keep = [self.config["encounter_col"], self.config["time_col"], \
-                                        self.config["reward"]] + features
+                                        self.config["target_col"]] + features
 
-        dataframe = dataframe[features_to_keep].copy()
+        self.dataframe = self.dataframe[features_to_keep].copy()
         
-        n_encounter_ids_before = dataframe[self.config["encounter_col"]].nunique()
-        n_rows_before = dataframe.shape[0]  
+        n_encounter_ids_before = self.dataframe[self.config["encounter_col"]].nunique()
+        n_rows_before = self.dataframe.shape[0]  
 
         # remove rows with NaN values anywhere in the dataframe
-        dataframe = dataframe.dropna()
-        dataframe = dataframe.reset_index(drop=True)
+        self.dataframe = self.dataframe.dropna()
+        self.dataframe = self.dataframe.reset_index(drop=True)
 
-        n_encounter_ids_after = dataframe[self.config["encounter_col"]].nunique()
-        n_rows_after = dataframe.shape[0]
+        n_encounter_ids_after = self.dataframe[self.config["encounter_col"]].nunique()
+        n_rows_after = self.dataframe.shape[0]
 
         print(f"Removed {n_encounter_ids_before - n_encounter_ids_after} "
                 f"encounter IDs and {n_rows_before - n_rows_after} rows with NaN values.")
         print(f"Remaining encounter IDs: {n_encounter_ids_after}, Remaining rows: {n_rows_after}")       
 
-        return self, dataframe
-
-        
-    def _split_and_process(self, dataframe):
-
-        encounter_ids = dataframe[self.config["encounter_col"]].unique()
-
-        # First split off the test set
-        train_ids, test_ids = train_test_split(
-            encounter_ids, test_size=self.test_size, 
-            random_state=self.random_state
-        )     
-
-        if self.include_val:
-            val_size_adjusted = self.val_size / (1 - self.test_size)
-
-            train_ids, val_ids = train_test_split(
-                train_ids, test_size=val_size_adjusted,
-                random_state=self.random_state
-            )
-
-        else:
-            val_ids = None
-
-        train_data_dataframe = dataframe[dataframe[self.config["encounter_col"]].isin(train_ids)].copy()
-        test_data_dataframe = dataframe[dataframe[self.config["encounter_col"]].isin(test_ids)].copy()
-        if self.include_val:
-            val_dataframe = dataframe[dataframe[self.config["encounter_col"]].isin(val_ids)].copy()
-        else:
-            val_dataframe = None
-
-        # check for any all-zero columns in any of the dataframes
-        zero_cols_train = [col for col in train_data_dataframe.columns if (train_data_dataframe[col] == 0).all()]
-        zero_cols_test = [col for col in test_data_dataframe.columns if (test_data_dataframe[col] == 0).all()]
-        if self.include_val:
-            zero_cols_val = [col for col in val_dataframe.columns if (val_dataframe[col] == 0).all()]
-
-        # if len(zero_cols_train) > 0 or len(zero_cols_test) > 0:
-        #     raise ValueError(
-        #         f"Found all-zero columns in train or test data: "
-        #         f"train: {zero_cols_train}, test: {zero_cols_test}"
-        #     )
-
-        drop_cols = set(zero_cols_train + zero_cols_test)
-        if self.include_val:
-            drop_cols.update(zero_cols_val)
-
-        if len(drop_cols) > 0:
-            print(f"Dropping all-zero columns: {drop_cols}")
-            train_data_dataframe = train_data_dataframe.drop(columns=drop_cols)
-            test_data_dataframe = test_data_dataframe.drop(columns=drop_cols)
-            if self.include_val:
-                val_dataframe = val_dataframe.drop(columns=drop_cols)
-
-        # split the dataframes into the arrays needed for RL
-        self.train_data = self._split_into_rl_dataset(train_data_dataframe)
-        self.test_data = self._split_into_rl_dataset(test_data_dataframe)
-        if self.include_val:
-            self.val_data = self._split_into_rl_dataset(val_dataframe)
-        else:
-            self.val_data = None
-
-
+        return self
     
 
-    def _create_binary_actions(self):
-        
-        self.train_data['binary_actions'] = self.train_data['actions'].copy()
-        self.test_data['binary_actions'] = self.test_data['actions'].copy()
-        if self.include_val:
-            self.val_data['binary_actions'] = self.val_data['actions'].copy()        
-        
-        for i, action in enumerate(self.actions):
-            # create a binary action for each action, where 1 means the action was given
-            # and 0 means it was not given
-            self.train_data['binary_actions'][:, i] = \
-                (self.train_data['binary_actions'][:, i] != 0).astype(int)
-            self.test_data['binary_actions'][:, i] = \
-                (self.test_data['binary_actions'][:, i] != 0).astype(int)
-            if self.include_val:
-                self.val_data['binary_actions'][:, i] = \
-                    (self.val_data['binary_actions'][:, i] != 0).astype(int)
-
-
-    def _normalize_data(self):
-        # FIX THIS CODE!!!!!!!!!!!!!!!!!!!!!!!
-        # We should apply min max normalization to all drugs!!!!!!!!
-
-        # This function will normalize the observations using the mean and std of the training set
-        # It will return the normalized observations (centred at 0)
-        if self.normalize_obs:
-            self.mean_obs = self.train_data['observations'].mean(axis=0)
-            self.std_obs = self.train_data['observations'].std(axis=0)
-
-            self.train_data['observations'] = (self.train_data['observations'] 
-                                               - self.mean_obs) / self.std_obs
-            self.test_data['observations'] = (self.test_data['observations'] 
-                                              - self.mean_obs) / self.std_obs
-            if self.include_val:
-                self.val_data['observations'] = (self.val_data['observations'] 
-                                                 - self.mean_obs) / self.std_obs
-                
-            print("Observation normalization complete.")
-        
-        if self.normalize_actions: # these should be 0 to 1, since we
-            # have many zeros. Note min can be negative because of transforms
-            self.min_actions = self.train_data['actions'].min(axis=0)            
-            self.max_actions = self.train_data['actions'].max(axis=0)
-
-            self.train_data['actions'] = (self.train_data['actions'] - self.min_actions) / \
-                                          (self.max_actions - self.min_actions)
-
-            self.test_data['actions'] = (self.test_data['actions'] - self.min_actions) / \
-                                          (self.max_actions - self.min_actions)
-            if self.include_val:
-                self.val_data['actions'] = (self.val_data['actions'] - self.min_actions) / \
-                                          (self.max_actions - self.min_actions)
-                  
-            print("Action normalization complete.")
-
-
-    def _transform_actions(self):
-
-        n_targets = len(self.actions)
-
-        for i, target in enumerate(self.actions):
-            target_transform = self.config["action_transforms"][i]
-
-            if target_transform == "yeo-johnson": # mo other transforms yet implemented
-                pt = PowerTransformer(method='yeo-johnson')
-
-                train_target_data = self.train_data['actions'][:, i]
-                train_target_no_zeros = train_target_data[train_target_data != 0]
-                n_feature_rows = len(train_target_no_zeros)
-                n_rows = len(train_target_data)
-                print(f"Feature: {target}, Rows with data: {n_feature_rows} out of {n_rows} ({n_feature_rows / n_rows * 100:.2f}%)")
-
-                # fit to the non-zero data in the training set
-                pt.fit(train_target_no_zeros.reshape(-1, 1))
-
-                # transform the training data
-                self.train_data['actions'][:, i] = pt.transform(
-                    self.train_data['actions'][:, i].reshape(-1, 1)).flatten()
-                # transform the test data
-                self.test_data['actions'][:, i] = pt.transform(
-                    self.test_data['actions'][:, i].reshape(-1, 1)).flatten()
-                if self.include_val:
-                    self.val_data['actions'][:, i] = pt.transform(
-                        self.val_data['actions'][:, i].reshape(-1, 1)).flatten()
-                    
-                print(f"Transformed target {target} with Yeo-Johnson transform.")
-                
-
-def load_dataset(config):
-        dataframe = pd.read_parquet(config["dataframe_path"])
-        features_to_use_df = pd.read_csv(config["features_to_use_path"])
-
-        # drop any rows where "do not use" is 1
-        features_to_use_df = features_to_use_df[features_to_use_df['do not use'] != 1]
-
-        # drop any rows where "proportion_sepsis" is less than proportion_w_data and
-        # imputation_method is "interpolation"
-        features_to_use_df = features_to_use_df[
-            (features_to_use_df['proportion_sepsis'] >= config['proportion_w_data']) |   
-            (features_to_use_df['imputation_method'] != 'interpolation')
-        ]
-
-        # drop all features in the vasoactive_inotropic_infusion feature_set
-        features_to_use_df = features_to_use_df[features_to_use_df['feature_set'] != 'vasoactive_inotropic_infusion']
-
-        # drop features in the input_output feature_set
-        features_to_use_df = features_to_use_df[features_to_use_df['feature_set'] != 'input_output']
-
-        # keep only the remaining features in features_to_use_df, config['target'], 
-        # config['encounter_col'], and config['time_col']
-        features_to_keep = features_to_use_df['feature'].tolist() + \
-            [config["target"], config["encounter_col"], config["time_col"]]
-
-        dataframe = dataframe[features_to_keep].copy()
-        
-        n_encounter_ids_before = dataframe[config["encounter_col"]].nunique()
-        n_rows_before = dataframe.shape[0]  
-
-        # remove rows with NaN values anywhere in the dataframe
-        dataframe = dataframe.dropna()
-        dataframe = dataframe.reset_index(drop=True)
-
-        n_encounter_ids_after = dataframe[config["encounter_col"]].nunique()
-        n_rows_after = dataframe.shape[0]
-
-        print(f"Removed {n_encounter_ids_before - n_encounter_ids_after} "
-                f"encounter IDs and {n_rows_before - n_rows_after} rows with NaN values.")
-        print(f"Remaining encounter IDs: {n_encounter_ids_after}, Remaining rows: {n_rows_after}")       
-
-        return dataframe
-
-
-
-class InnerCV:
-    def __init__(self, train_df, config, n_splits=5):
-        self.train_df = train_df
-        self.config = config
-        self.n_splits = n_splits
-        self.encounter_col = config["encounter_col"]
-        self.encounter_ids = train_df[self.encounter_col].unique()
-        self.kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=config["seed"])
-
-    def split(self):
+    def _transform_target(self):
+        """ depending on the type of prediction, we may need to alter
+        the target data. For example, if we are predicting mortality,
+        we may need to transform all the timepoints to a binary outcome
+        (1 if the patient died, 0 if they survived). If we are predicting 
+        mortality at a specific timepoint, we may need to transform the target
+        to a binary outcome (1 if the patient died at that timepoint, 0 if 
+        they survive) only for those specific timepoints.
         """
-        Yields train/val DataFrames for each inner fold.
+        # find the encounter_ids that have target_data equal to 1
+        target_encounter_ids = self.dataframe[self.dataframe[self.target_col] == 1][self.encounter_col].unique()
+        
+        if self.config["prediction_time"] == "all":
+            # all values for the target_data are 1 for the encounter_ids that have target_data equal to 1
+            self.dataframe[self.target_col] = self.dataframe[self.encounter_col].apply(
+                lambda x: 1 if x in target_encounter_ids else 0
+            )       
+
+        else:
+            # not implemented yet, so raise an error
+            raise NotImplementedError("Prediction time 'specific' is not implemented yet.")
+
+    def modeling_data(self, encounter_ids):
         """
-        for fold, (inner_train_idx, inner_val_idx) in enumerate(self.kf.split(self.encounter_ids)):
-            inner_train_encounters = self.encounter_ids[inner_train_idx]
-            inner_val_encounters = self.encounter_ids[inner_val_idx]
+        Returns the modeling data as a DataFrame.
+        This is the data that will be used for training and testing.
+        """
+        
+        modeling_data = self.dataframe[self.dataframe[self.encounter_col].isin(encounter_ids)].copy()
+        
+        encounters_and_times = modeling_data[[self.encounter_col, self.time_col]].drop_duplicates()
+        
+        X_train = modeling_data.drop(columns=[self.encounter_col, self.time_col, self.target])
+        y_train = modeling_data[self.target]
+                
+        return X_train, y_train, encounters_and_times   
 
-            inner_train_df = self.train_df[self.train_df[self.encounter_col].isin(inner_train_encounters)].copy()
-            inner_val_df = self.train_df[self.train_df[self.encounter_col].isin(inner_val_encounters)].copy()
 
-            yield fold, inner_train_df, inner_val_df
+def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
 
-
-
-def outer_training_loop(config):
-
-    dataset = load_dataset(config)
+    if model_type == "xgb":
+        with open("config/xgboost_grid_search.yaml") as f:
+            param_grid = yaml.safe_load(f)
 
     encounter_ids = dataset[config["encounter_col"]].unique()
     print(f"Number of unique encounter IDs: {len(encounter_ids)}")
     
     # split encounter_ids into 5 folds
-    kf = KFold(n_splits=5, shuffle=True, random_state=config["seed"])
+    kf_outer = KFold(n_splits=5, shuffle=True, random_state=config["seed"])
 
-    for fold, (train_idx, test_idx) in enumerate(kf.split(encounter_ids)):
-        train_encounters = encounter_ids[train_idx]
-        test_encounters = encounter_ids[test_idx]
+    for outer_fold, (outer_train_id, outer_test_id) in enumerate(kf_outer.split(encounter_ids)):
+        outer_train_encounters = encounter_ids[outer_train_id]
+        outer_test_encounters = encounter_ids[outer_test_id]
 
-        train_df = dataset[dataset[config["encounter_col"]].isin(train_encounters)].copy()
-        test_df = dataset[dataset[config["encounter_col"]].isin(test_encounters)].copy()
-
-        print(f"Fold {fold}: Train encounters={len(train_encounters)}, Test encounters={len(test_encounters)}")
+        print(f"Outer Loop Fold {outer_fold}: Train outer encounters={len(outer_train_encounters)}, "
+              f"Test outer encounters={len(outer_test_encounters)}")
         
-        # Proceed with your training/validation logic for this fold
-        inner_cv = InnerCV(train_df, config, n_splits=5)
-        for inner_fold, inner_train_df, inner_val_df in inner_cv.split():
+        # Prepare outer train data
+        X_outer_train, y_outer_train = dataset.modeling_data(outer_train_encounters)
 
-            # 
+        # Inner CV for hyperparameter tuning
+        kf_inner = KFold(n_splits=5, shuffle=True, random_state=config["seed"])
+        
+        pipe = Pipeline([
+            ('scaler', StandardScaler()),
+            ('model', xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss'))
+        ])
+            
+        grid_search = GridSearchCV(pipe, param_grid, cv=kf_inner, scoring='accuracy')
+        grid_search.fit(X_outer_train, y_outer_train)
 
-        # 
+        # Get best hyperparameters from inner CV
+        best_params = grid_search.best_params_
+        print(f"Best hyperparameters for outer fold {outer_fold}: {best_params}")
+
+        # Retrain model on full outer train set with best hyperparameters
+        best_model = xgb.XGBClassifier(**best_params, use_label_encoder=False, eval_metric='logloss')
+        
+        # scale X_outer_train, and output the parameters so they can be used to scale the test set
+        scaler = StandardScaler()
+        X_outer_train_scaled = scaler.fit_transform(X_outer_train)        
+        
+        best_model.fit(X_outer_train_scaled, y_outer_train)
+
+        # Evaluate on outer test set
+        X_outer_test, y_outer_test = dataset.modeling_data(outer_test_encounters)
+        X_outer_test_scaled = scaler.transform(X_outer_test)
+        test_score = best_model.score(X_outer_test_scaled, y_outer_test)
+        print(f"Outer Fold {outer_fold}: Test accuracy={test_score:.4f}")
+
+        # get predictions for the outer test set
+        y_pred = best_model.predict(X_outer_test_scaled)
+        y_pred_proba = best_model.predict_proba(X_outer_test_scaled)[:, 1]
+
+        # save the predictions
+        np.save(os.path.join(experiment_dir, f"predictions_fold_{outer_fold}.npy"), y_pred_proba)
+
+        # save the models
+        joblib.dump(scaler, os.path.join(experiment_dir, f"scaler_fold_{outer_fold}.joblib"))
+        joblib.dump(best_model, os.path.join(experiment_dir, f"model_fold_{outer_fold}.joblib"))
+
+        # Save hyperparameters
+        with open(os.path.join(experiment_dir, f"hyperparams_fold_{outer_fold}.json"), "w") as f:
+            json.dump(best_params, f)
+
+        if outer_fold == 0:
+            # create the arrays to hold the predictions and test scores
+            all_true_labels = np.zeros((len(encounter_ids),))
+            all_predictions = np.zeros((len(encounter_ids),))
+            all_pred_proba = np.zeros((len(encounter_ids),))
+        
+        # store the predictions and test scores
+        all_true_labels[outer_test_id] = y_outer_test
+        all_predictions[outer_test_id] = y_pred
+        all_pred_proba[outer_test_id] = y_pred_proba
+
+        # calulate the accuracy socre, roc_auc score, precision score, recall score and f1 score
+        # and save to a file
+        accuracy = accuracy_score(y_outer_test, y_pred)
+        roc_auc = roc_auc_score(y_outer_test, y_pred_proba)
+        precision = precision_score(y_outer_test, y_pred)
+        recall = recall_score(y_outer_test, y_pred)
+        f1 = f1_score(y_outer_test, y_pred)
+
+        metrics = {
+            "accuracy": accuracy,
+            "roc_auc": roc_auc,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1
+        }
+        with open(os.path.join(experiment_dir, f"metrics_fold_{outer_fold}.json"), "w") as f:
+            json.dump(metrics, f)
+    
+        
 
 
 
 
 
 
-    pass
 
 
 def main():
@@ -401,14 +236,18 @@ def main():
     config_path = f"config/{hospital}_supervised.yaml"
     config = load_config(config_path)
 
-    outer_training_loop(config)
+    dataset = Dataset(config)
+    print(f"Dataset loaded with {len(dataset)} rows and {len(dataset.columns)} columns")
+          
+    # train the model using the outer training loop
+    model_type = "xgb" 
+    experiment_name = f"mortality_{model_type}_grid_search_{time.strftime('%Y%m%d_%H%M%S')}"
+    experiment_dir = os.path.join(EXPERIMENTS_DIR, experiment_name)
+    os.makedirs(experiment_dir, exist_ok=True)
+    outer_training_loop(dataset, config, experiment_dir, model_type="xgb")
 
 
-    tick = time.time()
-    processed_data = DataProcessor(config, 
-                    test_size=0.2, val_size=0.0,)
-    tock = time.time()
-    print(f"Data processing took {tock - tick:.2f} seconds.")
+
     
     pass
 

@@ -12,6 +12,9 @@ seed: 42
 proportions_to_use: 0.80
 
 target_col: "mortality"
+prediction_time: "all"
+
+action_feature_sets: ["vasoactive_inotropic_infusion", "input_output"]
 
 time_col: "EVENT_END_DT_TM"
 encounter_col: "MASKED_ENCNTR_ID"

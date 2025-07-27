@@ -29,6 +29,18 @@ import xgboost as xgb
 EXPERIMENTS_DIR = "/home/jake/Documents/AI_Clinician/experiments"
 
 
+def prepare_param_for_pipeline(param_grid):
+    # add "model__" prefix to all parameters in the grid
+    return {f"model__{k}": v for k, v in param_grid.items() if k != "model__n_estimators"}
+
+def remove_model_prefix_from_params(best_params):
+    """
+    Remove the 'model__' prefix from the parameter names.
+    This is necessary because the GridSearchCV returns parameters with 'model__' prefix.
+    """
+    return {k.replace('model__', ''): v for k, v in best_params.items() if k.startswith('model__')}
+
+
 # plots
 def plot_roc_curve(y_true, y_pred_proba, experiment_dir):
     from sklearn.metrics import roc_curve, auc
@@ -208,6 +220,9 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
     with open(os.path.join(experiment_dir, "param_grid.json"), "w") as f:
         json.dump(param_grid, f)
 
+    # prepare the parameters for the pipeline
+    pipe_grid = prepare_param_for_pipeline(param_grid)
+
     print(f"Number of unique encounter IDs: {len(dataset.encounter_ids())}")
     
     # split encounter_ids into 5 folds
@@ -229,20 +244,26 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
         # Inner CV for hyperparameter tuning
         kf_inner = GroupKFold(n_splits=5)
         
+        # pipe = Pipeline([
+        #     ('scaler', StandardScaler()),
+        #     ('model', xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss', verbosity=1))
+        # ])
+
         pipe = Pipeline([
             ('scaler', StandardScaler()),
-            ('model', xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss', verbosity=1))
+            ('model', xgb.XGBClassifier(eval_metric='logloss', verbosity=1))
         ])
             
-        grid_search = GridSearchCV(pipe, param_grid, cv=kf_inner, scoring='accuracy', verbose=2)
+        grid_search = GridSearchCV(pipe, pipe_grid, cv=kf_inner, scoring='accuracy', verbose=2)
         grid_search.fit(X_outer_train, y_outer_train, groups=groups)
 
         # Get best hyperparameters from inner CV
-        best_params = grid_search.best_params_
+        best_params = remove_model_prefix_from_params(grid_search.best_params_)
         print(f"Best hyperparameters for outer fold {outer_fold}: {best_params}")
 
         # Retrain model on full outer train set with best hyperparameters
-        best_model = xgb.XGBClassifier(**best_params, use_label_encoder=False, eval_metric='logloss')
+        # best_model = xgb.XGBClassifier(**best_params, use_label_encoder=False, eval_metric='logloss')
+        best_model = xgb.XGBClassifier(**best_params, eval_metric='logloss')
         
         # scale X_outer_train, and output the parameters so they can be used to scale the test set
         scaler = StandardScaler()
@@ -251,7 +272,7 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
         best_model.fit(X_outer_train_scaled, y_outer_train)
 
         # Evaluate on outer test set
-        X_outer_test, y_outer_test = dataset.modeling_data(outer_test_encounters)
+        X_outer_test, y_outer_test, _ = dataset.modeling_data(outer_test_encounters)
         X_outer_test_scaled = scaler.transform(X_outer_test)
         test_score = best_model.score(X_outer_test_scaled, y_outer_test)
         print(f"Outer Fold {outer_fold}: Test accuracy={test_score:.4f}")
@@ -273,14 +294,15 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
 
         if outer_fold == 0:
             # create the arrays to hold the predictions and test scores
-            all_true_labels = np.zeros((len(dataset.encounter_ids()),))
-            all_predictions = np.zeros((len(dataset.encounter_ids()),))
-            all_pred_proba = np.zeros((len(dataset.encounter_ids()),))
+            all_true_labels = y_outer_test
+            all_predictions = y_pred
+            all_pred_proba = y_pred_proba
         
-        # store the predictions and test scores
-        all_true_labels[outer_test_id] = y_outer_test
-        all_predictions[outer_test_id] = y_pred
-        all_pred_proba[outer_test_id] = y_pred_proba
+        else:
+            # append the predictions and test scores to the arrays
+            all_true_labels = np.concatenate((all_true_labels, y_outer_test))
+            all_predictions = np.concatenate((all_predictions, y_pred))
+            all_pred_proba = np.concatenate((all_pred_proba, y_pred_proba))
 
         # calulate the accuracy socre, roc_auc score, precision score, recall score and f1 score
         # and save to a file

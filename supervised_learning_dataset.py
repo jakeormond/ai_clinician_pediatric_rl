@@ -225,7 +225,10 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
 
     print(f"Number of unique encounter IDs: {len(dataset.encounter_ids())}")
     
-    # split encounter_ids into 5 folds
+    
+    ######################################### OUTER SPLITS #################################################
+    # the outer test splits are held out for the final prediction
+    # the outer train splits are used for hyperparameter tuning 
     kf_outer = KFold(n_splits=5, shuffle=True, random_state=config["seed"])
 
     for outer_fold, (outer_train_id, outer_test_id) in enumerate(kf_outer.split(dataset.encounter_ids())):
@@ -235,25 +238,25 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
         print(f"Outer Loop Fold {outer_fold}: Train outer encounters={len(outer_train_encounters)}, "
               f"Test outer encounters={len(outer_test_encounters)}")
         
-        # Prepare outer train data
+
+        ################################## INNER SPLITS AND HYPERPARAMETER TUNING ##################################
+        # the outer train data is used to create inner training and validation splits for hyperparameter tuning
         X_outer_train, y_outer_train, encounters_and_times = dataset.modeling_data(outer_train_encounters)
 
         # make the groups for the GroupKFold splits
         groups = encounters_and_times[config["encounter_col"]].values
 
-        # Inner CV for hyperparameter tuning
+        # Inner CV for hyperparameter tuning - Note that GroupKFold is deterministic 
+        # (and does not allow setting of a random seed), so we will produce the 
+        # same splits every time
         kf_inner = GroupKFold(n_splits=5)
-        
-        # pipe = Pipeline([
-        #     ('scaler', StandardScaler()),
-        #     ('model', xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss', verbosity=1))
-        # ])
 
         pipe = Pipeline([
             ('scaler', StandardScaler()),
             ('model', xgb.XGBClassifier(eval_metric='logloss', verbosity=1))
         ])
             
+        # grid search for hyper
         grid_search = GridSearchCV(pipe, pipe_grid, cv=kf_inner, scoring='accuracy', verbose=2)
         grid_search.fit(X_outer_train, y_outer_train, groups=groups)
 

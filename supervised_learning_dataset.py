@@ -9,6 +9,7 @@ CVSplit objects that hold the encounter IDs for the splits
 and methods to access the data in the DataSet object.
 """
 
+import argparse
 import os
 import yaml
 import json
@@ -23,7 +24,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import PowerTransformer
 from sklearn.model_selection import KFold, GridSearchCV, GroupKFold
-from sklearn.metrics import accuracy_score, roc_auc_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, roc_auc_score, \
+    precision_score, recall_score, f1_score, average_precision_score
 import xgboost as xgb
 
 EXPERIMENTS_DIR = "/home/jake/Documents/AI_Clinician/experiments"
@@ -106,6 +108,21 @@ def plot_confusion_matrix(y_true, y_pred, experiment_dir):
     plt.title('Confusion Matrix')
     plt.savefig(os.path.join(experiment_dir, 'confusion_matrix.png'))
     plt.close()
+
+
+def calculate_metrics(y_true, y_pred, y_pred_proba):
+    """
+    Calculate and return various evaluation metrics.
+    """
+    metrics = {
+        'accuracy': accuracy_score(y_true, y_pred),
+        'roc_auc': roc_auc_score(y_true, y_pred_proba),
+        'precision': precision_score(y_true, y_pred),
+        'recall': recall_score(y_true, y_pred),
+        'f1_score': f1_score(y_true, y_pred), 
+        'average_precision': average_precision_score(y_true, y_pred_proba)
+    }
+    return metrics
 
 
 # this class holds the complete dataset, the folds can 
@@ -251,13 +268,18 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
         # same splits every time
         kf_inner = GroupKFold(n_splits=5)
 
+        # Calculate the ratio to upweight the minority positive class
+        pos_count = np.sum(y_outer_train == 1)  # positive (minority) count
+        neg_count = np.sum(y_outer_train == 0)  # negative (majority) count
+        scale_pos_weight = neg_count / pos_count  # This will be > 1
+
         pipe = Pipeline([
             ('scaler', StandardScaler()),
             ('model', xgb.XGBClassifier(eval_metric='logloss', verbosity=1))
         ])
             
         # grid search for hyper
-        grid_search = GridSearchCV(pipe, pipe_grid, cv=kf_inner, scoring='accuracy', verbose=2)
+        grid_search = GridSearchCV(pipe, pipe_grid, cv=kf_inner, scoring='average_precision', verbose=2)
         grid_search.fit(X_outer_train, y_outer_train, groups=groups)
 
         # Get best hyperparameters from inner CV
@@ -274,18 +296,34 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
         
         best_model.fit(X_outer_train_scaled, y_outer_train)
 
-        # Evaluate on outer test set
-        X_outer_test, y_outer_test, _ = dataset.modeling_data(outer_test_encounters)
+        # Generate predictions on the outer test set
+        X_outer_test, y_outer_test, outer_test_encounters_and_times = \
+                                dataset.modeling_data(outer_test_encounters)
         X_outer_test_scaled = scaler.transform(X_outer_test)
-        test_score = best_model.score(X_outer_test_scaled, y_outer_test)
-        print(f"Outer Fold {outer_fold}: Test accuracy={test_score:.4f}")
-
+        
         # get predictions for the outer test set
         y_pred = best_model.predict(X_outer_test_scaled)
         y_pred_proba = best_model.predict_proba(X_outer_test_scaled)[:, 1]
 
-        # save the predictions
-        np.save(os.path.join(experiment_dir, f"predictions_fold_{outer_fold}.npy"), y_pred_proba)
+        # calculate metrics on the outer test set
+        metrics = calculate_metrics(y_outer_test, y_pred, y_pred_proba)
+        print(f"Outer Fold {outer_fold}: Test metrics: {metrics}")
+
+        with open(os.path.join(experiment_dir, f"metrics_fold_{outer_fold}.json"), "w") as f:
+            json.dump(metrics, f)
+
+        # create a DataFrame to hold the predictions and true labels
+        predictions_df = pd.DataFrame({
+            'encounter_id': outer_test_encounters_and_times[config["encounter_col"]],
+            'time': outer_test_encounters_and_times[config["time_col"]],
+            'true_label': y_outer_test,
+            'predicted_label': y_pred,
+            'predicted_proba': y_pred_proba
+        })
+
+        # save the predictions to a parquet file
+        predictions_df.to_parquet(os.path.join(experiment_dir, f"predictions_fold_{outer_fold}.parquet"), 
+                                  engine='pyarrow', index=False)
 
         # save the models
         joblib.dump(scaler, os.path.join(experiment_dir, f"scaler_fold_{outer_fold}.joblib"))
@@ -307,43 +345,10 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
             all_predictions = np.concatenate((all_predictions, y_pred))
             all_pred_proba = np.concatenate((all_pred_proba, y_pred_proba))
 
-        # calulate the accuracy socre, roc_auc score, precision score, recall score and f1 score
-        # and save to a file
-        accuracy = accuracy_score(y_outer_test, y_pred)
-        roc_auc = roc_auc_score(y_outer_test, y_pred_proba)
-        precision = precision_score(y_outer_test, y_pred)
-        recall = recall_score(y_outer_test, y_pred)
-        f1 = f1_score(y_outer_test, y_pred)
-
-        metrics = {
-            "accuracy": accuracy,
-            "roc_auc": roc_auc,
-            "precision": precision,
-            "recall": recall,
-            "f1": f1
-        }
-        with open(os.path.join(experiment_dir, f"metrics_fold_{outer_fold}.json"), "w") as f:
-            json.dump(metrics, f)
-
-    # Save all predictions and true labels for the outer test set
-    np.save(os.path.join(experiment_dir, "all_true_labels.npy"), all_true_labels)
-    np.save(os.path.join(experiment_dir, "all_predictions.npy"), all_predictions)
-    np.save(os.path.join(experiment_dir, "all_pred_proba.npy"), all_pred_proba)
-
     # calculate overall metrics
-    overall_accuracy = accuracy_score(all_true_labels, all_predictions)
-    overall_roc_auc = roc_auc_score(all_true_labels, all_pred_proba)
-    overall_precision = precision_score(all_true_labels, all_predictions)
-    overall_recall = recall_score(all_true_labels, all_predictions)
-    overall_f1 = f1_score(all_true_labels, all_predictions)
-
-    overall_metrics = {
-        "overall_accuracy": overall_accuracy,
-        "overall_roc_auc": overall_roc_auc,
-        "overall_precision": overall_precision,
-        "overall_recall": overall_recall,
-        "overall_f1": overall_f1
-    }
+    overall_metrics = calculate_metrics(all_true_labels, all_predictions, all_pred_proba)
+    print(f"Overall metrics: {overall_metrics}")
+    
     with open(os.path.join(experiment_dir, "overall_metrics.json"), "w") as f:
         json.dump(overall_metrics, f)
 
@@ -352,10 +357,22 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
     plot_precision_recall_curve(all_true_labels, all_pred_proba, experiment_dir)
     plot_calibration_curve(all_true_labels, all_pred_proba, experiment_dir)
     plot_confusion_matrix(all_true_labels, all_predictions, experiment_dir)
+    pass
 
     
 def main():
-    hospital = 'choc'  # or 'mimic'
+    parser = argparse.ArgumentParser(description='Train mortality prediction model')
+    parser.add_argument('--hospital', 
+                        default='choc', 
+                        choices=['choc', 'mimic'], 
+                        help='Hospital dataset to use (default: choc)')
+    parser.add_argument('--model_type', 
+                        default='xgb', 
+                        choices=['xgb'], 
+                        help='Model type to train (default: xgb)')
+    args = parser.parse_args()
+
+    hospital = args.hospital
     config_path = f"config/{hospital}_supervised.yaml"
     config = load_config(config_path)
 
@@ -363,7 +380,7 @@ def main():
     print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
           
     # train the model using the outer training loop
-    model_type = "xgb" 
+    model_type = args.model_type
     experiment_name = f"mortality_{model_type}_grid_search_{time.strftime('%Y%m%d_%H%M%S')}"
     experiment_dir = os.path.join(EXPERIMENTS_DIR, experiment_name)
     os.makedirs(experiment_dir, exist_ok=True)

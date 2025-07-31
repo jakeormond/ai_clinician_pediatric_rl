@@ -33,6 +33,12 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Job Name: $SLURM_JOB_NAME"
 echo "Node: $SLURM_NODELIST"
 echo "CPUs: $SLURM_CPUS_PER_TASK"
+
+# Add to your script
+echo "CPU info:"
+lscpu | grep "Model name"
+cat /proc/cpuinfo | grep "model name" | head -1
+
 echo "Memory: $SLURM_MEM_PER_NODE MB"
 echo "Start time: $(date)"
 echo "Working directory: $(pwd)"
@@ -41,6 +47,8 @@ echo "Working directory: $(pwd)"
 python -m src.scripts.supervised.supervised_learning \
     --hospital choc \
     --model_type xgb
+
+
 
 echo "End time: $(date)"
 echo "Job completed!"

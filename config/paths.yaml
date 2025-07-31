@@ -4,5 +4,5 @@ local:
   code_dir: "/home/jake/Documents/AI_Clinician/choc_code"
   
 hpc:
-  experiments_dir: "/home/38/bt310238/ai_clinician/experiments"
-  data_dir: "/home/38/bt310238/ai_clinician/data"
+  experiments_dir: "/home/38/bt310238/experiments"
+  data_dir: "/groups/a-faisal/bt310238/ai_clinician/data"

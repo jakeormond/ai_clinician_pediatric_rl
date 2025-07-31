@@ -89,7 +89,14 @@ def outer_training_loop(dataset, config, experiment_dir, model_type):
         ])
             
         # grid search for hyper
-        grid_search = GridSearchCV(pipe, pipe_grid, cv=kf_inner, scoring='average_precision', verbose=2)
+        grid_search = GridSearchCV(
+            pipe, 
+            pipe_grid, 
+            cv=kf_inner, 
+            scoring='average_precision', 
+            n_jobs=-1, # use all available CPU cores
+            verbose=2
+        )
         grid_search.fit(X_outer_train, y_outer_train, groups=groups)
 
         # Get best hyperparameters from inner CV

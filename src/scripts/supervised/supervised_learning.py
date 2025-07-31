@@ -17,6 +17,8 @@ import time
 from ...config_manager import ConfigManager  # Import the config manager
 from ...supervised_learning.dataset import Dataset
 from ...supervised_learning.training import outer_training_loop
+from ...utils.logging_utilities import wandb_init  # Add this import
+
 
  
 def main():
@@ -31,30 +33,40 @@ def main():
                         help='Model type to train (default: xgb)')
     args = parser.parse_args()
 
-    # Initialize config manager
+    # Initialize config manager, it holds paths and environment info
     config_manager = ConfigManager()
 
-    hospital = args.hospital
-    config = config_manager.load_hospital_config(hospital)
-    # config_path = f"config/{hospital}_supervised.yaml"
-    # config = load_config(config_path)
+    # Load the hospital-specific configuration
+    config = config_manager.load_hospital_config(args.hospital)
+    
+    # Initialize W&B with experiment-specific config
+    wandb_config = config_manager.get_wandb_config(
+        experiment_type="supervised_learning",
+        hospital=args.hospital,
+        model_type=args.model_type,
+        seed=config["seed"],
+        group=f"{args.hospital}_supervised",
+        tags=["mortality", args.hospital, args.model_type],
+        config={
+            "n_outer_folds": config["cv_config"]["n_outer_folds"],  # From config file
+            "n_inner_folds": config["cv_config"]["n_inner_folds"],  # From config file
+        }
+    )
+    
+    wandb_init(wandb_config)
 
     dataset = Dataset(config)
     print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
           
     # train the model using the outer training loop
-    model_type = args.model_type
-    experiment_name = f"mortality_{model_type}_grid_search_{time.strftime('%Y%m%d_%H%M%S')}"
+    experiment_name = f"mortality_{args.model_type}_grid_search_{time.strftime('%Y%m%d_%H%M%S')}"
     experiment_dir = config_manager.create_experiment_dir(experiment_name)
 
     print(f"Running on {config_manager.environment} environment")
     print(f"Experiment directory: {experiment_dir}")
 
-    # experiment_dir = os.path.join(EXPERIMENTS_DIR, experiment_name)
-    # os.makedirs(experiment_dir, exist_ok=True)
-    outer_training_loop(dataset, config, experiment_dir, model_type="xgb")
+    outer_training_loop(dataset, config, experiment_dir, args.model_type)
     
-    pass
 
 if __name__ == "__main__":
     main()

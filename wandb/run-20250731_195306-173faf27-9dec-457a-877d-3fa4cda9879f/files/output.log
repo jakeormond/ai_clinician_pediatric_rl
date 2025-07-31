@@ -1,0 +1,5 @@
+Removed 2606 encounter IDs and 1589842 rows with NaN values.
+Remaining encounter IDs: 2576, Remaining rows: 2878190
+Dataset loaded with 2878190 rows and 82 columns
+Running on local environment
+Experiment directory: /home/jake/Documents/AI_Clinician/experiments/mortality_xgb_grid_search_20250731_195354

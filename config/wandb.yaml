@@ -1,0 +1,17 @@
+project: "AI_Clinician_Pediatric_RL"
+entity: "jakeormond78-imperial-college-london"  # Will use default W&B entity
+
+# Default config that can be overridden
+default:
+  tags: ["mortality-prediction"]
+  notes: "Mortality prediction using supervised learning"
+  
+# Experiment-specific overrides
+experiments:
+  supervised_learning:
+    group: "supervised"
+    tags: ["mortality", "supervised", "xgboost"]
+    
+  rl_training:
+    group: "rl"
+    tags: ["rl", "-", "reward-function"]

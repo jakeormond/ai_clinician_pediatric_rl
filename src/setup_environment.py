@@ -3,6 +3,7 @@ import socket
 import yaml
 from pathlib import Path
 
+
 def detect_environment():
     """
     Detect if we're running on local machine or HPC.
@@ -15,6 +16,7 @@ def detect_environment():
         return 'hpc'
     else:
         return 'local'
+
 
 def load_paths():
     """
@@ -32,9 +34,26 @@ def load_paths():
     
     # Create directories if they don't exist
     for path_name, path_value in paths.items():
-        Path(path_value).mkdir(parents=True, exist_ok=True)
-        print(f"Ensured {path_name} exists: {path_value}")
-    
+        path_obj = Path(path_value)
+
+        if path_name == 'experiments_dir':
+            # Create experiments_dir if it doesn't exist
+            path_obj.mkdir(parents=True, exist_ok=True)
+            print(f"Ensured {path_name} exists: {path_value}")
+
+        elif path_name in ['data_dir', 'code_dir']:
+            # Check that data_dir and code_dir exist, raise error if not
+            if not path_obj.exists():
+                raise FileNotFoundError(
+                    f"Required directory does not exist: {path_name} = {path_value}\n"
+                    f"Please ensure this directory exists before running the script."
+                )
+            print(f"Verified {path_name} exists: {path_value}")
+            
+        else:
+            # For any other paths, just print them
+            print(f"Using {path_name}: {path_value}")
+  
     return paths, env
 
 if __name__ == "__main__":

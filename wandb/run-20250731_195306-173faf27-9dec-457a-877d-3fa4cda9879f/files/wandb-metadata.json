@@ -1,0 +1,44 @@
+{
+  "os":  "Linux-6.8.0-65-generic-x86_64-with-glibc2.35",
+  "python":  "CPython 3.10.16",
+  "startedAt":  "2025-07-31T18:53:06.867818Z",
+  "args":  [
+    "--hospital",
+    "choc",
+    "--model_type",
+    "xgb"
+  ],
+  "program":  "-m src.scripts.supervised.supervised_learning",
+  "git":  {
+    "remote":  "git@gitlab.doc.ic.ac.uk:bbl/ai_clinician_pediatric_rl.git",
+    "commit":  "8a171eff22910d6aa9c0aa2d9bfef7121be0d1e9"
+  },
+  "email":  "jakeormond78@gmail.com",
+  "root":  "/home/jake/Documents/AI_Clinician/ai_clinician_pediatric_rl",
+  "host":  "jake-HP-Z840-Workstation",
+  "executable":  "/home/jake/miniconda3/envs/rl_env/bin/python",
+  "cpu_count":  8,
+  "cpu_count_logical":  16,
+  "gpu":  "NVIDIA GeForce GTX 1080 Ti",
+  "gpu_count":  1,
+  "disk":  {
+    "/":  {
+      "total":  "1967317549056",
+      "used":  "314126450688"
+    }
+  },
+  "memory":  {
+    "total":  "134982467584"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA GeForce GTX 1080 Ti",
+      "memoryTotal":  "11811160064",
+      "cudaCores":  3584,
+      "architecture":  "Pascal",
+      "uuid":  "GPU-4c8f0e8c-85f6-1066-945f-d6dcda76d1e4"
+    }
+  ],
+  "cudaVersion":  "12.4",
+  "writerId":  "0tm3ged5waayomztl9vek28gibpkklse"
+}

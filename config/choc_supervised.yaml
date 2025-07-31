@@ -19,5 +19,11 @@ action_feature_sets: ["vasoactive_inotropic_infusion", "input_output"]
 time_col: "EVENT_END_DT_TM"
 encounter_col: "MASKED_ENCNTR_ID"
 
+# Cross-validation configuration
+cv_config:
+  n_outer_folds: 5  # Maybe different for MIMIC
+  n_inner_folds: 5
+
+
 
 

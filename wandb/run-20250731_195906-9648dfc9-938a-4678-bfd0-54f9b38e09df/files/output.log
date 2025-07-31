@@ -1,0 +1,79 @@
+Removed 2606 encounter IDs and 1589842 rows with NaN values.
+Remaining encounter IDs: 2576, Remaining rows: 2878190
+Dataset loaded with 2878190 rows and 82 columns
+Running on local environment
+Experiment directory: /home/jake/Documents/AI_Clinician/experiments/mortality_xgb_grid_search_20250731_195926
+Number of unique encounter IDs: 2576
+Using 5 outer folds and 5 inner folds
+Outer Loop Fold 0: Train outer encounters=2060, Test outer encounters=516
+Fitting 5 folds for each of 4 candidates, totalling 20 fits
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.5s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.8s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.8s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.1s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.0s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.1s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.9s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.2s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.2s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.2s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.7s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.7s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.0s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.0s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.9s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.1s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.0s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.2s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.2s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.1s
+Best hyperparameters for outer fold 0: {'colsample_bytree': 0.9, 'learning_rate': 0.3, 'max_depth': 5, 'n_estimators': 4, 'reg_alpha': 0.1, 'reg_lambda': 5, 'scale_pos_weight': 5, 'subsample': 0.9}
+Outer Fold 0: Test metrics: {'accuracy': 0.8836344164279937, 'roc_auc': np.float64(0.8109769500394475), 'precision': 0.4490157765233753, 'recall': 0.21068627118068525, 'f1_score': 0.2868005639401854, 'average_precision': np.float64(0.3356428064497706)}
+Outer Loop Fold 1: Train outer encounters=2061, Test outer encounters=515
+Fitting 5 folds for each of 4 candidates, totalling 20 fits
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.4s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.5s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.3s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.1s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.6s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.0s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.5s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.5s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   8.0s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.5s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.2s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.9s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.7s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.8s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.0s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.9s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.8s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.5s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.2s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.8s
+Best hyperparameters for outer fold 1: {'colsample_bytree': 0.9, 'learning_rate': 0.3, 'max_depth': 5, 'n_estimators': 4, 'reg_alpha': 0.1, 'reg_lambda': 5, 'scale_pos_weight': 5, 'subsample': 0.9}
+Outer Fold 1: Test metrics: {'accuracy': 0.8795345950563237, 'roc_auc': np.float64(0.7909246426098815), 'precision': 0.3496393442622951, 'recall': 0.33233015759950135, 'f1_score': 0.340765087190724, 'average_precision': np.float64(0.30557776234951073)}
+Outer Loop Fold 2: Train outer encounters=2061, Test outer encounters=515
+Fitting 5 folds for each of 4 candidates, totalling 20 fits
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.5s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.6s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.6s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.7s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.5s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.4s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.5s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.9s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.6s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.2s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.1s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.2s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.7s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.7s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=2, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.4s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.7s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.2s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   7.0s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.3s
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.3, model__max_depth=5, model__n_estimators=4, model__reg_alpha=0.1, model__reg_lambda=5, model__scale_pos_weight=5, model__subsample=0.9; total time=   6.3s
+Best hyperparameters for outer fold 2: {'colsample_bytree': 0.9, 'learning_rate': 0.3, 'max_depth': 5, 'n_estimators': 4, 'reg_alpha': 0.1, 'reg_lambda': 5, 'scale_pos_weight': 5, 'subsample': 0.9}
+Outer Fold 2: Test metrics: {'accuracy': 0.9194730149108185, 'roc_auc': np.float64(0.8557627381038309), 'precision': 0.3117474163269176, 'recall': 0.5662912059522579, 'f1_score': 0.4021231318641, 'average_precision': np.float64(0.3264877871150315)}

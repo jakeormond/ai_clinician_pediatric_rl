@@ -1,5 +1,6 @@
 import os
 import yaml
+import time
 from pathlib import Path
 from .setup_environment import load_paths
 
@@ -44,6 +45,40 @@ class ConfigManager:
         
         return config
     
+    def get_wandb_config(self, experiment_type, **kwargs):
+        """Get W&B configuration for a specific experiment type."""
+        wandb_config_path = Path(__file__).parent.parent / "config" / "wandb.yaml"
+        
+        with open(wandb_config_path, 'r') as f:
+            wandb_config = yaml.safe_load(f)
+
+        # Start with default config
+        config = {
+            "project": wandb_config["project"],
+            "entity": wandb_config.get("entity"),
+            **wandb_config["default"]
+        }
+
+        # Apply experiment-specific config - this adds information for wandb
+        if experiment_type in wandb_config["experiments"]:
+            config.update(wandb_config["experiments"][experiment_type])    
+        
+        # Auto-detect W&B mode based on environment
+        if self.environment == 'hpc' and 'mode' not in kwargs:
+            kwargs['mode'] = 'offline'
+        elif self.environment == 'local' and 'mode' not in kwargs:
+            kwargs['mode'] = 'online'
+
+        # Apply runtime overrides
+        config.update(kwargs)
+
+        # Generate unique run name if not provided
+        if "name" not in config:
+            timestamp = time.strftime('%Y%m%d_%H%M%S')
+            config["name"] = f"{experiment_type}_{timestamp}"
+    
+        return config
+
     def create_experiment_dir(self, experiment_name):
         """Create and return experiment directory path."""
         experiment_dir = os.path.join(self.get_experiments_dir(), experiment_name)

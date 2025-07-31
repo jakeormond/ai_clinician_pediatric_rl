@@ -6,3 +6,4 @@ local:
 hpc:
   experiments_dir: "/home/38/bt310238/experiments"
   data_dir: "/groups/a-faisal/bt310238/ai_clinician/data"
+  code_dir: "/home/38/bt310238/code/ai_clinician_pediatric_rl"

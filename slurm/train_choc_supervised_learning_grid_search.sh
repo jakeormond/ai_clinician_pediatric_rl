@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=04:00:00
-#SBATCH --partition=cpu
+#SBATCH --partition=normal
 #SBATCH --account=a-faisal
 
 # load miniconda 

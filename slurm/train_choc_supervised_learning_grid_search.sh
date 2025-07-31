@@ -20,7 +20,7 @@ export WANDB_MODE=offline
 export WANDB_DIR=/home/38/bt310238/wandb
 
 # Navigate to project directory
-cd /groups/a-faisal/bt310238/ai_clinician/code/ai_clinician_pediatric_rl
+cd /home/38/bt310238/code/ai_clinician_pediatric_rl
 
 # Activate conda environment
 eval "$(conda shell.bash hook)"

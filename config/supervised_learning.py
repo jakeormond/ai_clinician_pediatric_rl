@@ -28,7 +28,7 @@ from sklearn.metrics import accuracy_score, roc_auc_score, \
     precision_score, recall_score, f1_score, average_precision_score
 import xgboost as xgb
 
-EXPERIMENTS_DIR = "/home/jake/Documents/AI_Clinician/experiments"
+from config_manager import ConfigManager  # Import the config manager
 
 
 def prepare_param_for_pipeline(param_grid):
@@ -372,9 +372,13 @@ def main():
                         help='Model type to train (default: xgb)')
     args = parser.parse_args()
 
+    # Initialize config manager
+    config_manager = ConfigManager()
+
     hospital = args.hospital
-    config_path = f"config/{hospital}_supervised.yaml"
-    config = load_config(config_path)
+    config = config_manager.load_hospital_config(hospital)
+    # config_path = f"config/{hospital}_supervised.yaml"
+    # config = load_config(config_path)
 
     dataset = Dataset(config)
     print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
@@ -382,12 +386,14 @@ def main():
     # train the model using the outer training loop
     model_type = args.model_type
     experiment_name = f"mortality_{model_type}_grid_search_{time.strftime('%Y%m%d_%H%M%S')}"
-    experiment_dir = os.path.join(EXPERIMENTS_DIR, experiment_name)
-    os.makedirs(experiment_dir, exist_ok=True)
+    experiment_dir = config_manager.create_experiment_dir(experiment_name)
+
+    print(f"Running on {config_manager.environment} environment")
+    print(f"Experiment directory: {experiment_dir}")
+
+    # experiment_dir = os.path.join(EXPERIMENTS_DIR, experiment_name)
+    # os.makedirs(experiment_dir, exist_ok=True)
     outer_training_loop(dataset, config, experiment_dir, model_type="xgb")
-
-
-
     
     pass
 

@@ -4,8 +4,8 @@ project: "AI_Clinician_Pediatric_RL"
 group: "any_percent_behaviour_cloning"
 experiment: "CODE_DEVELOPMENT"
 
-dataframe_path: "/home/jake/Documents/AI_Clinician/choc_data/combined_data/hourly/combined_hourly_features_phoenix_sepsis.parquet"
-features_to_use_path: "/home/jake/Documents/AI_Clinician/choc_code/dataframes/features_to_use.csv"
+dataframe_path: "combined_data/hourly/combined_hourly_features_phoenix_sepsis.parquet"
+features_to_use_path: "dataframes/features_to_use.csv"
 
 seed: 42
 

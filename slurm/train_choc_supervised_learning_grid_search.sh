@@ -23,7 +23,13 @@ export WANDB_DIR=/home/38/bt310238/wandb
 cd /groups/a-faisal/bt310238/ai_clinician/code/ai_clinician_pediatric_rl
 
 # Activate conda environment
+eval "$(conda shell.bash hook)"
 conda activate rl_env
+
+# Verify environment
+echo "Active conda environment: $CONDA_DEFAULT_ENV"
+echo "Python path: $(which python)"
+echo "Python version: $(python --version)"
 
 # Install/update dependencies if needed
 # pip install -r requirements.txt

@@ -13,9 +13,9 @@ import wandb
 
 from utilities import load_config, set_seed
 from training_utilities import TrainConfig
-from logging_utilities import wandb_init
-from data_processor import DataProcessor
-from replay_buffer import ReplayBuffer
+from src.utils.logging_utilities import wandb_init
+from src.data.data_processor import DataProcessor
+from src.rl.replay_buffer import ReplayBuffer
 
 
 TensorBatch = List[torch.Tensor]

@@ -1,7 +1,7 @@
 hospital: "CHOC"
 
 project: "AI_Clinician_Pediatric_RL"
-group: "any_percent_behaviour_cloning"
+group: "choc_supervised"
 experiment: "CODE_DEVELOPMENT"
 
 dataframe_path: "combined_data/hourly/combined_hourly_features_phoenix_sepsis.parquet"

@@ -1,7 +1,7 @@
 import os
 import yaml
 from pathlib import Path
-from setup_environment import load_paths
+from .setup_environment import load_paths
 
 class ConfigManager:
     def __init__(self):
@@ -18,7 +18,7 @@ class ConfigManager:
     
     def get_config_path(self, hospital):
         """Get the config path for a specific hospital."""
-        return Path(__file__).parent / "config" / f"{hospital}_supervised.yaml"
+        return Path(__file__).parent.parent / "config" / f"{hospital}_supervised.yaml"
     
     def load_hospital_config(self, hospital):
         """Load hospital-specific config and update paths."""

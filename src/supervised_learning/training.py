@@ -3,10 +3,14 @@ import yaml
 import json
 import joblib
 import numpy as np
+import pandas as pd
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, GridSearchCV, GroupKFold
 import xgboost as xgb
+from .evaluation import calculate_metrics
+from .plotting import plot_roc_curve, plot_precision_recall_curve, plot_calibration_curve, plot_confusion_matrix
+
 
 
 def prepare_param_for_pipeline(param_grid):
@@ -62,11 +66,6 @@ def outer_training_loop(dataset, config, experiment_dir, model_type="xgb"):
         # (and does not allow setting of a random seed), so we will produce the 
         # same splits every time
         kf_inner = GroupKFold(n_splits=5)
-
-        # Calculate the ratio to upweight the minority positive class
-        pos_count = np.sum(y_outer_train == 1)  # positive (minority) count
-        neg_count = np.sum(y_outer_train == 0)  # negative (majority) count
-        scale_pos_weight = neg_count / pos_count  # This will be > 1
 
         pipe = Pipeline([
             ('scaler', StandardScaler()),

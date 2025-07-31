@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from data_processor import DataProcessor, load_config
+from src.data.data_processor import DataProcessor, load_config
 
 
 TensorBatch = List[torch.Tensor]

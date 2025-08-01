@@ -1,9 +1,3 @@
-hospital: "CHOC"
-
-project: "AI_Clinician_Pediatric_RL"
-group: "choc_supervised"
-experiment: "CODE_DEVELOPMENT"
-
 dataframe_path: "combined_data/hourly/combined_hourly_features_phoenix_sepsis.parquet"
 features_to_use_path: "dataframes/features_to_use.csv"
 
@@ -18,11 +12,6 @@ action_feature_sets: ["vasoactive_inotropic_infusion", "input_output"]
 
 time_col: "EVENT_END_DT_TM"
 encounter_col: "MASKED_ENCNTR_ID"
-
-# Cross-validation configuration
-cv_config:
-  n_outer_folds: 5  # Maybe different for MIMIC
-  n_inner_folds: 5
 
 
 

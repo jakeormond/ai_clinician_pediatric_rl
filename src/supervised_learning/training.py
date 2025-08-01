@@ -2,6 +2,7 @@ import os
 import yaml
 import json
 import joblib
+import glob
 import numpy as np
 import pandas as pd
 import wandb
@@ -27,7 +28,7 @@ def remove_model_prefix_from_params(best_params):
     return {k.replace('model__', ''): v for k, v in best_params.items() if k.startswith('model__')}
 
 
-def outer_training_loop(dataset, config, experiment_dir, model_type):
+def outer_training_loop(dataset, config, experiment_dir, model_type, target_fold=None):
 
     if model_type == "xgb":
         with open("config/xgboost_grid_search_test.yaml") as f:
@@ -56,15 +57,16 @@ def outer_training_loop(dataset, config, experiment_dir, model_type):
         wandb.config.update({"param_grid": param_grid})
 
     ######################################### OUTER SPLITS #################################################
-    
-    # Initialize list to collect all prediction DataFrames
-    all_predictions_dfs = []
-    
+       
     # the outer test splits are held out for the final prediction
     # the outer train splits are used for hyperparameter tuning 
     kf_outer = KFold(n_splits=n_outer_folds, shuffle=True, random_state=config["seed"])
 
     for outer_fold, (outer_train_id, outer_test_id) in enumerate(kf_outer.split(dataset.encounter_ids())):
+        if target_fold is not None and outer_fold != target_fold:
+            print(f"Skipping outer fold {outer_fold} as it is not the target fold {target_fold}")
+            continue
+
         outer_train_encounters = dataset.encounter_ids()[outer_train_id]
         outer_test_encounters = dataset.encounter_ids()[outer_test_id]
 
@@ -164,18 +166,73 @@ def outer_training_loop(dataset, config, experiment_dir, model_type):
             wandb.log({
                 f"fold_{outer_fold}/feature_importance": wandb.Histogram(feature_importance)
             }, step=outer_fold)
-
-        if outer_fold == 0:
-            # create the arrays to hold the predictions and test scores
-            all_true_labels = y_outer_test
-            all_predictions = y_pred
-            all_pred_proba = y_pred_proba
         
-        else:
-            # append the predictions and test scores to the arrays
-            all_true_labels = np.concatenate((all_true_labels, y_outer_test))
-            all_predictions = np.concatenate((all_predictions, y_pred))
-            all_pred_proba = np.concatenate((all_pred_proba, y_pred_proba))
+        break
+
+    wandb.finish()
+
+        # if outer_fold == 0:
+        #     # create the arrays to hold the predictions and test scores
+        #     all_true_labels = y_outer_test
+        #     all_predictions = y_pred
+        #     all_pred_proba = y_pred_proba
+        
+        # else:
+        #     # append the predictions and test scores to the arrays
+        #     all_true_labels = np.concatenate((all_true_labels, y_outer_test))
+        #     all_predictions = np.concatenate((all_predictions, y_pred))
+        #     all_pred_proba = np.concatenate((all_pred_proba, y_pred_proba))
+
+    # # calculate overall metrics
+    # overall_metrics = calculate_metrics(all_true_labels, all_predictions, all_pred_proba)
+    # print(f"Overall metrics: {overall_metrics}")
+    
+    # with open(os.path.join(experiment_dir, "overall_metrics.json"), "w") as f:
+    #     json.dump(overall_metrics, f)
+
+    # # plot ROC curve, precision-recall curve, calibration curve, and confusion matrix
+    # plot_roc_curve(all_true_labels, all_pred_proba, experiment_dir)
+    # plot_precision_recall_curve(all_true_labels, all_pred_proba, experiment_dir)
+    # plot_calibration_curve(all_true_labels, all_pred_proba, experiment_dir)
+    # plot_confusion_matrix(all_true_labels, all_predictions, experiment_dir)
+
+    # # Log overall metrics to W&B
+    # if wandb.run is not None:
+    #     wandb.log({f"overall/{k}": v for k, v in overall_metrics.items()})
+
+    #     # Log plots
+    #     plot_files = ["roc_curve.png", "precision_recall_curve.png", 
+    #                  "calibration_curve.png", "confusion_matrix.png"]
+        
+    #     for plot_file in plot_files:
+    #         plot_path = os.path.join(experiment_dir, plot_file)
+    #         if os.path.exists(plot_path):
+    #             wandb.log({plot_file.replace('.png', ''): wandb.Image(plot_path)})
+        
+    #     wandb.finish()
+
+
+def aggregate_results_across_outer_folds(config, experiment_dir):
+    """
+    This function is used to combine the results across outer folds.
+    It will read the predictions and metrics from each outer fold and combine them into a single DataFrame.
+    """
+    print(f"Aggregating results from experiment directory: {experiment_dir}")
+    
+    n_folds = config["cv_config"]["n_outer_folds"]
+
+    # load the parquet files for each fold
+    all_predictions_dfs = []
+    for fold in range(n_folds):
+        fold_predictions_path = os.path.join(experiment_dir, f"predictions_fold_{fold}.parquet")
+        fold_df = pd.read_parquet(fold_predictions_path, engine='pyarrow')
+        all_predictions_dfs.append(fold_df)
+
+    # concatenate all predictions DataFrames
+    all_predictions_df = pd.concat(all_predictions_dfs, ignore_index=True)
+    all_true_labels = all_predictions_df["true_label"].values
+    all_predictions = all_predictions_df["predicted_label"].values
+    all_pred_proba = all_predictions_df["predicted_proba"].values    
 
     # calculate overall metrics
     overall_metrics = calculate_metrics(all_true_labels, all_predictions, all_pred_proba)
@@ -190,7 +247,14 @@ def outer_training_loop(dataset, config, experiment_dir, model_type):
     plot_calibration_curve(all_true_labels, all_pred_proba, experiment_dir)
     plot_confusion_matrix(all_true_labels, all_predictions, experiment_dir)
 
+    
     # Log overall metrics to W&B
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    aggregated_name = f"{hospital}_{model_type}_{timestamp}_aggregated"
+    wandb_init(config, experiment_type="aggregated", name=aggregated_name)
+
+
+
     if wandb.run is not None:
         wandb.log({f"overall/{k}": v for k, v in overall_metrics.items()})
 
@@ -204,3 +268,4 @@ def outer_training_loop(dataset, config, experiment_dir, model_type):
                 wandb.log({plot_file.replace('.png', ''): wandb.Image(plot_path)})
         
         wandb.finish()
+

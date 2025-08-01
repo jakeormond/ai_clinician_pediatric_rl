@@ -22,7 +22,7 @@ def load_paths():
     """
     Load paths based on the detected environment.
     """
-    config_path = Path(__file__).parent.parent / "config" / "paths.yaml"
+    config_path = Path(__file__).parent.parent / "config" / "environment" / "paths.yaml"
     
     with open(config_path, 'r') as f:
         paths_config = yaml.safe_load(f)

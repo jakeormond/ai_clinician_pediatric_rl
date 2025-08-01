@@ -1,0 +1,18 @@
+Removed 2606 encounter IDs and 1589842 rows with NaN values.
+Remaining encounter IDs: 2576, Remaining rows: 2878190
+Dataset loaded with 2878190 rows and 82 columns
+Running on local environment
+Experiment directory: /home/jake/Documents/AI_Clinician/experiments/mortality_xgb_grid_search_20250801_161402
+Number of unique encounter IDs: 2576
+Using 5 outer folds and 5 inner folds
+Outer Loop Fold 0: Train outer encounters=2060, Test outer encounters=516
+88.34s - Error patching args (debugger not attached to subprocess).
+Traceback (most recent call last):
+  File "/home/jake/.vscode/extensions/ms-python.debugpy-2025.10.0-linux-x64/bundled/libs/debugpy/_vendored/pydevd/_pydev_bundle/pydev_monkey.py", line 541, in patch_args
+    new_args.append(_get_python_c_args(host, port, code, unquoted_args, SetupHolder.setup))
+  File "/home/jake/.vscode/extensions/ms-python.debugpy-2025.10.0-linux-x64/bundled/libs/debugpy/_vendored/pydevd/_pydev_bundle/pydev_monkey.py", line 193, in _get_python_c_args
+    if "__future__" in code:
+TypeError: a bytes-like object is required, not 'str'
+Fitting 5 folds for each of 4 candidates, totalling 20 fits
+Best hyperparameters for outer fold 0: {'colsample_bytree': 0.9, 'learning_rate': 0.3, 'max_depth': 5, 'n_estimators': 4, 'reg_alpha': 0.1, 'reg_lambda': 5, 'scale_pos_weight': 5, 'subsample': 0.9}
+Outer Fold 0: Test metrics: {'accuracy': 0.8836344164279937, 'roc_auc': np.float64(0.8109769500394475), 'precision': 0.4490157765233753, 'recall': 0.21068627118068525, 'f1_score': 0.2868005639401854, 'average_precision': np.float64(0.3356428064497706)}

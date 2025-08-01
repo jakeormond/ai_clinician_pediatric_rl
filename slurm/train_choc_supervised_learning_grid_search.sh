@@ -1,4 +1,6 @@
 #!/bin/bash
+# slurm/train_choc_supervised_learning_grid_search.sh
+
 #SBATCH --job-name=xgb_choc_mortality
 #SBATCH --output=slurm/logs/%x_%j.out
 #SBATCH --error=slurm/logs/%x_%j.err

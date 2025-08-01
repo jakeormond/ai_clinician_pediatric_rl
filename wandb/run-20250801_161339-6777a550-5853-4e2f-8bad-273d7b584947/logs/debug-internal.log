@@ -1,0 +1,13 @@
+{"time":"2025-08-01T16:13:40.186257402+01:00","level":"INFO","msg":"stream: starting","core version":"0.21.0"}
+{"time":"2025-08-01T16:13:40.751061108+01:00","level":"INFO","msg":"stream: created new stream","id":"6777a550-5853-4e2f-8bad-273d7b584947"}
+{"time":"2025-08-01T16:13:40.751130595+01:00","level":"INFO","msg":"stream: started","id":"6777a550-5853-4e2f-8bad-273d7b584947"}
+{"time":"2025-08-01T16:13:40.751195522+01:00","level":"INFO","msg":"writer: Do: started","stream_id":"6777a550-5853-4e2f-8bad-273d7b584947"}
+{"time":"2025-08-01T16:13:40.751257969+01:00","level":"INFO","msg":"sender: started","stream_id":"6777a550-5853-4e2f-8bad-273d7b584947"}
+{"time":"2025-08-01T16:13:40.751279298+01:00","level":"INFO","msg":"handler: started","stream_id":"6777a550-5853-4e2f-8bad-273d7b584947"}
+{"time":"2025-08-01T16:16:07.917271466+01:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-08-01T16:16:08.032337725+01:00","level":"INFO","msg":"handler: operation stats","stats":{"operations":[{"desc":"uploading history steps 0-0, summary, console lines 17-17","runtime_seconds":0.114837375}],"total_operations":1}}
+{"time":"2025-08-01T16:16:08.340046195+01:00","level":"INFO","msg":"stream: closing","id":"6777a550-5853-4e2f-8bad-273d7b584947"}
+{"time":"2025-08-01T16:16:08.340075149+01:00","level":"INFO","msg":"handler: closed","stream_id":"6777a550-5853-4e2f-8bad-273d7b584947"}
+{"time":"2025-08-01T16:16:08.340091289+01:00","level":"INFO","msg":"writer: Close: closed","stream_id":"6777a550-5853-4e2f-8bad-273d7b584947"}
+{"time":"2025-08-01T16:16:08.340131415+01:00","level":"INFO","msg":"sender: closed","stream_id":"6777a550-5853-4e2f-8bad-273d7b584947"}
+{"time":"2025-08-01T16:16:08.340251035+01:00","level":"INFO","msg":"stream: closed","id":"6777a550-5853-4e2f-8bad-273d7b584947"}

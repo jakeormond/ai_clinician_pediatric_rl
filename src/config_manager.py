@@ -5,8 +5,19 @@ from pathlib import Path
 from .setup_environment import load_paths
 
 class ConfigManager:
-    def __init__(self):
+    def __init__(self, hospital=None, model_type=None):
         self.paths, self.environment = load_paths()
+
+        # Store configs internally
+        self._hospital_config = None
+        self._model_config = None
+        self._wandb_config = None
+
+        if hospital:
+            self.set_hospital(hospital)
+        if model_type:
+            self.set_model_type(model_type)
+
         
     def get_experiments_dir(self):
         return self.paths['experiments_dir']
@@ -75,7 +86,11 @@ class ConfigManager:
         # Generate unique run name if not provided
         if "name" not in config:
             timestamp = time.strftime('%Y%m%d_%H%M%S')
-            config["name"] = f"{experiment_type}_{timestamp}"
+
+            if "fold" in config:
+                config["name"] = f"{experiment_type}_fold{config['fold']}_{timestamp}"
+            else:
+                config["name"] = f"{experiment_type}_aggregation_{timestamp}"                
     
         return config
 

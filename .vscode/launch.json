@@ -10,7 +10,7 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/src/scripts/supervised/supervised_learning.py",
-            "args": ["--hospital", "choc", "--model_type", "xgb"],
+            "args": ["--hospital", "choc", "--model_type", "xgb", "--fold", "0"],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env"
@@ -21,7 +21,7 @@
             "type": "debugpy",
             "request": "launch",
             "module": "src.scripts.supervised.supervised_learning",
-            "args": ["--hospital", "choc", "--model_type", "xgb"],
+            "args": ["--hospital", "choc", "--model_type", "xgb", "--fold", "0"],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env"

@@ -31,7 +31,7 @@ def remove_model_prefix_from_params(best_params):
 def outer_training_loop(dataset, config, experiment_dir, model_type, target_fold=None):
 
     if model_type == "xgb":
-        with open("config/xgboost_grid_search_test.yaml") as f:
+        with open("config/xgboost_grid_search.yaml") as f:
             param_grid = yaml.safe_load(f)
     else: # raise not implemented error for unsupported model types
         raise NotImplementedError(f"Model type {config['model_type']} is not supported.")

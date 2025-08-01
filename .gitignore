@@ -2,3 +2,22 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.class
+
+# Virtual environments
+venv/
+env/
+rl_env/
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

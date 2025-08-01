@@ -1,0 +1,26 @@
+wandb: Tracking run with wandb version 0.21.0
+wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+Traceback (most recent call last):
+  File "/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/home/38/bt310238/code/ai_clinician_pediatric_rl/src/scripts/supervised/supervised_learning.py", line 72, in <module>
+    main()
+  File "/home/38/bt310238/code/ai_clinician_pediatric_rl/src/scripts/supervised/supervised_learning.py", line 58, in main
+    dataset = Dataset(config)
+  File "/home/38/bt310238/code/ai_clinician_pediatric_rl/src/supervised_learning/dataset.py", line 15, in __init__
+    self._load_dataset()
+  File "/home/38/bt310238/code/ai_clinician_pediatric_rl/src/supervised_learning/dataset.py", line 20, in _load_dataset
+    features_to_use_df = pd.read_csv(self.config["features_to_use_path"])
+  File "/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 1026, in read_csv
+    return _read(filepath_or_buffer, kwds)
+  File "/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 620, in _read
+    parser = TextFileReader(filepath_or_buffer, **kwds)
+  File "/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 1620, in __init__
+    self._engine = self._make_engine(f, self.engine)
+  File "/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 1880, in _make_engine
+    self.handles = get_handle(
+  File "/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/pandas/io/common.py", line 873, in get_handle
+    handle = open(
+FileNotFoundError: [Errno 2] No such file or directory: '/home/38/bt310238/code/ai_clinician_pediatric_rl/dataframes/features_to_use.csv'

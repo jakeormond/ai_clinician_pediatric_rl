@@ -4,13 +4,18 @@
 #SBATCH --job-name=xgb_choc_mortality
 #SBATCH --output=slurm/logs/%x_%j.out
 #SBATCH --error=slurm/logs/%x_%j.err
+#SBATCH --array=0-4
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=04:00:00
+#SBATCH --time=08:00:00
 #SBATCH --partition=normal
-#SBATCH --account=a-faisal
+#SBATCH --mail-type=END,FAIL        # Email notifications
+#SBATCH --mail-user=j.ormond@imperial.ac.uk
+
+# Exit on any error
+set -e
 
 # load miniconda 
 module load miniconda/py312_25.1.1-2
@@ -24,39 +29,47 @@ export WANDB_DIR=/home/38/bt310238/wandb
 # Navigate to project directory
 cd /home/38/bt310238/code/ai_clinician_pediatric_rl
 
+# Create logs directory
+mkdir -p slurm/logs
+
 # Activate conda environment
 eval "$(conda shell.bash hook)"
 conda activate rl_env
 
-# Verify environment
-echo "Active conda environment: $CONDA_DEFAULT_ENV"
-echo "Python path: $(which python)"
-echo "Python version: $(python --version)"
-
-# Install/update dependencies if needed
-# pip install -r requirements.txt
-
-# Print job info
+# Print job information
+echo "========================================="
+echo "Job Information:"
 echo "Job ID: $SLURM_JOB_ID"
+echo "Array Task ID: $SLURM_ARRAY_TASK_ID"  # This is your fold number!
 echo "Job Name: $SLURM_JOB_NAME"
 echo "Node: $SLURM_NODELIST"
-echo "CPUs: $SLURM_CPUS_PER_TASK"
-
-# Add to your script
-echo "CPU info:"
-lscpu | grep "Model name"
-cat /proc/cpuinfo | grep "model name" | head -1
-
+echo "CPUs per task: $SLURM_CPUS_PER_TASK"
 echo "Memory: $SLURM_MEM_PER_NODE MB"
 echo "Start time: $(date)"
 echo "Working directory: $(pwd)"
+echo "Active conda environment: $CONDA_DEFAULT_ENV"
+echo "Python version: $(python --version)"
+echo "========================================="
 
-# Run the training script
+
+# Run the training script for this specific fold
+echo "Starting training for fold $SLURM_ARRAY_TASK_ID..."
+
 python -m src.scripts.supervised.supervised_learning \
     --hospital choc \
-    --model_type xgb
+    --model_type xgb \
+    --mode single_fold \
+    --fold $SLURM_ARRAY_TASK_ID \
+    --experiment_variant standard
 
+exit_code=$?
 
-
+echo "========================================="
 echo "End time: $(date)"
-echo "Job completed!"
+if [ $exit_code -eq 0 ]; then
+    echo "Fold $SLURM_ARRAY_TASK_ID completed successfully!"
+else
+    echo "Fold $SLURM_ARRAY_TASK_ID failed with exit code $exit_code"
+    exit $exit_code
+fi
+echo "========================================="

@@ -60,7 +60,7 @@ python -m src.scripts.supervised.supervised_learning \
     --model_type xgb \
     --mode single_fold \
     --fold $SLURM_ARRAY_TASK_ID \
-    --experiment_variant standard
+    --experiment_variant quick_test
 
 exit_code=$?
 

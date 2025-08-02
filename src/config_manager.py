@@ -1,101 +1,203 @@
 import os
 import yaml
 import time
+import shutil
 from pathlib import Path
 from .setup_environment import load_paths
 
 class ConfigManager:
-    def __init__(self, hospital=None, model_type=None):
+    def __init__(self, hospital="choc", experiment_type="supervised_learning", 
+                 model_type="xgb", experiment_variant='standard'):
+
+        self.config_dir = Path(__file__).parent.parent / "config"
+
         self.paths, self.environment = load_paths()
+        
+        self.experiment_type = experiment_type
+        self.set_hospital(hospital)
+        
+        self.model_type = model_type
+        self.experiment_variant = experiment_variant
+        
+        self._build_wandb_config()        
 
-        # Store configs internally
-        self._hospital_config = None
-        self._model_config = None
-        self._wandb_config = None
 
-        if hospital:
-            self.set_hospital(hospital)
-        if model_type:
-            self.set_model_type(model_type)
+    def get_config_path(self, config_type, custom_path=None):
+        """Get config file path with variant support."""
+        if custom_path:
+            return Path(custom_path)
+                
+        if config_type == "cv":
+            # Try variant-specific first, fall back to default
+            variant_name = f"cross_validation_{self.experiment_variant}.yaml"
+            variant_path = self.config_dir / "search_spaces" / variant_name
+            if variant_path.exists():
+                return variant_path
+            else:
+                raise FileNotFoundError(f"CV config not found for variant: {self.experiment_variant}")
+            
+        elif config_type == "search_grid":
+            variant_name = f"{self.model_type}_{self.experiment_variant}.yaml"
+            variant_path = self.config_dir / "search_spaces" / variant_name
+            if variant_path.exists():
+                return variant_path
+            return self.config_dir / "search_spaces" / f"{self.model_type}_search_space_{self.experiment_variant}.yaml"
+            
+        elif config_type == "wandb":
+            # W&B config usually doesn't need variants
+            return self.config_dir / "wandb" / "wandb.yaml"
+            
+        elif config_type == "hospital":
+            return self.config_dir / "datasets" / f"{self.hospital}_{self.experiment_type}.yaml"
+
+
+    def set_hospital(self, hospital):
+        self.hospital = hospital
+        hospital_config_path = self.get_config_path("hospital")
+        if not hospital_config_path.exists():
+            raise FileNotFoundError(f"Hospital config file not found: {hospital_config_path}")
+        with open(hospital_config_path, 'r') as f:
+            self._hospital_config = yaml.safe_load(f)
+
+        if 'dataframe_path' in self._hospital_config:
+            if not os.path.isabs(self._hospital_config['dataframe_path']):
+                self._hospital_config['dataframe_path'] = os.path.join(
+                    self.get_data_dir, 
+                    self._hospital_config['dataframe_path']
+                )
+                print(f"Updated dataframe_path to absolute: {self._hospital_config['dataframe_path']}")
+        
+        if 'features_to_use_path' in self._hospital_config:
+            if not os.path.isabs(self._hospital_config['features_to_use_path']):
+                self._hospital_config['features_to_use_path'] = os.path.join(
+                    self.get_code_dir, 
+                    self._hospital_config['features_to_use_path']
+                )
+
+    def _build_wandb_config(self):
+        """Build W&B configuration and store it internally."""
+        wandb_config_path = self.get_config_path("wandb")
+        if not wandb_config_path.exists():
+            raise FileNotFoundError(f"W&B config file not found: {wandb_config_path}")
+        with open(wandb_config_path, 'r') as f:
+            self._wandb_config = yaml.safe_load(f)
+
+        self._wandb_config['hospital'] = self.hospital
+        self._wandb_config['experiment_type'] = self.experiment_type
+        self._wandb_config['model_type'] = self.model_type        
+        self._wandb_config['seed'] = self._hospital_config['seed'] if self.hospital_config else None
+        self._wandb_config['group'] = f"{self.hospital}_{self.model_type}_{self.experiment_variant}"
+
+        # Apply environment-specific config
+        if self.environment == 'hpc':
+            self._wandb_config['mode'] = 'offline'
+        else:
+            self._wandb_config['mode'] = 'online'
+
+        # Apply experiment type configuration
+        if self.experiment_type == "supervised_learning":
+            
+            # Build tags
+            tags = ["mortality", self.hospital, self.model_type]
+            self._wandb_config['tags'] = tags  
+   
+    def set_cv_config(self):
+        """Set cross-validation configuration."""
+        cv_config_path = self.get_config_path("cv")
+        if not cv_config_path.exists():
+            raise FileNotFoundError(f"cv config file not found: {cv_config_path}")      
+
+        with open(cv_config_path, 'r') as f:
+            self.cv_config = yaml.safe_load(f)
+            # and cv_config to the W&B config
+            self._wandb_config['cv_config'] = self.cv_config
+
+        # get the filename from cv_config_path
+        cv_config_filename = cv_config_path.stem
+        experiment_copy_path = self.expt_config_dir / f"{cv_config_filename}.yaml"
+        if not experiment_copy_path.exists():
+            shutil.copy2(cv_config_path, experiment_copy_path)
+            print(f"Copied CV config to: {experiment_copy_path}")
+        else:
+            print(f"CV config already exists at: {experiment_copy_path}, skipping copy")
 
         
+    def add_fold(self, fold):
+        """Add fold information to the config."""
+        self.cv_config['fold'] = fold
+        self._wandb_config['cv_config']['fold'] = fold
+
+    def set_search_grid(self):
+        """Add search grid to the W&B config."""
+        search_grid_path = self.get_config_path("search_grid")
+        if not search_grid_path.exists():
+            raise FileNotFoundError(f"Search grid config file not found: {search_grid_path}")
+        
+        with open(search_grid_path, 'r') as f:
+            # Load the search grid config
+            self.search_grid = yaml.safe_load(f)        
+            self._wandb_config['search_grid'] = self.search_grid
+
+        # get the filename from search_grid_path
+        search_grid_filename = search_grid_path.stem
+        experiment_copy_path = self.expt_config_dir / f"{search_grid_filename}.yaml"
+        if not experiment_copy_path.exists():
+            shutil.copy2(search_grid_path, experiment_copy_path)
+            print(f"Copied search grid config to: {experiment_copy_path}")
+        else:
+            print(f"Search grid config already exists at: {experiment_copy_path}, skipping copy")
+
+    def set_experiment_name(self):
+        self.experiment_name = \
+            f"{self.hospital}_{self.experiment_type}_{self.model_type}_{self.experiment_variant}"
+        self.wandb_config['experiment_name'] = self.experiment_name       
+        # make directory if it doesn't exist
+        self._create_experiment_dir()
+
+    def _create_experiment_dir(self):
+        """Create and return the base experiment directory path."""
+        self.experiment_dir = Path(self.get_experiments_dir) / self.experiment_name
+        self.experiment_dir.mkdir(parents=True, exist_ok=True)
+        # create a config dir inside the experiment directory
+        self.expt_config_dir = self.experiment_dir / "config"
+        self.expt_config_dir.mkdir(parents=True, exist_ok=True)
+
+    def set_fold_name(self):
+        """Add experiment name to the W&B config."""
+        self.fold_name = f"fold_{self.cv_config['fold']}_{time.strftime('%Y%m%d_%H%M%S')}"
+        self._wandb_config['name'] = self.fold_name        
+        self._create_fold_dir(self.fold_name)
+
+    def _create_fold_dir(self, experiment_name):
+        """Create and return experiment directory path."""
+        self.fold_dir = Path(self.get_experiments_dir) / self.experiment_name / self.fold_name
+        self.fold_dir.mkdir(parents=True, exist_ok=True)
+    
+    
+    
+    @property
     def get_experiments_dir(self):
         return self.paths['experiments_dir']
     
+    @property
     def get_data_dir(self):
         return self.paths['data_dir']
     
+    @property
     def get_code_dir(self):
-        return self.paths['code_dir']
+        return self.paths['code_dir']       
     
-    def get_config_path(self, hospital):
-        """Get the config path for a specific hospital."""
-        return Path(__file__).parent.parent / "config" / f"{hospital}_supervised.yaml"
+    # Properties for accessing hospital config
+    @property
+    def hospital_config(self):
+        """Get the complete hospital configuration."""
+        if self._hospital_config is None:
+            raise ValueError("Hospital not set. Call set_hospital() first.")
+        return self._hospital_config
     
-    def load_hospital_config(self, hospital):
-        """Load hospital-specific config and update paths."""
-        config_path = self.get_config_path(hospital)
-        
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        
-        # Update any relative paths to be relative to data_dir
-        if 'dataframe_path' in config:
-            if not os.path.isabs(config['dataframe_path']):
-                config['dataframe_path'] = os.path.join(
-                    self.get_data_dir(), 
-                    config['dataframe_path']
-                )
-        
-        if 'features_to_use_path' in config:
-            if not os.path.isabs(config['features_to_use_path']):
-                config['features_to_use_path'] = os.path.join(
-                    self.get_code_dir(), 
-                    config['features_to_use_path']
-                )
-        
-        return config
-    
-    def get_wandb_config(self, experiment_type, **kwargs):
-        """Get W&B configuration for a specific experiment type."""
-        wandb_config_path = Path(__file__).parent.parent / "config" / "wandb.yaml"
-        
-        with open(wandb_config_path, 'r') as f:
-            wandb_config = yaml.safe_load(f)
-
-        # Start with default config
-        config = {
-            "project": wandb_config["project"],
-            "entity": wandb_config.get("entity"),
-            **wandb_config["default"]
-        }
-
-        # Apply experiment-specific config - this adds information for wandb
-        if experiment_type in wandb_config["experiments"]:
-            config.update(wandb_config["experiments"][experiment_type])    
-        
-        # Auto-detect W&B mode based on environment
-        if self.environment == 'hpc' and 'mode' not in kwargs:
-            kwargs['mode'] = 'offline'
-        elif self.environment == 'local' and 'mode' not in kwargs:
-            kwargs['mode'] = 'online'
-
-        # Apply runtime overrides
-        config.update(kwargs)
-
-        # Generate unique run name if not provided
-        if "name" not in config:
-            timestamp = time.strftime('%Y%m%d_%H%M%S')
-
-            if "fold" in config:
-                config["name"] = f"{experiment_type}_fold{config['fold']}_{timestamp}"
-            else:
-                config["name"] = f"{experiment_type}_aggregation_{timestamp}"                
-    
-        return config
-
-    def create_experiment_dir(self, experiment_name):
-        """Create and return experiment directory path."""
-        experiment_dir = os.path.join(self.get_experiments_dir(), experiment_name)
-        os.makedirs(experiment_dir, exist_ok=True)
-        return experiment_dir
+    @property
+    def wandb_config(self):
+        """Get the W&B configuration."""
+        if self._wandb_config is None:
+            raise ValueError("W&B config not set. Call _build_wandb_config() first.")
+        return self._wandb_config

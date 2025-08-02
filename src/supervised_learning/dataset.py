@@ -4,8 +4,7 @@ import pandas as pd
 # access the data they need using the encounter IDs
 # and the methods in this class
 class Dataset:
-    def __init__(self, 
-                 config):
+    def __init__(self, config):
         
         self.target_col = config["target_col"]
         self.encounter_col = config["encounter_col"]

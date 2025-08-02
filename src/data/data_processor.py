@@ -13,7 +13,6 @@ import numpy as np
 import time
 import pyarrow
 from sklearn.model_selection import train_test_split
-from utilities import load_config
 from sklearn.preprocessing import PowerTransformer
 
 class DataProcessor:

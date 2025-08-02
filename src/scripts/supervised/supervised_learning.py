@@ -13,6 +13,7 @@ import argparse
 import pandas as pd
 import numpy as np
 import time
+import wandb
 
 from ...config_manager import ConfigManager  # Import the config manager
 from ...supervised_learning.dataset import Dataset
@@ -28,16 +29,20 @@ def parse_arguments():
     parser.add_argument('--model_type', 
                         default='xgb', 
                         choices=['xgb'], 
-                        help='Model type to train (default: xgb)')
-    parser.add_argument('--fold', 
-                        type=int, 
-                        default=0, 
-                        help='Fold number to train (default: 0)')
+                        help='Model type to train (default: xgb)')    
     parser.add_argument('--mode', type=str, default='single_fold',
                         choices=['single_fold', 'aggregated'],
                         help='Mode of training: single_fold or aggregated (default: single_fold)')
-    parser.add_argument("--base_experiment_dir", type=str,
-                       help="Base experiment directory (required for aggregate mode)")
+    
+    # mode-specific arguments    
+    parser.add_argument('--fold', type=int,
+                       help='Fold number to train (required for single_fold mode)')
+    
+    # Config file overrides (optional)
+    parser.add_argument('--experiment_variant', type=str, default='standard',
+                       choices=['standard', 'quick_test', 'full_search', 'production'],
+                       help='Experiment variant determines config defaults')
+    
     
     return parser.parse_args()
 
@@ -49,7 +54,20 @@ def validate_arguments(args):
         raise ValueError("--base_experiment_dir is required when mode is 'aggregate'")
 
 
- 
+def log_fold_results_to_wandb(results):
+    """Log fold results to W&B."""
+    if wandb.run is None:  # Check if W&B is active
+        return
+    
+    fold = results['fold']
+    
+    # Use global wandb state
+    wandb.log({
+        f"fold_{fold}/best_cv_score": results['best_cv_score'],
+        **{f"fold_{fold}/{k}": v for k, v in results['test_metrics'].items()}
+    }, step=fold)
+
+
 def main():
 
     args = parse_arguments()
@@ -59,46 +77,46 @@ def main():
     config_manager = ConfigManager(
         hospital=args.hospital, 
         experiment_type="supervised_learning",
-        model_type=args.model_type)
-
-    if args.mode == "single_fold":
-
-        experiment_name = f"mortality_{args.hospital}_{args.model_type}_fold{args.fold}_{time.strftime('%Y%m%d_%H%M%S')}"
-    
-        # update config with fold and experiment name
-        config_manager.add_fold(args.fold)
-        experiment_dir = config_manager.add_experiment_name(experiment_name)
-
-        # load the search grid and cross validation settings
-
-        # Initialize W&B with experiment-specific config
-        wandb_config = config_manager.get_wandb_config(
-            experiment_type="supervised_learning",
-            hospital=args.hospital,
-            model_type=args.model_type,
-            seed=config["seed"],
-            fold=args.fold,
-            group=f"{args.hospital}_supervised",
-            tags=["mortality", args.hospital, args.model_type],
-            config={
-                "n_outer_folds": config["cv_config"]["n_outer_folds"],  # From config file
-                "n_inner_folds": config["cv_config"]["n_inner_folds"],  # From config file
-            }
+        model_type=args.model_type,
+        experiment_variant=args.experiment_variant
         )
-        
-        wandb_init(wandb_config)
 
-        dataset = Dataset(config)
+    if args.mode == "single_fold":        
+        # set base experiment name and make directory, if it doesn't exist (it will 
+        # already if another folder was run)
+        config_manager.set_experiment_name()
+        
+        # update config with n_fodls and current fold 
+        config_manager.set_cv_config() # sets the number of outer and inner folds
+        config_manager.add_fold(args.fold)
+        
+        # create the name and directory for this fold
+        config_manager.set_fold_name()
+        
+        # update config with the search space
+        config_manager.set_search_grid()      
+       
+        # load data
+        dataset = Dataset(config_manager.hospital_config)
         print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
             
-        # train the model using the outer training loop
-        experiment_name = f"mortality_{args.model_type}_grid_search_{time.strftime('%Y%m%d_%H%M%S')}_fold{args.fold}"
-        experiment_dir = config_manager.create_experiment_dir(experiment_name)
+        # Initialize W&B 
+        wandb_init(config_manager.wandb_config)
 
         print(f"Running on {config_manager.environment} environment")
-        print(f"Experiment directory: {experiment_dir}")
+        print(f"Experiment directory: {config_manager.experiment_dir}")
+        print(f"Fold directory: {config_manager.fold_dir}")
 
-        outer_training_loop(dataset, config, experiment_dir, args.model_type, target_fold = args.fold)
+        results = outer_training_loop(dataset, config_manager)
+
+        # LOG TO W&B in main script
+        log_fold_results_to_wandb(results)
+
+        print(f"Fold {args.fold} completed successfully")
+        print(f"Test metrics: {results['test_metrics']}")
+        
+        if wandb.run is not None:
+            wandb.finish()
     
 
 if __name__ == "__main__":

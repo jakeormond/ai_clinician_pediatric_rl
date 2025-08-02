@@ -1,0 +1,115 @@
+_wandb:
+    value:
+        cli_version: 0.21.0
+        e:
+            e6q4ilcv15txo0g8ditigfbhr119s20c:
+                args:
+                    - --hospital
+                    - choc
+                    - --model_type
+                    - xgb
+                    - --mode
+                    - single_fold
+                    - --fold
+                    - "0"
+                    - --experiment_variant
+                    - quick_test
+                cpu_count: 8
+                cpu_count_logical: 16
+                cudaVersion: "12.4"
+                disk:
+                    /:
+                        total: "1967317549056"
+                        used: "314039185408"
+                email: jakeormond78@gmail.com
+                executable: /home/jake/miniconda3/envs/rl_env/bin/python
+                git:
+                    commit: 353d8edd9d7a6414577b3092c2a07c97fddf98fd
+                    remote: git@gitlab.doc.ic.ac.uk:bbl/ai_clinician_pediatric_rl.git
+                gpu: NVIDIA GeForce GTX 1080 Ti
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Pascal
+                      cudaCores: 3584
+                      memoryTotal: "11811160064"
+                      name: NVIDIA GeForce GTX 1080 Ti
+                      uuid: GPU-4c8f0e8c-85f6-1066-945f-d6dcda76d1e4
+                host: jake-HP-Z840-Workstation
+                memory:
+                    total: "134982467584"
+                os: Linux-6.8.0-65-generic-x86_64-with-glibc2.35
+                program: -m src.scripts.supervised.supervised_learning
+                python: CPython 3.10.16
+                root: /home/jake/Documents/AI_Clinician/ai_clinician_pediatric_rl
+                startedAt: "2025-08-02T16:57:26.232632Z"
+                writerId: e6q4ilcv15txo0g8ditigfbhr119s20c
+        m: []
+        python_version: 3.10.16
+        t:
+            "1":
+                - 5
+                - 6
+                - 53
+            "2":
+                - 5
+                - 6
+                - 53
+            "3":
+                - 2
+                - 13
+                - 14
+                - 16
+                - 61
+            "4": 3.10.16
+            "5": 0.21.0
+            "12": 0.21.0
+            "13": linux-x86_64
+cv_config:
+    value:
+        fold: 0
+        n_inner_folds: 2
+        n_outer_folds: 2
+entity:
+    value: jakeormond78-imperial-college-london
+experiment_name:
+    value: choc_supervised_learning_xgb_quick_test
+experiment_type:
+    value: supervised_learning
+group:
+    value: choc_xgb_quick_test
+hospital:
+    value: choc
+mode:
+    value: online
+model_type:
+    value: xgb
+name:
+    value: fold_0_20250802_175707
+project:
+    value: AI_Clinician_Pediatric_RL
+search_grid:
+    value:
+        colsample_bytree:
+            - 0.9
+        learning_rate:
+            - 0.1
+            - 0.3
+        max_depth:
+            - 5
+        n_estimators:
+            - 2
+        reg_alpha:
+            - 0.1
+        reg_lambda:
+            - 5
+        scale_pos_weight:
+            - 5
+        subsample:
+            - 0.9
+seed:
+    value: 42
+tags:
+    value:
+        - mortality
+        - choc
+        - xgb

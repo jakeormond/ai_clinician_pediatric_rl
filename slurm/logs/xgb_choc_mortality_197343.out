@@ -1,0 +1,32 @@
+=========================================
+Job Information:
+Job ID: 197343
+Array Task ID: 1
+Job Name: xgb_choc_mortality
+Node: s71a01
+CPUs per task: 16
+Memory: 65536 MB
+Start time: Sun Aug  3 00:52:51 CEST 2025
+Working directory: /home/38/bt310238/code/ai_clinician_pediatric_rl
+Active conda environment: rl_env
+Python version: Python 3.10.16
+=========================================
+Starting training for fold 1...
+Detected environment: hpc
+Ensured experiments_dir exists: /home/38/bt310238/experiments
+Verified data_dir exists: /groups/a-faisal/bt310238/ai_clinician/data/choc_data
+Verified code_dir exists: /home/38/bt310238/code/choc_code
+Updated dataframe_path to absolute: /groups/a-faisal/bt310238/ai_clinician/data/choc_data/combined_data/hourly/combined_hourly_features_phoenix_sepsis.parquet
+CV config already exists at: /home/38/bt310238/experiments/choc_supervised_learning_xgb_quick_test/config/cross_validation_quick_test.yaml, skipping copy
+Search grid config already exists at: /home/38/bt310238/experiments/choc_supervised_learning_xgb_quick_test/config/xgb_search_space_quick_test.yaml, skipping copy
+Removed 2606 encounter IDs and 1589842 rows with NaN values.
+Remaining encounter IDs: 2576, Remaining rows: 2878190
+Dataset loaded with 2878190 rows and 82 columns
+Running on hpc environment
+Experiment directory: /home/38/bt310238/experiments/choc_supervised_learning_xgb_quick_test
+Fold directory: /home/38/bt310238/experiments/choc_supervised_learning_xgb_quick_test/fold_1_20250803_005254
+Number of unique encounter IDs: 2576
+Using 5 outer folds and 5 inner folds
+Skipping outer fold 0 as it is not the target fold 1
+Outer Loop Fold 1: Train outer encounters=2061, Test outer encounters=515
+Fitting 5 folds for each of 36 candidates, totalling 180 fits

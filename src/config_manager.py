@@ -7,7 +7,8 @@ from .setup_environment import load_paths
 
 class ConfigManager:
     def __init__(self, hospital="choc", experiment_type="supervised_learning", 
-                 model_type="xgb", experiment_variant='standard'):
+                 model_type="xgb", experiment_variant='standard', 
+                 start_time=None):
 
         self.config_dir = Path(__file__).parent.parent / "config"
 
@@ -18,6 +19,7 @@ class ConfigManager:
         
         self.model_type = model_type
         self.experiment_variant = experiment_variant
+        self.start_time = start_time 
         
         self._build_wandb_config()        
 
@@ -149,7 +151,7 @@ class ConfigManager:
 
     def set_experiment_name(self):
         self.experiment_name = \
-            f"{self.hospital}_{self.experiment_type}_{self.model_type}_{self.experiment_variant}"
+            f"{self.hospital}_{self.experiment_type}_{self.model_type}_{self.experiment_variant}_{self.start_time}"
         self.wandb_config['experiment_name'] = self.experiment_name       
         # make directory if it doesn't exist
         self._create_experiment_dir()
@@ -164,7 +166,7 @@ class ConfigManager:
 
     def set_fold_name(self):
         """Add experiment name to the W&B config."""
-        self.fold_name = f"fold_{self.cv_config['fold']}_{time.strftime('%Y%m%d_%H%M%S')}"
+        self.fold_name = f"fold_{self.cv_config['fold']}_{self.start_time}"
         self._wandb_config['name'] = self.fold_name        
         self._create_fold_dir(self.fold_name)
 

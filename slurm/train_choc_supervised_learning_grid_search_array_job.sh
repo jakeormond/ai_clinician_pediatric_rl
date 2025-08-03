@@ -17,6 +17,10 @@
 # Exit on any error
 set -e
 
+# Generate a unique start time for this entire job array
+START_TIME=$(date +"%Y%m%d_%H%M%S")
+export START_TIME
+
 # load miniconda 
 module load miniconda/py312_25.1.1-2
 module load gnu/14.1
@@ -60,7 +64,8 @@ python -m src.scripts.supervised.supervised_learning \
     --model_type xgb \
     --mode single_fold \
     --fold $SLURM_ARRAY_TASK_ID \
-    --experiment_variant quick_test
+    --experiment_variant quick_test \
+    --start_time $START_TIME 
 
 exit_code=$?
 

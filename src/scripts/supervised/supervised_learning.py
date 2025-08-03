@@ -42,6 +42,9 @@ def parse_arguments():
     parser.add_argument('--experiment_variant', type=str, default='standard',
                        choices=['standard', 'quick_test', 'full_search', 'production'],
                        help='Experiment variant determines config defaults')
+
+    parser.add_argument('--start_time', type=str,                    # ✅ New argument
+                    help='Start time for this experiment run')
     
     
     return parser.parse_args()

@@ -81,7 +81,8 @@ def main():
         hospital=args.hospital, 
         experiment_type="supervised_learning",
         model_type=args.model_type,
-        experiment_variant=args.experiment_variant
+        experiment_variant=args.experiment_variant,
+        start_time=args.start_time
         )
 
     if args.mode == "single_fold":        

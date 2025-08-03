@@ -1,0 +1,189 @@
+wandb: Tracking run with wandb version 0.21.0
+wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:10] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:11] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:11] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:12] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:12] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:12] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:12] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:12] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:12] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:12] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:13] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:13] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:13] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:15] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:15] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:38:17] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:46:48] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:46:49] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:46:49] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:46:50] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:46:50] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:46:55] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:46:59] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:47:00] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:47:05] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:47:07] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:55:37] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:55:46] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:55:46] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:56:04] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:56:05] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [13:56:36] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [14:03:33] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [14:03:34] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [14:03:41] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [14:03:46] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [14:03:53] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [14:04:04] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [14:04:12] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [14:04:30] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/xgboost/training.py:183: UserWarning: [14:22:13] WARNING: /workspace/src/learner.cc:738: 
+Parameters: { "verbose" } are not used.
+
+  bst.update(dtrain, iteration=i, fobj=obj)
+wandb:                                                                                
+wandb: 
+wandb: Run history:
+wandb:          fold_1/accuracy ▁
+wandb: fold_1/average_precision ▁
+wandb:     fold_1/best_cv_score ▁
+wandb:          fold_1/f1_score ▁
+wandb:         fold_1/precision ▁
+wandb:            fold_1/recall ▁
+wandb:           fold_1/roc_auc ▁
+wandb: 
+wandb: Run summary:
+wandb:          fold_1/accuracy 0.87408
+wandb: fold_1/average_precision 0.33637
+wandb:     fold_1/best_cv_score 0.29161
+wandb:          fold_1/f1_score 0.34741
+wandb:         fold_1/precision 0.33765
+wandb:            fold_1/recall 0.35774
+wandb:           fold_1/roc_auc 0.79707
+wandb: 
+wandb: You can sync this run to the cloud by running:
+wandb: wandb sync /home/38/bt310238/wandb/wandb/offline-run-20250803_133748-9c54b301-4f92-428f-8095-1414edea057f
+wandb: Find logs at: /home/38/bt310238/wandb/wandb/offline-run-20250803_133748-9c54b301-4f92-428f-8095-1414edea057f/logs

@@ -1,17 +1,17 @@
 =========================================
 Job Information:
-Job ID: 197344
-Array Task ID: 2
+Job ID: 197579
+Array Task ID: 4
 Job Name: xgb_choc_mortality
-Node: s71a01
+Node: s71a03
 CPUs per task: 16
 Memory: 65536 MB
-Start time: Sun Aug  3 00:52:51 CEST 2025
+Start time: Sun Aug  3 23:17:35 CEST 2025
 Working directory: /home/38/bt310238/code/ai_clinician_pediatric_rl
 Active conda environment: rl_env
 Python version: Python 3.10.16
 =========================================
-Starting training for fold 2...
+Starting training for fold 4...
 Detected environment: hpc
 Ensured experiments_dir exists: /home/38/bt310238/experiments
 Verified data_dir exists: /groups/a-faisal/bt310238/ai_clinician/data/choc_data
@@ -24,10 +24,12 @@ Remaining encounter IDs: 2576, Remaining rows: 2878190
 Dataset loaded with 2878190 rows and 82 columns
 Running on hpc environment
 Experiment directory: /home/38/bt310238/experiments/choc_supervised_learning_xgb_quick_test
-Fold directory: /home/38/bt310238/experiments/choc_supervised_learning_xgb_quick_test/fold_2_20250803_005254
+Fold directory: /home/38/bt310238/experiments/choc_supervised_learning_xgb_quick_test/fold_4_20250803_231738
 Number of unique encounter IDs: 2576
 Using 5 outer folds and 5 inner folds
-Skipping outer fold 0 as it is not the target fold 2
-Skipping outer fold 1 as it is not the target fold 2
-Outer Loop Fold 2: Train outer encounters=2061, Test outer encounters=515
-Fitting 5 folds for each of 36 candidates, totalling 180 fits
+Skipping outer fold 0 as it is not the target fold 4
+Skipping outer fold 1 as it is not the target fold 4
+Skipping outer fold 2 as it is not the target fold 4
+Skipping outer fold 3 as it is not the target fold 4
+Outer Loop Fold 4: Train outer encounters=2061, Test outer encounters=515
+Fitting 5 folds for each of 48 candidates, totalling 240 fits

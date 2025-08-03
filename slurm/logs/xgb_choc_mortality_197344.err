@@ -1,2 +1,0 @@
-wandb: Tracking run with wandb version 0.21.0
-wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.

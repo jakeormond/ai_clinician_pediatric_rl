@@ -79,7 +79,9 @@ def outer_training_loop(dataset, config_manager):
         if config_manager.model_type == "xgb":
             pipe = Pipeline([
                 ('scaler', StandardScaler()),
-                ('model', xgb.XGBClassifier(eval_metric='logloss', verbosity=1))
+                ('model', xgb.XGBClassifier(
+                    eval_metric='logloss', 
+                    verbosity=2))
             ])
         else:
             raise ValueError(f"Unsupported model type: {config_manager.model_type}")

@@ -32,3 +32,492 @@ Skipping outer fold 1 as it is not the target fold 3
 Skipping outer fold 2 as it is not the target fold 3
 Outer Loop Fold 3: Train outer encounters=2061, Test outer encounters=515
 Fitting 5 folds for each of 48 candidates, totalling 240 fits
+[23:18:11] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.6min
+[23:27:46] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.2min
+[23:45:57] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.2min
+[00:04:12] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=11.8min
+[00:16:01] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.3min
+[00:28:11] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.4min
+[00:51:34] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.4min
+[01:15:05] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.2min
+[01:24:27] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[01:33:49] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.3min
+[01:52:07] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.6min
+[02:10:45] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.3min
+[02:22:56] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=11.7min
+[02:34:47] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.7min
+[23:18:11] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[23:27:39] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.1min
+[23:36:43] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=17.9min
+[23:54:36] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.3min
+[00:12:55] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.0min
+[00:24:57] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=11.9min
+[00:36:54] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.6min
+[01:00:24] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.4min
+[01:23:51] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.3min
+[01:33:08] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.5min
+[01:51:38] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.7min
+[02:10:13] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.4min
+[02:22:45] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=11.9min
+[02:34:35] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.9min
+[23:18:05] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[23:27:30] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.0min
+[23:36:39] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.2min
+[23:54:45] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.3min
+[00:13:05] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.0min
+[00:25:08] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.0min
+[00:37:16] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.6min
+[01:00:47] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.5min
+[01:24:30] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[01:33:49] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.2min
+[01:52:07] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.6min
+[02:10:37] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.3min
+[02:22:59] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.7min
+[02:46:52] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.0min
+[23:18:07] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.7min
+[23:28:00] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.4min
+[23:46:13] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.1min
+[00:04:28] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.1min
+[00:16:34] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.4min
+[00:29:12] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.3min
+[00:52:19] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.8min
+[01:16:19] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[01:25:40] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.6min
+[01:35:15] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.5min
+[01:53:37] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.3min
+[02:12:03] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.3min
+[02:24:21] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.6min
+[02:48:11] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=22.6min
+[23:18:07] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.6min
+[23:27:53] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.3min
+[23:37:02] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.3min
+[23:55:23] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.1min
+[00:07:28] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.1min
+[00:19:38] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=11.8min
+[00:31:20] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.2min
+[00:54:30] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.7min
+[01:18:14] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.1min
+[01:27:20] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.2min
+[01:36:38] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.5min
+[01:55:09] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.5min
+[02:13:40] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.4min
+[02:26:01] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.9min
+[02:49:57] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=22.1min
+[23:18:08] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[23:27:40] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.2min
+[23:36:54] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.1min
+[23:55:01] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.5min
+[00:13:24] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=11.8min
+[00:25:18] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.2min
+[00:48:29] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.2min
+[01:11:36] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.4min
+[01:21:08] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.2min
+[01:30:20] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.0min
+[01:48:18] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.6min
+[02:07:05] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.6min
+[02:19:40] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.1min
+[02:31:54] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.9min
+[02:55:29] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=20.3min
+[23:18:04] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.6min
+[23:27:47] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.3min
+[23:36:59] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.1min
+[23:55:13] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.0min
+[00:07:11] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.0min
+[00:19:15] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=11.8min
+[00:31:10] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.4min
+[00:54:29] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.6min
+[01:18:08] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.4min
+[01:27:31] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[01:36:57] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.5min
+[01:55:38] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=19.0min
+[02:14:42] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.6min
+[02:27:10] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.7min
+[02:51:03] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=22.1min
+[23:18:06] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.4min
+[23:27:30] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.1min
+[23:36:42] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.4min
+[23:54:57] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.4min
+[00:13:25] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=11.8min
+[00:25:17] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.6min
+[00:48:56] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.4min
+[01:12:21] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[01:21:53] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.3min
+[01:31:03] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.4min
+[01:49:38] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.7min
+[02:08:16] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.4min
+[02:20:44] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=11.8min
+[02:32:47] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=24.0min
+[02:56:34] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=20.0min
+[23:18:10] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[23:27:46] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.3min
+[23:37:00] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.0min
+[23:54:59] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.5min
+[00:13:24] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.0min
+[00:25:29] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.5min
+[00:48:56] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.4min
+[01:12:22] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[01:21:53] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.4min
+[01:31:24] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.6min
+[01:49:54] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.8min
+[02:08:41] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.4min
+[02:21:07] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.0min
+[02:33:08] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=24.0min
+[02:57:00] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=19.7min
+[23:18:05] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.2min
+[23:27:18] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 8.9min
+[23:36:16] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=17.9min
+[23:54:06] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.1min
+[00:12:12] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.0min
+[00:24:16] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=11.9min
+[00:36:15] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.3min
+[00:59:35] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.8min
+[01:23:22] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.3min
+[01:32:31] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.2min
+[01:50:47] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.8min
+[02:09:34] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.1min
+[02:21:32] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=11.9min
+[02:33:23] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=24.1min
+[02:57:27] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=19.4min
+[23:18:07] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.4min
+[23:27:30] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.0min
+[23:36:30] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.2min
+[23:54:46] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.6min
+[00:13:18] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=11.8min
+[00:25:16] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.1min
+[00:37:26] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.8min
+[01:01:08] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.2min
+[01:10:22] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.4min
+[01:19:54] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.4min
+[01:29:11] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.3min
+[01:38:32] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.3min
+[01:56:57] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.4min
+[02:09:11] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.3min
+[02:21:29] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=11.8min
+[02:33:18] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.8min
+[02:57:14] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=19.6min
+[23:18:07] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[23:27:38] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.2min
+[23:36:54] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.2min
+[23:55:04] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.8min
+[00:14:00] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.0min
+[00:25:57] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.5min
+[00:49:35] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.5min
+[01:13:03] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.4min
+[01:22:34] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[01:32:03] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.1min
+[01:50:05] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.7min
+[02:08:52] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.4min
+[02:21:13] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=11.7min
+[02:32:59] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.8min
+[02:56:47] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=19.9min
+[23:18:05] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.4min
+[23:27:28] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.0min
+[23:36:33] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.1min
+[23:54:41] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.1min
+[00:12:43] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.0min
+[00:24:47] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=11.6min
+[00:36:25] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.1min
+[00:59:41] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.4min
+[01:23:00] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.4min
+[01:32:20] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.2min
+[01:50:34] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.5min
+[02:09:09] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.6min
+[02:21:48] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.1min
+[02:33:46] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=24.0min
+[02:57:56] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=19.2min
+[23:18:07] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[23:27:41] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.1min
+[23:36:46] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.0min
+[23:54:56] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.6min
+[00:13:33] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=11.6min
+[00:25:07] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=11.9min
+[00:37:00] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.8min
+[01:00:48] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.3min
+[01:10:14] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.4min
+[01:19:41] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[01:29:09] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[01:38:32] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.1min
+[01:56:37] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.3min
+[02:08:56] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.5min
+[02:21:29] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.2min
+[02:33:33] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=24.2min
+[02:57:43] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=19.2min
+[23:18:05] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.5min
+[23:27:28] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.0min
+[23:36:39] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.2min
+[23:54:47] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.3min
+[00:13:07] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=11.8min
+[00:24:59] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.0min
+[00:36:59] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.1min
+[01:00:10] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.3min
+[01:23:29] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.2min
+[01:32:43] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.5min
+[01:51:13] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.7min
+[02:09:52] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.4min
+[02:22:18] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.0min
+[02:34:26] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.8min
+[02:58:09] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.8min
+[23:18:04] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.3min
+[23:27:22] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 8.9min
+[23:36:21] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.2min
+[23:54:31] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.5min
+[00:13:00] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=11.8min
+[00:24:49] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820234, 79, 143798486).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=11.9min
+[00:36:47] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.2min
+[00:59:57] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.01, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=23.3min
+[01:23:12] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820221, 79, 143797459).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time= 9.4min
+[01:32:46] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=0.02, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=18.2min
+[01:51:01] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=6, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=18.6min
+[02:09:34] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=12.1min
+[02:21:46] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820231, 79, 143798249).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=100, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=12.0min
+[02:33:38] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=0.1, model__reg_lambda=0.02, model__scale_pos_weight=5, model__subsample=0.9; total time=23.9min
+[02:57:34] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (1820233, 79, 143798407).
+[CV] END model__colsample_bytree=0.9, model__learning_rate=0.1, model__max_depth=8, model__n_estimators=200, model__reg_alpha=1, model__reg_lambda=0.1, model__scale_pos_weight=5, model__subsample=0.9; total time=19.5min
+[03:16:49] INFO: /workspace/src/data/iterative_dmatrix.cc:53: Finished constructing the `IterativeDMatrix`: (2275288, 79, 179747752).
+Best hyperparameters for outer fold 3: {'colsample_bytree': 0.9, 'learning_rate': 0.01, 'max_depth': 6, 'n_estimators': 100, 'reg_alpha': 1, 'reg_lambda': 0.1, 'scale_pos_weight': 5, 'subsample': 0.9}
+Outer Fold 3: Test metrics: {'accuracy': 0.9346062875890278, 'roc_auc': np.float64(0.8319742770117329), 'precision': 0.3551007584937839, 'recall': 0.23998301434681063, 'f1_score': 0.2864072398190045, 'average_precision': np.float64(0.26131635865890707)}
+Fold 3 completed successfully
+Test metrics: {'accuracy': 0.9346062875890278, 'roc_auc': np.float64(0.8319742770117329), 'precision': 0.3551007584937839, 'recall': 0.23998301434681063, 'f1_score': 0.2864072398190045, 'average_precision': np.float64(0.26131635865890707)}
+=========================================
+End time: Mon Aug  4 03:17:04 CEST 2025
+Fold 3 completed successfully!
+=========================================

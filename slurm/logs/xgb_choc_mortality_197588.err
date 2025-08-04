@@ -1,0 +1,25 @@
+wandb: Tracking run with wandb version 0.21.0
+wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+wandb:                                                                                
+wandb: 
+wandb: Run history:
+wandb:          fold_3/accuracy ▁
+wandb: fold_3/average_precision ▁
+wandb:     fold_3/best_cv_score ▁
+wandb:          fold_3/f1_score ▁
+wandb:         fold_3/precision ▁
+wandb:            fold_3/recall ▁
+wandb:           fold_3/roc_auc ▁
+wandb: 
+wandb: Run summary:
+wandb:          fold_3/accuracy 0.93427
+wandb: fold_3/average_precision 0.31185
+wandb:     fold_3/best_cv_score 0.31987
+wandb:          fold_3/f1_score 0.37466
+wandb:         fold_3/precision 0.39048
+wandb:            fold_3/recall 0.36007
+wandb:           fold_3/roc_auc 0.79901
+wandb: 
+wandb: You can sync this run to the cloud by running:
+wandb: wandb sync /home/38/bt310238/wandb/wandb/offline-run-20250804_014011-d080e2e7-a6c8-455c-bb34-6267b52ecd3d
+wandb: Find logs at: /home/38/bt310238/wandb/wandb/offline-run-20250804_014011-d080e2e7-a6c8-455c-bb34-6267b52ecd3d/logs

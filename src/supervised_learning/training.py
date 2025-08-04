@@ -183,12 +183,17 @@ def aggregate_results_across_outer_folds(config):
     """
     print(f"Aggregating results from experiment directory: {config.experiment_dir}")
     
-    n_folds = config["cv_config"]["n_outer_folds"]
+    n_folds = config.cv_config["n_outer_folds"]
 
     # load the parquet files for each fold
     all_predictions_dfs = []
     for fold in range(n_folds):
-        fold_predictions_path = os.path.join(experiment_dir, f"predictions_fold_{fold}.parquet")
+
+        # find the folder in the experiment directory that begins with f"fold_{fold}" and ends with some random numbers
+        fold_dir = config.experiment_dir / f"fold_{fold}_*"
+
+        # within that folder, find the parquet file that starts with "predictions_fold_" and ends with ".parquet"
+        fold_predictions_path = glob.glob(os.path.join(fold_dir, f"predictions_fold_{fold}.parquet"))
         fold_df = pd.read_parquet(fold_predictions_path, engine='pyarrow')
         all_predictions_dfs.append(fold_df)
 
@@ -202,34 +207,15 @@ def aggregate_results_across_outer_folds(config):
     overall_metrics = calculate_metrics(all_true_labels, all_predictions, all_pred_proba)
     print(f"Overall metrics: {overall_metrics}")
     
-    with open(os.path.join(experiment_dir, "overall_metrics.json"), "w") as f:
+    with open(config.experiment_dir / "overall_metrics.json", "w") as f:
         json.dump(overall_metrics, f)
 
     # plot ROC curve, precision-recall curve, calibration curve, and confusion matrix
-    plot_roc_curve(all_true_labels, all_pred_proba, experiment_dir)
-    plot_precision_recall_curve(all_true_labels, all_pred_proba, experiment_dir)
-    plot_calibration_curve(all_true_labels, all_pred_proba, experiment_dir)
-    plot_confusion_matrix(all_true_labels, all_predictions, experiment_dir)
-
-    
-    # Log overall metrics to W&B
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    aggregated_name = f"{hospital}_{model_type}_{timestamp}_aggregated"
-    wandb_init(config, experiment_type="aggregated", name=aggregated_name)
+    plot_roc_curve(all_true_labels, all_pred_proba, config.experiment_dir)
+    plot_precision_recall_curve(all_true_labels, all_pred_proba, config.experiment_dir)
+    plot_calibration_curve(all_true_labels, all_pred_proba, config.experiment_dir)
+    plot_confusion_matrix(all_true_labels, all_predictions, config.experiment_dir)
 
 
 
-    if wandb.run is not None:
-        wandb.log({f"overall/{k}": v for k, v in overall_metrics.items()})
-
-        # Log plots
-        plot_files = ["roc_curve.png", "precision_recall_curve.png", 
-                     "calibration_curve.png", "confusion_matrix.png"]
-        
-        for plot_file in plot_files:
-            plot_path = os.path.join(experiment_dir, plot_file)
-            if os.path.exists(plot_path):
-                wandb.log({plot_file.replace('.png', ''): wandb.Image(plot_path)})
-        
-        wandb.finish()
 

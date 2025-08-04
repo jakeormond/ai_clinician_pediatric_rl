@@ -37,6 +37,24 @@
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
+            "name": "Mortality Prediction aggregate - CHOC - module",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--model_type", "xgb", 
+                "--mode", "aggregate", 
+                "--experiment_dir", "choc_supervised_learning_xgb_quick_test_20250804_013949"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
         }
+
+
     ]
 }

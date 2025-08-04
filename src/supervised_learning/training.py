@@ -175,15 +175,13 @@ def outer_training_loop(dataset, config_manager):
 
     return results
 
-      
 
-
-def aggregate_results_across_outer_folds(config, experiment_dir):
+def aggregate_results_across_outer_folds(config):
     """
     This function is used to combine the results across outer folds.
     It will read the predictions and metrics from each outer fold and combine them into a single DataFrame.
     """
-    print(f"Aggregating results from experiment directory: {experiment_dir}")
+    print(f"Aggregating results from experiment directory: {config.experiment_dir}")
     
     n_folds = config["cv_config"]["n_outer_folds"]
 

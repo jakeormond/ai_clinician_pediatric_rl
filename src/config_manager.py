@@ -6,24 +6,57 @@ from pathlib import Path
 from .setup_environment import load_paths
 
 class ConfigManager:
-    def __init__(self, hospital="choc", experiment_type="supervised_learning", 
-                 model_type="xgb", experiment_variant='standard', 
-                 start_time=None):
+    def __init__(
+            self, 
+            mode="single_fold", 
+            hospital="choc", 
+            experiment_dir=None,
+            experiment_type="supervised_learning", 
+            model_type="xgb", 
+            experiment_variant='standard', 
+            start_time=None
+        ):
 
         self.config_dir = Path(__file__).parent.parent / "config"
-
-        self.paths, self.environment = load_paths()
-        
-        self.experiment_type = experiment_type
-        self.set_hospital(hospital)
-        
-        self.model_type = model_type
-        self.experiment_variant = experiment_variant
         self.start_time = start_time 
         
-        self._build_wandb_config()        
+        self.paths, self.environment = load_paths()
 
+        self.mode = mode
 
+        if self.mode == "single_fold":
+        
+            self.experiment_type = experiment_type
+            self.set_hospital(hospital)
+            
+            self.model_type = model_type
+            self.experiment_variant = experiment_variant            
+            
+            self._build_wandb_config()
+
+        elif self.mode == "aggregate":
+            
+            if experiment_dir is None:
+                raise ValueError("experiment_dir must be provided in aggregate mode")
+            # join experiment_dir with self.paths['experiments_dir']
+            self.experiment_dir = Path(self.paths['experiments_dir']) / experiment_dir
+
+            # from inside the experiment_dir, enter the config directory and load cross_validation*.yaml
+            config_dir = self.experiment_dir / "config"
+            if not config_dir.exists():
+                raise FileNotFoundError(f"Config directory does not exist: {config_dir}")
+            
+            # load the yaml file that begins with "cross_validation" and ends with ".yaml"
+            cv_config_files = list(config_dir.glob("cross_validation_*.yaml"))
+            if not cv_config_files:
+                raise FileNotFoundError("No cross_validation config file found in the experiment directory")
+            if len(cv_config_files) > 1:
+                raise ValueError("Multiple cross_validation config files found, please specify one")
+            
+            with open(cv_config_files[0], 'r') as f:
+                self.cv_config = yaml.safe_load(f)
+
+                
     def get_config_path(self, config_type, custom_path=None):
         """Get config file path with variant support."""
         if custom_path:

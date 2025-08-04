@@ -17,7 +17,7 @@ import wandb
 
 from ...config_manager import ConfigManager  # Import the config manager
 from ...supervised_learning.dataset import Dataset
-from ...supervised_learning.training import outer_training_loop
+from ...supervised_learning.training import outer_training_loop, aggregate_results_across_outer_folds
 from ...utils.logging_utilities import wandb_init  # Add this import
 
 def parse_arguments():
@@ -31,30 +31,39 @@ def parse_arguments():
                         choices=['xgb'], 
                         help='Model type to train (default: xgb)')    
     parser.add_argument('--mode', type=str, default='single_fold',
-                        choices=['single_fold', 'aggregated'],
-                        help='Mode of training: single_fold or aggregated (default: single_fold)')
+                        choices=['single_fold', 'aggregate'],
+                        help='Mode of training: single_fold or aggregate (default: single_fold)')
     
     # mode-specific arguments    
     parser.add_argument('--fold', type=int,
                        help='Fold number to train (required for single_fold mode)')
     
+    parser.add_argument('--experiment_dir', type=str, default=None,
+                        help='Directory for experiment results (required for aggregate mode)')
+                        
     # Config file overrides (optional)
     parser.add_argument('--experiment_variant', type=str, default='standard',
                        choices=['standard', 'quick_test', 'full_search', 'production'],
                        help='Experiment variant determines config defaults')
 
-    parser.add_argument('--start_time', type=str,                    # ✅ New argument
+    parser.add_argument('--start_time', type=str, default = None,                  # ✅ New argument
                     help='Start time for this experiment run')
     
     
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    # If start_time is not provided, generate a timestamp
+    if args.start_time is None:
+        args.start_time = time.strftime("%Y%m%d_%H%M%S")
+
+    return args
 
 
 def validate_arguments(args):
     if args.mode == "single_fold" and args.fold is None:
         raise ValueError("--fold is required when mode is 'single_fold'")
-    if args.mode == "aggregate" and args.base_experiment_dir is None:
-        raise ValueError("--base_experiment_dir is required when mode is 'aggregate'")
+    if args.mode == "aggregate" and args.experiment_dir is None:
+        raise ValueError("--experiment_dir is required when mode is 'aggregate'")
 
 
 def log_fold_results_to_wandb(results):
@@ -78,7 +87,9 @@ def main():
 
     # Initialize config manager, it holds paths and environment info
     config_manager = ConfigManager(
+        mode = args.mode,
         hospital=args.hospital, 
+        experiment_dir=args.experiment_dir,
         experiment_type="supervised_learning",
         model_type=args.model_type,
         experiment_variant=args.experiment_variant,
@@ -121,6 +132,12 @@ def main():
         
         if wandb.run is not None:
             wandb.finish()
+
+    elif args.mode == "aggregate":
+
+        # aggregate results from all folds
+        results = aggregate_results_across_outer_folds(config_manager)
+
     
 
 if __name__ == "__main__":

@@ -13,3 +13,4 @@ def calculate_metrics(y_true, y_pred, y_pred_proba):
         'average_precision': average_precision_score(y_true, y_pred_proba)
     }
     return metrics
+

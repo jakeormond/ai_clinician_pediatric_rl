@@ -7,6 +7,16 @@ from sklearn.calibration import calibration_curve
 
 
 # plots
+def create_all_plots(y_true, y_pred, y_pred_proba, experiment_dir):
+    """
+    Create all evaluation plots and save them to the experiment directory.
+    """
+    plot_roc_curve(y_true, y_pred_proba, experiment_dir)
+    plot_precision_recall_curve(y_true, y_pred_proba, experiment_dir)
+    plot_calibration_curve(y_true, y_pred_proba, experiment_dir)
+    plot_confusion_matrix(y_true, y_pred, experiment_dir)
+
+
 def plot_roc_curve(y_true, y_pred_proba, experiment_dir):
 
     fpr, tpr, _ = roc_curve(y_true, y_pred_proba)
@@ -36,7 +46,8 @@ def plot_precision_recall_curve(y_true, y_pred_proba, experiment_dir):
     plt.savefig(os.path.join(experiment_dir, 'precision_recall_curve.png'))
     plt.close()
 
-def plot_calibration_curve(y_true, y_pred_proba, experiment_dir):
+def plot_calibration_curve(y_true, y_pred_proba, experiment_dir):  
+    
 
     fraction_of_positives, mean_predicted_value = calibration_curve(y_true, y_pred_proba, n_bins=10)
 
@@ -47,7 +58,7 @@ def plot_calibration_curve(y_true, y_pred_proba, experiment_dir):
     plt.ylabel("Fraction of positives")
     plt.title("Calibration Curve")
     plt.legend()
-    plt.savefig(os.path.join(experiment_dir, 'calibration_curve.png'))
+    plt.savefig(os.path.join(experiment_dir, f"calibration_curve.png"))
     plt.close()
 
 def plot_confusion_matrix(y_true, y_pred, experiment_dir):

@@ -11,7 +11,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, GridSearchCV, GroupKFold
 import xgboost as xgb
 from .evaluation import calculate_metrics
-from .plotting import plot_roc_curve, plot_precision_recall_curve, plot_calibration_curve, plot_confusion_matrix
+from .plotting import create_all_plots
 from ..utils.logging_utilities import wandb_init
 
 
@@ -211,10 +211,8 @@ def aggregate_results_across_outer_folds(config):
         json.dump(overall_metrics, f)
 
     # plot ROC curve, precision-recall curve, calibration curve, and confusion matrix
-    plot_roc_curve(all_true_labels, all_pred_proba, config.experiment_dir)
-    plot_precision_recall_curve(all_true_labels, all_pred_proba, config.experiment_dir)
-    plot_calibration_curve(all_true_labels, all_pred_proba, config.experiment_dir)
-    plot_confusion_matrix(all_true_labels, all_predictions, config.experiment_dir)
+    create_all_plots(all_true_labels, all_predictions, all_pred_proba, config.experiment_dir)
+
 
 
 

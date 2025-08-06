@@ -1,0 +1,27 @@
+wandb: Tracking run with wandb version 0.21.0
+wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/sklearn/metrics/_classification.py:1565: UndefinedMetricWarning: Precision is ill-defined and being set to 0.0 due to no predicted samples. Use `zero_division` parameter to control this behavior.
+  _warn_prf(average, modifier, f"{metric.capitalize()} is", len(result))
+wandb:                                                                                
+wandb: 
+wandb: Run history:
+wandb:          fold_4/accuracy ▁
+wandb: fold_4/average_precision ▁
+wandb:     fold_4/best_cv_score ▁
+wandb:          fold_4/f1_score ▁
+wandb:         fold_4/precision ▁
+wandb:            fold_4/recall ▁
+wandb:           fold_4/roc_auc ▁
+wandb: 
+wandb: Run summary:
+wandb:          fold_4/accuracy 0.92938
+wandb: fold_4/average_precision 0.33321
+wandb:     fold_4/best_cv_score 0.34298
+wandb:          fold_4/f1_score 0
+wandb:         fold_4/precision 0
+wandb:            fold_4/recall 0
+wandb:           fold_4/roc_auc 0.78547
+wandb: 
+wandb: You can sync this run to the cloud by running:
+wandb: wandb sync /home/38/bt310238/wandb/wandb/offline-run-20250805_014158-3bbb516b-5152-4636-9ab4-fc9088af1b6b
+wandb: Find logs at: /home/38/bt310238/wandb/wandb/offline-run-20250805_014158-3bbb516b-5152-4636-9ab4-fc9088af1b6b/logs

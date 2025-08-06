@@ -12,14 +12,14 @@ wandb:            fold_2/recall ▁
 wandb:           fold_2/roc_auc ▁
 wandb: 
 wandb: Run summary:
-wandb:          fold_2/accuracy 0.92693
-wandb: fold_2/average_precision 0.34175
-wandb:     fold_2/best_cv_score 0.28569
-wandb:          fold_2/f1_score 0.388
-wandb:         fold_2/precision 0.32361
-wandb:            fold_2/recall 0.48438
-wandb:           fold_2/roc_auc 0.83535
+wandb:          fold_2/accuracy 0.95221
+wandb: fold_2/average_precision 0.30655
+wandb:     fold_2/best_cv_score 0.38959
+wandb:          fold_2/f1_score 0.00165
+wandb:         fold_2/precision 0.85714
+wandb:            fold_2/recall 0.00083
+wandb:           fold_2/roc_auc 0.85244
 wandb: 
 wandb: You can sync this run to the cloud by running:
-wandb: wandb sync /home/38/bt310238/wandb/wandb/offline-run-20250804_014011-c5d7577e-bc2c-427c-8bf7-1d3160de9f0e
-wandb: Find logs at: /home/38/bt310238/wandb/wandb/offline-run-20250804_014011-c5d7577e-bc2c-427c-8bf7-1d3160de9f0e/logs
+wandb: wandb sync /home/38/bt310238/wandb/wandb/offline-run-20250805_014010-484f5ee7-360c-4b43-95b2-a5ee9912668a
+wandb: Find logs at: /home/38/bt310238/wandb/wandb/offline-run-20250805_014010-484f5ee7-360c-4b43-95b2-a5ee9912668a/logs

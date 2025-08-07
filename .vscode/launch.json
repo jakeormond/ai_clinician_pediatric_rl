@@ -48,7 +48,7 @@
                 "--hospital", "choc", 
                 "--model_type", "xgb", 
                 "--mode", "aggregate", 
-                "--experiment_dir", "choc_supervised_learning_xgb_quick_test_20250806_180943"
+                "--experiment_dir", "choc_supervised_learning_xgb_quick_test_20250807_132257"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

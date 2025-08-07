@@ -1,0 +1,35 @@
+wandb: Tracking run with wandb version 0.21.0
+wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+wandb:                                                                                
+wandb: 
+wandb: Run history:
+wandb:                   fold_0/accuracy ▁
+wandb:          fold_0/average_precision ▁
+wandb:              fold_0/best_cv_score ▁
+wandb:             fold_0/brier_baseline ▁
+wandb:                fold_0/brier_score ▁
+wandb:                        fold_0/ece ▁
+wandb:                   fold_0/f1_score ▁
+wandb:                   fold_0/log_loss ▁
+wandb:                  fold_0/precision ▁
+wandb:                     fold_0/recall ▁
+wandb: fold_0/relative_brier_improvement ▁
+wandb:                    fold_0/roc_auc ▁
+wandb: 
+wandb: Run summary:
+wandb:                   fold_0/accuracy 0.8945
+wandb:          fold_0/average_precision 0.407
+wandb:              fold_0/best_cv_score 0.27161
+wandb:             fold_0/brier_baseline 0.09872
+wandb:                fold_0/brier_score 0.16298
+wandb:                        fold_0/ece 0.27543
+wandb:                   fold_0/f1_score 0.14601
+wandb:                   fold_0/log_loss 0.51486
+wandb:                  fold_0/precision 0.72251
+wandb:                     fold_0/recall 0.08121
+wandb: fold_0/relative_brier_improvement -0.6509
+wandb:                    fold_0/roc_auc 0.82913
+wandb: 
+wandb: You can sync this run to the cloud by running:
+wandb: wandb sync /home/38/bt310238/wandb/wandb/offline-run-20250807_132312-e9ffceca-afcd-47aa-ac30-4f1066e0b6d9
+wandb: Find logs at: /home/38/bt310238/wandb/wandb/offline-run-20250807_132312-e9ffceca-afcd-47aa-ac30-4f1066e0b6d9/logs

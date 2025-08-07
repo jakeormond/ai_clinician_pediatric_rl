@@ -1,0 +1,37 @@
+wandb: Tracking run with wandb version 0.21.0
+wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+/home/38/bt310238/.conda/envs/rl_env/lib/python3.10/site-packages/sklearn/metrics/_classification.py:1565: UndefinedMetricWarning: Precision is ill-defined and being set to 0.0 due to no predicted samples. Use `zero_division` parameter to control this behavior.
+  _warn_prf(average, modifier, f"{metric.capitalize()} is", len(result))
+wandb:                                                                                
+wandb: 
+wandb: Run history:
+wandb:                   fold_1/accuracy ▁
+wandb:          fold_1/average_precision ▁
+wandb:              fold_1/best_cv_score ▁
+wandb:             fold_1/brier_baseline ▁
+wandb:                fold_1/brier_score ▁
+wandb:                        fold_1/ece ▁
+wandb:                   fold_1/f1_score ▁
+wandb:                   fold_1/log_loss ▁
+wandb:                  fold_1/precision ▁
+wandb:                     fold_1/recall ▁
+wandb: fold_1/relative_brier_improvement ▁
+wandb:                    fold_1/roc_auc ▁
+wandb: 
+wandb: Run summary:
+wandb:                   fold_1/accuracy 0.90631
+wandb:          fold_1/average_precision 0.39887
+wandb:              fold_1/best_cv_score 0.33875
+wandb:             fold_1/brier_baseline 0.08491
+wandb:                fold_1/brier_score 0.07863
+wandb:                        fold_1/ece 0.0273
+wandb:                   fold_1/f1_score 0
+wandb:                   fold_1/log_loss 0.27641
+wandb:                  fold_1/precision 0
+wandb:                     fold_1/recall 0
+wandb: fold_1/relative_brier_improvement 0.07392
+wandb:                    fold_1/roc_auc 0.8233
+wandb: 
+wandb: You can sync this run to the cloud by running:
+wandb: wandb sync /home/38/bt310238/wandb/wandb/offline-run-20250807_002658-3538ca61-c8f3-4a12-9506-95c46ad1b9ba
+wandb: Find logs at: /home/38/bt310238/wandb/wandb/offline-run-20250807_002658-3538ca61-c8f3-4a12-9506-95c46ad1b9ba/logs

@@ -1,3 +1,0 @@
-wandb: Tracking run with wandb version 0.21.0
-wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
-/var/spool/slurm/job207507/slurm_script: line 68: 3067403 Killed                  python -m src.scripts.supervised.supervised_learning --hospital choc --model_type xgb --mode single_fold --fold $SLURM_ARRAY_TASK_ID --experiment_variant quick_test --start_time $START_TIME

@@ -76,16 +76,24 @@ def outer_training_loop(dataset, config_manager):
         # same splits every time
         kf_inner = GroupKFold(n_splits=n_inner_folds)
 
-        if config_manager.model_type == "xgb":
-            pipe = Pipeline([
-                ('scaler', StandardScaler()),
-                ('model', xgb.XGBClassifier(
-                    eval_metric='logloss', 
-                    verbosity=2))
-            ])
+        if config_manager.model_type == "xgbclassifier":
+            model = xgb.XGBClassifier(
+                eval_metric='logloss', 
+                verbosity=2
+            )
+        elif config_manager.model_type == "xgbregressor":
+            model = xgb.XGBRegressor(
+                eval_metric='rmse', 
+                verbosity=2
+            )
         else:
-            raise ValueError(f"Unsupported model type: {config_manager.model_type}")
-                
+            raise ValueError(f"Unsupported model type: {config_manager.model_type}")        
+        
+        pipe = Pipeline([
+            ('scaler', StandardScaler()),
+            ('model', model)
+        ])
+        
         # grid search for hyper
         grid_search = GridSearchCV(
             pipe, 
@@ -102,8 +110,10 @@ def outer_training_loop(dataset, config_manager):
         print(f"Best hyperparameters for outer fold {outer_fold}: {best_params}")
 
         # Retrain model on full outer train set with best hyperparameters
-        if config_manager.model_type == "xgb":
+        if config_manager.model_type == "xgclassifier":
             best_model = xgb.XGBClassifier(**best_params, eval_metric='logloss')
+        elif config_manager.model_type == "xgbregressor":
+            best_model = xgb.XGBRegressor(**best_params, eval_metric='rmse')
         else:
             raise ValueError(f"Unsupported model type: {config_manager.model_type}")
         
@@ -119,11 +129,15 @@ def outer_training_loop(dataset, config_manager):
         X_outer_test_scaled = scaler.transform(X_outer_test)
         
         # get predictions for the outer test set
-        y_pred = best_model.predict(X_outer_test_scaled)
-        y_pred_proba = best_model.predict_proba(X_outer_test_scaled)[:, 1]
+        if config_manager.model_type == "xgbclassifier":
+            y_pred = best_model.predict(X_outer_test_scaled)
+            y_pred_proba = best_model.predict_proba(X_outer_test_scaled)[:, 1]
+        elif config_manager.model_type == "xgbregressor":
+            y_pred = None
+            y_pred_proba = best_model.predict(X_outer_test_scaled)
 
         # calculate metrics on the outer test set
-        metrics = calculate_metrics(y_outer_test, y_pred, y_pred_proba)
+        metrics = calculate_metrics(y_outer_test, y_pred_proba)
         print(f"Outer Fold {outer_fold}: Test metrics: {metrics}")
 
         # save to the fold directory        

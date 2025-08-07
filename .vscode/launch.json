@@ -6,13 +6,13 @@
     "configurations": [
 
         {
-            "name": "Mortality Prediction - CHOC - script",
+            "name": "Mortality Prediction - CHOC - xgbclassifier",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/src/scripts/supervised/supervised_learning.py",
+            "module": "src.scripts.supervised.supervised_learning",
             "args": [
                 "--hospital", "choc", 
-                "--model_type", "xgb", 
+                "--model_type", "xgbclassifier", 
                 "--mode", "single_fold", 
                 "--fold", "0",
                 "--experiment_variant", "quick_test"
@@ -23,13 +23,13 @@
         },
 
         {
-            "name": "Mortality Prediction - CHOC - module",
+            "name": "Mortality Prediction - CHOC - xgbregressor",
             "type": "debugpy",
             "request": "launch",
             "module": "src.scripts.supervised.supervised_learning",
             "args": [
                 "--hospital", "choc", 
-                "--model_type", "xgb", 
+                "--model_type", "xgbregressor", 
                 "--mode", "single_fold", 
                 "--fold", "0",
                 "--experiment_variant", "quick_test"

@@ -7,14 +7,18 @@ from sklearn.calibration import calibration_curve
 
 
 # plots
-def create_all_plots(y_true, y_pred, y_pred_proba, experiment_dir):
+def create_all_plots(y_true, y_pred, y_pred_proba, experiment_dir, is_classification=True):
     """
     Create all evaluation plots and save them to the experiment directory.
     """
     plot_roc_curve(y_true, y_pred_proba, experiment_dir)
     plot_precision_recall_curve(y_true, y_pred_proba, experiment_dir)
     plot_calibration_curve(y_true, y_pred_proba, experiment_dir)
-    plot_confusion_matrix(y_true, y_pred, experiment_dir)
+    if is_classification:
+        plot_confusion_matrix(y_true, y_pred, experiment_dir)
+    else:
+        # For regression, you might want to add other plots like residuals, etc.
+        pass
 
 
 def plot_roc_curve(y_true, y_pred_proba, experiment_dir):

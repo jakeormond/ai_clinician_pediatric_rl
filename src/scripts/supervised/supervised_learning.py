@@ -27,9 +27,9 @@ def parse_arguments():
                         choices=['choc', 'mimic'], 
                         help='Hospital dataset to use (default: choc)')
     parser.add_argument('--model_type', 
-                        default='xgb', 
-                        choices=['xgb'], 
-                        help='Model type to train (default: xgb)')    
+                        default='xgbclassifier', 
+                        choices=['xgbclassifier', 'xgbregressor'], 
+                        help='Model type to train (default: xgbclassifier)')    
     parser.add_argument('--mode', type=str, default='single_fold',
                         choices=['single_fold', 'aggregate'],
                         help='Mode of training: single_fold or aggregate (default: single_fold)')

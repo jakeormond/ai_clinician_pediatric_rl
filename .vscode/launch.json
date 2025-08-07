@@ -46,9 +46,9 @@
             "module": "src.scripts.supervised.supervised_learning",
             "args": [
                 "--hospital", "choc", 
-                "--model_type", "xgb", 
+                "--model_type", "xgbregressor", 
                 "--mode", "aggregate", 
-                "--experiment_dir", "choc_supervised_learning_xgb_quick_test_20250807_132257"
+                "--experiment_dir", "choc_supervised_learning_xgbregressor_quick_test_20250807_165552"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

@@ -218,14 +218,19 @@ def aggregate_results_across_outer_folds(config):
     all_pred_proba = all_predictions_df["predicted_proba"].values    
 
     # calculate overall metrics
-    overall_metrics = calculate_metrics(all_true_labels, all_predictions, all_pred_proba)
+    overall_metrics = calculate_metrics(all_true_labels, all_pred_proba)
     print(f"Overall metrics: {overall_metrics}")
     
     with open(config.experiment_dir / "overall_metrics.json", "w") as f:
         json.dump(overall_metrics, f)
 
     # plot ROC curve, precision-recall curve, calibration curve, and confusion matrix
-    create_all_plots(all_true_labels, all_predictions, all_pred_proba, config.experiment_dir)
+    if config.model_type == "xgbclassifier":
+        is_classification = True
+    elif config.model_type == "xgbregressor":
+        is_classification = False
+    create_all_plots(all_true_labels, all_predictions, all_pred_proba, \
+            config.experiment_dir, is_classification=is_classification)
 
 
 

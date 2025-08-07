@@ -23,13 +23,13 @@ class ConfigManager:
         self.paths, self.environment = load_paths()
 
         self.mode = mode
+        self.model_type = model_type
 
         if self.mode == "single_fold":
         
             self.experiment_type = experiment_type
-            self.set_hospital(hospital)
+            self.set_hospital(hospital)            
             
-            self.model_type = model_type
             self.experiment_variant = experiment_variant            
             
             self._build_wandb_config()

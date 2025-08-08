@@ -67,6 +67,7 @@ python -m src.scripts.supervised.supervised_learning \
     --fold $SLURM_ARRAY_TASK_ID \
     --experiment_variant standard \
     --search_variant random_search \
+    --n_search_iterations 30 \
     --start_time $START_TIME 
 
 exit_code=$?

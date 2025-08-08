@@ -235,6 +235,9 @@ def outer_training_loop(dataset, config_manager):
         
         break
 
+    if results is None:
+        raise ValueError(f"No matching fold found for target_fold={config_manager.cv_config['fold']}")
+    
     return results
 
 

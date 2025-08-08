@@ -1,3 +1,8 @@
+# Experiment outputs and logs
+slurm/logs/
+results/
+wandb/
+
 # Python cache files
 __pycache__/
 *.py[cod]

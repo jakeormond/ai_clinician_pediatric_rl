@@ -35,7 +35,7 @@
                 "--fold", "0",
                 "--experiment_variant", "standard",
                 "--search_variant", "random_search",
-                "--n_search_iterations", "50",
+                "--n_search_iterations", "50"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
@@ -67,7 +67,7 @@
                 "--hospital", "choc", 
                 "--model_type", "xgbregressor", 
                 "--mode", "combine_aggregates", 
-                "--experiment_dir", "xgbregressor_mortality_prediction_choc_grid_search",
+                "--experiment_dir", "xgbregressor_mortality_prediction_choc_grid_search"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

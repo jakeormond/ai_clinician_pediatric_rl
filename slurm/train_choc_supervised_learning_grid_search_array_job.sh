@@ -61,7 +61,7 @@ echo "Starting training for fold $SLURM_ARRAY_TASK_ID..."
 
 python -m src.scripts.supervised.supervised_learning \
     --hospital choc \
-    --model_type xgb \
+    --model_type xgbregressor \
     --mode single_fold \
     --fold $SLURM_ARRAY_TASK_ID \
     --experiment_variant quick_test \

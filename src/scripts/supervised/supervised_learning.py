@@ -138,6 +138,10 @@ def main():
         # aggregate results from all folds
         results = aggregate_results_across_outer_folds(config_manager)
 
+    elif args.mode == "combine_aggregates":
+
+        results = combine_aggregates(config_manager)
+
     
 
 if __name__ == "__main__":

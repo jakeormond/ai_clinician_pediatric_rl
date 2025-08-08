@@ -48,7 +48,23 @@
                 "--hospital", "choc", 
                 "--model_type", "xgbregressor", 
                 "--mode", "aggregate", 
-                "--experiment_dir", "choc_supervised_learning_xgbregressor_quick_test_20250807_165552"
+                "--experiment_dir", "choc_supervised_learning_xgbregressor_quick_test_20250807_212822"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        }, 
+
+        {
+            "name": "combine aggregates",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--model_type", "xgbregressor", 
+                "--mode", "combine_aggregates", 
+                "--experiment_dir", "xgbregressor_mortality_prediction_choc_grid_search",
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

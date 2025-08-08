@@ -29,10 +29,13 @@
             "module": "src.scripts.supervised.supervised_learning",
             "args": [
                 "--hospital", "choc", 
+                "--experiment_type", "supervised_learning",
                 "--model_type", "xgbregressor", 
                 "--mode", "single_fold", 
                 "--fold", "0",
-                "--experiment_variant", "quick_test"
+                "--experiment_variant", "standard",
+                "--search_variant", "random_search",
+                "--n_search_iterations", "50",
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
@@ -48,7 +51,7 @@
                 "--hospital", "choc", 
                 "--model_type", "xgbregressor", 
                 "--mode", "aggregate", 
-                "--experiment_dir", "choc_supervised_learning_xgbregressor_quick_test_20250807_212822"
+                "--experiment_folder", "choc_supervised_learning_xgbregressor_quick_test_20250807_212822"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

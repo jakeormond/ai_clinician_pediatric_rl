@@ -8,38 +8,33 @@ from .setup_environment import load_paths
 class ConfigManager:
     def __init__(
             self, 
-            mode="single_fold", 
-            hospital="choc", 
-            experiment_dir=None,
-            experiment_type="supervised_learning", 
-            model_type="xgb", 
-            experiment_variant='standard', 
-            start_time=None
+            args
         ):
 
         self.config_dir = Path(__file__).parent.parent / "config"
-        self.start_time = start_time 
         
-        self.paths, self.environment = load_paths()
+        # add all key value pairs from args to self
+        for key, value in vars(args).items():
+            setattr(self, key, value)
 
-        self.mode = mode
-        self.model_type = model_type
+ 
+        self.paths, self.environment = load_paths()
 
         if self.mode == "single_fold":
         
-            self.experiment_type = experiment_type
-            self.set_hospital(hospital)            
-            
-            self.experiment_variant = experiment_variant            
-            
+            self.set_hospital()
+            self.set_experiment_name()
+            self._create_experiment_dir()    
+            self.set_cv_config()                   
             self._build_wandb_config()
+            self.add_fold(self.fold)
 
         elif self.mode == "aggregate":
             
-            if experiment_dir is None:
+            if self.experiment_folder is None:
                 raise ValueError("experiment_dir must be provided in aggregate mode")
             # join experiment_dir with self.paths['experiments_dir']
-            self.experiment_dir = Path(self.paths['experiments_dir']) / experiment_dir
+            self.experiment_dir = Path(self.paths['experiments_dir']) / self.experiment_folder
 
             # from inside the experiment_dir, enter the config directory and load cross_validation*.yaml
             config_dir = self.experiment_dir / "config"
@@ -72,11 +67,12 @@ class ConfigManager:
                 raise FileNotFoundError(f"CV config not found for variant: {self.experiment_variant}")
             
         elif config_type == "search_grid":
-            variant_name = f"{self.model_type}_{self.experiment_variant}.yaml"
+            variant_name = f"{self.model_type}_{self.search_variant}.yaml"
             variant_path = self.config_dir / "search_spaces" / variant_name
             if variant_path.exists():
                 return variant_path
-            return self.config_dir / "search_spaces" / f"{self.model_type}_search_space_{self.experiment_variant}.yaml"
+            else:
+                raise FileNotFoundError(f"Search grid config not found for variant: {self.search_variant}")
             
         elif config_type == "wandb":
             # W&B config usually doesn't need variants
@@ -86,8 +82,7 @@ class ConfigManager:
             return self.config_dir / "datasets" / f"{self.hospital}_{self.experiment_type}.yaml"
 
 
-    def set_hospital(self, hospital):
-        self.hospital = hospital
+    def set_hospital(self,):
         hospital_config_path = self.get_config_path("hospital")
         if not hospital_config_path.exists():
             raise FileNotFoundError(f"Hospital config file not found: {hospital_config_path}")
@@ -123,6 +118,8 @@ class ConfigManager:
         self._wandb_config['seed'] = self._hospital_config['seed'] if self.hospital_config else None
         self._wandb_config['group'] = f"{self.hospital}_{self.model_type}_{self.experiment_variant}"
 
+        self.wandb_config['experiment_name'] = self.experiment_name       
+
         # Apply environment-specific config
         if self.environment == 'hpc':
             self._wandb_config['mode'] = 'offline'
@@ -131,6 +128,9 @@ class ConfigManager:
 
         # Apply experiment type configuration
         if self.experiment_type == "supervised_learning":
+
+            # and cv_config to the W&B config
+            self._wandb_config['cv_config'] = self.cv_config
             
             # Build tags
             tags = ["mortality", self.hospital, self.model_type]
@@ -144,8 +144,7 @@ class ConfigManager:
 
         with open(cv_config_path, 'r') as f:
             self.cv_config = yaml.safe_load(f)
-            # and cv_config to the W&B config
-            self._wandb_config['cv_config'] = self.cv_config
+            
 
         # get the filename from cv_config_path
         cv_config_filename = cv_config_path.stem
@@ -159,7 +158,6 @@ class ConfigManager:
         
     def add_fold(self, fold):
         """Add fold information to the config."""
-        self.cv_config['fold'] = fold
         self._wandb_config['cv_config']['fold'] = fold
 
     def set_search_grid(self):
@@ -185,7 +183,6 @@ class ConfigManager:
     def set_experiment_name(self):
         self.experiment_name = \
             f"{self.hospital}_{self.experiment_type}_{self.model_type}_{self.experiment_variant}_{self.start_time}"
-        self.wandb_config['experiment_name'] = self.experiment_name       
         # make directory if it doesn't exist
         self._create_experiment_dir()
 

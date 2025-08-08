@@ -1,2 +1,2 @@
-n_outer_folds: 5  
-n_inner_folds: 5
+n_outer_folds: 2  
+n_inner_folds: 2

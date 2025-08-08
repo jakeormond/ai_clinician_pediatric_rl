@@ -8,17 +8,51 @@ import pandas as pd
 import wandb
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import KFold, GridSearchCV, GroupKFold
+from sklearn.model_selection import KFold, GridSearchCV, GroupKFold, RandomizedSearchCV
+from scipy.stats import uniform, randint, loguniform
 import xgboost as xgb
 from .evaluation import calculate_metrics
 from .plotting import create_all_plots
 from ..utils.logging_utilities import wandb_init
 
 
-def prepare_param_for_pipeline(param_grid):
+def prepare_param_for_pipeline(config_manager):
     # add "model__" prefix to all parameters in the grid
-    return {f"model__{k}": v for k, v in param_grid.items() if k != "model__n_estimators"}
-
+    if config_manager.search_variant == "grid_search":
+        # For grid search, use the exact values from the config
+        return {f"model__{k}": v for k, v in config_manager.search_grid.items() if k != "model__n_estimators"}
+    
+    elif config_manager.search_variant == "random_search":
+        pipeline_params = {}
+        for param_name, param_config in config_manager.search_grid.items():
+            param_key = f"model__{param_name}"
+            
+            if isinstance(param_config, dict):
+                # Handle distribution specifications
+                if param_config['type'] == 'randint':
+                    pipeline_params[param_key] = randint(param_config['low'], param_config['high'])
+                elif param_config['type'] == 'uniform':
+                    if 'low' in param_config and 'high' in param_config:
+                        pipeline_params[param_key] = uniform(param_config['low'], 
+                                                           param_config['high'] - param_config['low'])
+                    else:
+                        # Old format with loc/scale
+                        pipeline_params[param_key] = uniform(param_config['loc'], param_config['scale'])
+                elif param_config['type'] == 'loguniform':
+                    pipeline_params[param_key] = loguniform(param_config['low'], param_config['high'])
+                elif param_config['type'] == 'choice':
+                    pipeline_params[param_key] = param_config['values']
+                else:
+                    raise ValueError(f"Unknown distribution type: {param_config['type']}")
+            else:
+                # Handle simple list values (for backwards compatibility)
+                pipeline_params[param_key] = param_config
+        
+        return pipeline_params
+    
+    else:
+        raise ValueError(f"Unknown search variant: {config_manager.search_variant}")
+        # 
 
 def remove_model_prefix_from_params(best_params):
     """
@@ -32,7 +66,7 @@ def outer_training_loop(dataset, config_manager):
    
 
     # prepare the parameters for the pipeline
-    pipe_grid = prepare_param_for_pipeline(config_manager.search_grid)
+    pipe_grid = prepare_param_for_pipeline(config_manager)
 
     print(f"Number of unique encounter IDs: {len(dataset.encounter_ids())}")
 
@@ -94,15 +128,29 @@ def outer_training_loop(dataset, config_manager):
             ('model', model)
         ])
         
+
         # grid search for hyper
-        grid_search = GridSearchCV(
-            pipe, 
-            pipe_grid, 
-            cv=kf_inner, 
-            scoring='average_precision', 
-            n_jobs=-1, # use all available CPU cores
-            verbose=2
-        )
+        if config_manager.search_variant == "grid_search":
+            grid_search = GridSearchCV(
+                pipe, 
+                pipe_grid, 
+                cv=kf_inner, 
+                scoring='average_precision', 
+                n_jobs=-1, # use all available CPU cores
+                verbose=2
+            )
+        elif config_manager.search_variant == "random_search":
+            grid_search = RandomizedSearchCV(
+                pipe, 
+                pipe_grid, 
+                n_iter=config_manager.n_search_iterations,
+                cv=kf_inner, 
+                scoring='neg_mean_squared_error', 
+                n_jobs=-1, # use all available CPU cores
+                verbose=2,
+                random_state=config_manager.hospital_config["seed"]
+            )
+
         grid_search.fit(X_outer_train, y_outer_train, groups=groups)
 
         # Get best hyperparameters from inner CV
@@ -137,7 +185,7 @@ def outer_training_loop(dataset, config_manager):
             y_pred_proba = best_model.predict(X_outer_test_scaled)
 
         # calculate metrics on the outer test set
-        metrics = calculate_metrics(y_outer_test, y_pred_proba)
+        metrics = calculate_metrics(y_outer_test, y_pred_proba, config_manager.model_type)
         print(f"Outer Fold {outer_fold}: Test metrics: {metrics}")
 
         # save to the fold directory        

@@ -61,10 +61,12 @@ echo "Starting training for fold $SLURM_ARRAY_TASK_ID..."
 
 python -m src.scripts.supervised.supervised_learning \
     --hospital choc \
+    --experiment_type supervised_learning \
     --model_type xgbregressor \
     --mode single_fold \
     --fold $SLURM_ARRAY_TASK_ID \
-    --experiment_variant quick_test \
+    --experiment_variant standard \
+    --search_variant random_search \
     --start_time $START_TIME 
 
 exit_code=$?

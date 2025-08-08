@@ -26,6 +26,10 @@ def parse_arguments():
                         default='choc', 
                         choices=['choc', 'mimic'], 
                         help='Hospital dataset to use (default: choc)')
+    parser.add_argument('--experiment_type', 
+                        default='supervised_learning', 
+                        choices=['supervised_learning', 'reinforcement_learning'], 
+                        help='Type of experiment to run (default: supervised_learning)')
     parser.add_argument('--model_type', 
                         default='xgbclassifier', 
                         choices=['xgbclassifier', 'xgbregressor'], 
@@ -38,13 +42,20 @@ def parse_arguments():
     parser.add_argument('--fold', type=int,
                        help='Fold number to train (required for single_fold mode)')
     
-    parser.add_argument('--experiment_dir', type=str, default=None,
+    parser.add_argument('--experiment_folder', type=str, default=None,
                         help='Directory for experiment results (required for aggregate mode)')
                         
     # Config file overrides (optional)
     parser.add_argument('--experiment_variant', type=str, default='standard',
                        choices=['standard', 'quick_test', 'full_search', 'production'],
                        help='Experiment variant determines config defaults')
+
+    parser.add_argument('--search_variant', type=str, default=None,
+                        choices=['grid_search', 'random_search'],
+                        help='Search variant for hyperparameter tuning (default: None)')
+    
+    parser.add_argument('--n_search_iterations', type=int, default=0,
+                        help='Number of search iterations for random search (default: 0)')
 
     parser.add_argument('--start_time', type=str, default = None,                  # ✅ New argument
                     help='Start time for this experiment run')
@@ -86,24 +97,16 @@ def main():
     validate_arguments(args)
 
     # Initialize config manager, it holds paths and environment info
-    config_manager = ConfigManager(
-        mode = args.mode,
-        hospital=args.hospital, 
-        experiment_dir=args.experiment_dir,
-        experiment_type="supervised_learning",
-        model_type=args.model_type,
-        experiment_variant=args.experiment_variant,
-        start_time=args.start_time
-        )
+    config_manager = ConfigManager(args)
 
     if args.mode == "single_fold":        
         # set base experiment name and make directory, if it doesn't exist (it will 
         # already if another folder was run)
-        config_manager.set_experiment_name()
+        # config_manager.set_experiment_name()
         
-        # update config with n_fodls and current fold 
-        config_manager.set_cv_config() # sets the number of outer and inner folds
-        config_manager.add_fold(args.fold)
+        # # update config with n_fodls and current fold 
+        # config_manager.set_cv_config() # sets the number of outer and inner folds
+        # config_manager.add_fold(args.fold)
         
         # create the name and directory for this fold
         config_manager.set_fold_name()
@@ -140,7 +143,7 @@ def main():
 
     elif args.mode == "combine_aggregates":
 
-        results = combine_aggregates(config_manager)
+        results = aggregate_results_across_outer_folds(config_manager)
 
     
 

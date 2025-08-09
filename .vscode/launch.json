@@ -51,7 +51,7 @@
                 "--hospital", "choc", 
                 "--model_type", "xgbregressor", 
                 "--mode", "aggregate", 
-                "--experiment_folder", "choc_supervised_learning_xgbregressor_quick_test_20250807_212822"
+                "--experiment_folder", "choc_supervised_learning_xgbregressor_standard_20250808_222415"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

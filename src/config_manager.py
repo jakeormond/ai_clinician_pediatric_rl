@@ -32,7 +32,17 @@ class ConfigManager:
         elif self.mode == "aggregate":
             
             if self.experiment_folder is None:
-                raise ValueError("experiment_dir must be provided in aggregate mode")
+                raise ValueError("experiment_folder must be provided in aggregate mode")
+            
+            # model type needs to be found from experiment_folder, it is either 
+            # xgbclassifier or xgbregressor
+            if "xgbclassifier" in self.experiment_folder:
+                self.model_type = "xgbclassifier"
+            elif "xgbregressor" in self.experiment_folder:
+                self.model_type = "xgbregressor"
+            else:
+                raise ValueError("model_type not found in experiment_folder, must be either xgbclassifier or xgbregressor")
+                        
             # join experiment_dir with self.paths['experiments_dir']
             self.experiment_dir = Path(self.paths['experiments_dir']) / self.experiment_folder
 

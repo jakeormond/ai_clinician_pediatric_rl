@@ -158,7 +158,7 @@ def outer_training_loop(dataset, config_manager):
         print(f"Best hyperparameters for outer fold {outer_fold}: {best_params}")
 
         # Retrain model on full outer train set with best hyperparameters
-        if config_manager.model_type == "xgclassifier":
+        if config_manager.model_type == "xgbclassifier":
             best_model = xgb.XGBClassifier(**best_params, eval_metric='logloss')
         elif config_manager.model_type == "xgbregressor":
             best_model = xgb.XGBRegressor(**best_params, eval_metric='rmse')
@@ -269,7 +269,8 @@ def aggregate_results_across_outer_folds(config):
     all_pred_proba = all_predictions_df["predicted_proba"].values    
 
     # calculate overall metrics
-    overall_metrics = calculate_metrics(all_true_labels, all_pred_proba)
+    overall_metrics = calculate_metrics(all_true_labels, \
+                        all_pred_proba, config.model_type)
     print(f"Overall metrics: {overall_metrics}")
     
     with open(config.experiment_dir / "overall_metrics.json", "w") as f:

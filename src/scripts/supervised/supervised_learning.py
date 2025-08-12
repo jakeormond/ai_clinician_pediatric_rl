@@ -73,8 +73,8 @@ def parse_arguments():
 def validate_arguments(args):
     if args.mode == "single_fold" and args.fold is None:
         raise ValueError("--fold is required when mode is 'single_fold'")
-    if args.mode == "aggregate" and args.experiment_dir is None:
-        raise ValueError("--experiment_dir is required when mode is 'aggregate'")
+    if args.mode == "aggregate" and args.experiment_folder is None:
+        raise ValueError("--experiment_folder is required when mode is 'aggregate'")
 
 
 def log_fold_results_to_wandb(results):
@@ -137,6 +137,7 @@ def main():
             wandb.finish()
 
     elif args.mode == "aggregate":
+        config_manager.model_type
 
         # aggregate results from all folds
         results = aggregate_results_across_outer_folds(config_manager)

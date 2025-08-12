@@ -53,6 +53,8 @@ def plot_precision_recall_curve(y_true, y_pred_proba, experiment_dir):
 def plot_calibration_curve(y_true, y_pred_proba, experiment_dir):  
     
 
+    # clip values of y_pred_proba to avoid issues with calibration_curve
+    y_pred_proba = y_pred_proba.clip(0, 1)
     fraction_of_positives, mean_predicted_value = calibration_curve(y_true, y_pred_proba, n_bins=10)
 
     plt.figure()

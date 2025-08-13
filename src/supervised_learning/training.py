@@ -16,6 +16,19 @@ from .plotting import create_all_plots
 from ..utils.logging_utilities import wandb_init
 
 
+def get_safe_n_jobs():
+    """Get safe number of parallel jobs based on environment."""
+    if 'SLURM_CPUS_PER_TASK' in os.environ:
+        slurm_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', '4'))
+        # Use half the allocated CPUs for safety
+        n_jobs = min(4, max(1, slurm_cpus // 2))
+        print(f"SLURM detected: Using n_jobs={n_jobs} (SLURM_CPUS_PER_TASK={slurm_cpus})")
+        return n_jobs
+    else:
+        print("Local environment: Using n_jobs=-1 (all cores)")
+        return -1
+
+
 def prepare_param_for_pipeline(config_manager):
     # add "model__" prefix to all parameters in the grid
     if config_manager.search_variant == "grid_search":
@@ -140,13 +153,9 @@ def outer_training_loop(dataset, config_manager):
         elif config_manager.model_type == "xgbregressor":
             scoring_metric = 'neg_mean_squared_error'
         
-        if config_manager.environment == "hpc": # set n processes to 8 for HPC
-            n_jobs = 8
-        else:
-            n_jobs = -1
-
+        n_jobs = get_safe_n_jobs()
         print(f"Using {n_jobs} processes for hyperparameter tuning")
-        
+
         if config_manager.search_variant == "grid_search":
             grid_search = GridSearchCV(
                 pipe, 

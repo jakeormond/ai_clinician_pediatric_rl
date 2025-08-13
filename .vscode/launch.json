@@ -6,16 +6,20 @@
     "configurations": [
 
         {
-            "name": "Mortality Prediction - CHOC - xgbclassifier",
+            "name": "Prediction",
             "type": "debugpy",
             "request": "launch",
             "module": "src.scripts.supervised.supervised_learning",
             "args": [
                 "--hospital", "choc", 
-                "--model_type", "xgbclassifier", 
+                "--experiment_type", "supervised_learning",
+                "--model_type", "xgbregressor", 
+                "--prediction_type", "discharge_mortality",
                 "--mode", "single_fold", 
                 "--fold", "0",
-                "--experiment_variant", "quick_test"
+                "--experiment_variant", "quick_test",
+                "--search_variant", "random_search",
+                "--n_search_iterations", "2"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

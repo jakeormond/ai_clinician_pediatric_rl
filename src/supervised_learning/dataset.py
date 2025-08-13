@@ -66,18 +66,75 @@ class Dataset:
         to a binary outcome (1 if the patient died at that timepoint, 0 if 
         they survive) only for those specific timepoints.
         """
+
+        encounter_ids = self.dataframe[self.config["encounter_col"]].unique()
+
         # find the encounter_ids that have target_data equal to 1
         target_encounter_ids = self.dataframe[self.dataframe[self.target_col] == 1][self.encounter_col].unique()
+        print(f"Found {len(target_encounter_ids)} encounter IDs with target_data = 1")
         
-        if self.config["prediction_time"] == "all":
+        # get the surviving encounter_ids
+        surviving_encounter_ids = set(encounter_ids) - set(target_encounter_ids)
+        
+        if self.config["prediction_type"] == "mortality_all":
             # all values for the target_data are 1 for the encounter_ids that have target_data equal to 1
             self.dataframe[self.target_col] = self.dataframe[self.encounter_col].apply(
                 lambda x: 1 if x in target_encounter_ids else 0
             )       
 
         else:
-            # not implemented yet, so raise an error
-            raise NotImplementedError("Prediction time 'specific' is not implemented yet.")
+            non_sur_data = self.dataframe[
+                    self.dataframe[self.encounter_col].isin(target_encounter_ids)
+                ].copy()
+            
+            if self.config["prediction_type"] == "mortality_24":
+                # just the last 24 rows are labelled as 1 for the encounter_ids that have target_data equal to 1
+                # Get data for encounters that should have mortality=1
+                
+
+                last_24_rows = non_sur_data.groupby(self.encounter_col).tail(24)
+
+                # Set target to 1 for these rows
+                self.dataframe.loc[last_24_rows.index, self.target_col] = 1  
+
+            elif self.config["prediction_type"] == "discharge_mortality":                    
+                
+                # for each encounter in survivor_data, set the first half of rows to 1
+                first_half_indices = (
+                    self.dataframe.groupby(self.encounter_col)
+                    .apply(lambda group: group.index[:len(group)//2])
+                    .explode()
+                    .astype(int)
+                )
+
+                # Set target to 1 for first half rows
+                self.dataframe.loc[first_half_indices, self.target_col] = 1
+
+                # set second half indices to 0 for non-survivors
+                second_half_non_indices = (
+                    non_sur_data.groupby(self.encounter_col)
+                    .apply(lambda group: group.index[len(group)//2:])
+                    .explode()
+                    .astype(int)
+                )
+                self.dataframe.loc[second_half_non_indices, self.target_col] = 0
+
+                # set second half indices to 2 for survivors
+                survivor_data = self.dataframe[
+                    self.dataframe[self.encounter_col].isin(surviving_encounter_ids)
+                ].copy()
+
+                second_half_sur_indices = ( 
+                    survivor_data.groupby(self.encounter_col)
+                    .apply(lambda group: group.index[len(group)//2:])
+                    .explode()
+                    .astype(int)
+                )
+                self.dataframe.loc[second_half_sur_indices, self.target_col] = 2
+
+            else:
+                # not implemented yet, so raise an error
+                raise NotImplementedError("Prediction time 'specific' is not implemented yet.")
 
     def modeling_data(self, encounter_ids):
         """

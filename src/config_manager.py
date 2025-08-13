@@ -99,6 +99,9 @@ class ConfigManager:
         with open(hospital_config_path, 'r') as f:
             self._hospital_config = yaml.safe_load(f)
 
+        # get prediction type from config
+        self._hospital_config['prediction_type'] = self.prediction_type
+
         if 'dataframe_path' in self._hospital_config:
             if not os.path.isabs(self._hospital_config['dataframe_path']):
                 self._hospital_config['dataframe_path'] = os.path.join(
@@ -192,7 +195,7 @@ class ConfigManager:
 
     def set_experiment_name(self):
         self.experiment_name = \
-            f"{self.hospital}_{self.experiment_type}_{self.model_type}_{self.experiment_variant}_{self.start_time}"
+            f"{self.hospital}_{self.prediction_type}_{self.model_type}_{self.search_variant}_{self.experiment_variant}_{self.start_time}"
         # make directory if it doesn't exist
         self._create_experiment_dir()
 

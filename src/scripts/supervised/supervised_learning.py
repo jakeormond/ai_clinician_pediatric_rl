@@ -26,14 +26,22 @@ def parse_arguments():
                         default='choc', 
                         choices=['choc', 'mimic'], 
                         help='Hospital dataset to use (default: choc)')
+    
     parser.add_argument('--experiment_type', 
                         default='supervised_learning', 
                         choices=['supervised_learning', 'reinforcement_learning'], 
                         help='Type of experiment to run (default: supervised_learning)')
+    
     parser.add_argument('--model_type', 
                         default='xgbclassifier', 
                         choices=['xgbclassifier', 'xgbregressor'], 
-                        help='Model type to train (default: xgbclassifier)')    
+                        help='Model type to train (default: xgbclassifier)') 
+    
+    parser.add_argument('--prediction_type', 
+                        default='mortality_all', 
+                        choices=['mortality_all', 'mortality_24', 'discharge_mortality'], 
+                        help='type of predictoin to make (default: mortality_all)') 
+
     parser.add_argument('--mode', type=str, default='single_fold',
                         choices=['single_fold', 'aggregate'],
                         help='Mode of training: single_fold or aggregate (default: single_fold)')
@@ -104,7 +112,7 @@ def main():
         # already if another folder was run)
         # config_manager.set_experiment_name()
         
-        # # update config with n_fodls and current fold 
+        # # update config with n_folds and current fold 
         # config_manager.set_cv_config() # sets the number of outer and inner folds
         # config_manager.add_fold(args.fold)
         

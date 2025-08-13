@@ -140,16 +140,20 @@ def outer_training_loop(dataset, config_manager):
         elif config_manager.model_type == "xgbregressor":
             scoring_metric = 'neg_mean_squared_error'
         
-        n_jobs_safe = get_safe_n_jobs()
-        print(f"Using n_jobs={n_jobs_safe} for CV (SLURM_CPUS_PER_TASK={os.environ.get('SLURM_CPUS_PER_TASK', 'not set')})")
-       
+        if config_manager.env == "hpc": # set n processes to 8 for HPC
+            n_jobs = 8
+        else:
+            n_jobs = -1
+
+        print(f"Using {n_jobs} processes for hyperparameter tuning")
+        
         if config_manager.search_variant == "grid_search":
             grid_search = GridSearchCV(
                 pipe, 
                 pipe_grid, 
                 cv=kf_inner, 
                 scoring=scoring_metric, 
-                n_jobs=-1, # use all available CPU cores
+                n_jobs=n_jobs, # use all available CPU cores
                 verbose=2
             )
         elif config_manager.search_variant == "random_search":
@@ -159,7 +163,7 @@ def outer_training_loop(dataset, config_manager):
                 n_iter=config_manager.n_search_iterations,
                 cv=kf_inner, 
                 scoring=scoring_metric, 
-                n_jobs=-1, # use all available CPU cores
+                n_jobs=n_jobs, # use all available CPU cores
                 verbose=2,
                 random_state=config_manager.hospital_config["seed"]
             )

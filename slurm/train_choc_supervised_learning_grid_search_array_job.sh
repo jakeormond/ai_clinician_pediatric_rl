@@ -7,7 +7,7 @@
 #SBATCH --array=0-4
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=08:00:00
 #SBATCH --partition=normal
@@ -62,13 +62,13 @@ echo "Starting training for fold $SLURM_ARRAY_TASK_ID..."
 python -m src.scripts.supervised.supervised_learning \
     --hospital choc \
     --experiment_type supervised_learning \
-    --model_type xgbclassifier \
+    --model_type xgbregressor \
     --prediction_type discharge_mortality \
     --mode single_fold \
     --fold $SLURM_ARRAY_TASK_ID \
     --experiment_variant standard \
     --search_variant random_search \
-    --n_search_iterations 30 \
+    --n_search_iterations 20 \
     --start_time $START_TIME 
 
 exit_code=$?

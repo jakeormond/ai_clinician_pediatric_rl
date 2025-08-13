@@ -158,7 +158,7 @@ def outer_training_loop(dataset, config_manager):
         print(f"Best hyperparameters for outer fold {outer_fold}: {best_params}")
 
         # Retrain model on full outer train set with best hyperparameters
-        if config_manager.model_type == "xgclassifier":
+        if config_manager.model_type == "xgbclassifier":
             best_model = xgb.XGBClassifier(**best_params, eval_metric='logloss')
         elif config_manager.model_type == "xgbregressor":
             best_model = xgb.XGBRegressor(**best_params, eval_metric='rmse')

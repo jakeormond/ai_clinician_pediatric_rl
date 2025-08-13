@@ -32,7 +32,17 @@ class ConfigManager:
         elif self.mode == "aggregate":
             
             if self.experiment_folder is None:
-                raise ValueError("experiment_dir must be provided in aggregate mode")
+                raise ValueError("experiment_folder must be provided in aggregate mode")
+            
+            # model type needs to be found from experiment_folder, it is either 
+            # xgbclassifier or xgbregressor
+            if "xgbclassifier" in self.experiment_folder:
+                self.model_type = "xgbclassifier"
+            elif "xgbregressor" in self.experiment_folder:
+                self.model_type = "xgbregressor"
+            else:
+                raise ValueError("model_type not found in experiment_folder, must be either xgbclassifier or xgbregressor")
+                        
             # join experiment_dir with self.paths['experiments_dir']
             self.experiment_dir = Path(self.paths['experiments_dir']) / self.experiment_folder
 
@@ -88,6 +98,9 @@ class ConfigManager:
             raise FileNotFoundError(f"Hospital config file not found: {hospital_config_path}")
         with open(hospital_config_path, 'r') as f:
             self._hospital_config = yaml.safe_load(f)
+
+        # get prediction type from config
+        self._hospital_config['prediction_type'] = self.prediction_type
 
         if 'dataframe_path' in self._hospital_config:
             if not os.path.isabs(self._hospital_config['dataframe_path']):
@@ -182,7 +195,7 @@ class ConfigManager:
 
     def set_experiment_name(self):
         self.experiment_name = \
-            f"{self.hospital}_{self.experiment_type}_{self.model_type}_{self.experiment_variant}_{self.start_time}"
+            f"{self.hospital}_{self.prediction_type}_{self.model_type}_{self.search_variant}_{self.experiment_variant}_{self.start_time}"
         # make directory if it doesn't exist
         self._create_experiment_dir()
 

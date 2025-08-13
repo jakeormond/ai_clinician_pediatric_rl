@@ -26,14 +26,22 @@ def parse_arguments():
                         default='choc', 
                         choices=['choc', 'mimic'], 
                         help='Hospital dataset to use (default: choc)')
+    
     parser.add_argument('--experiment_type', 
                         default='supervised_learning', 
                         choices=['supervised_learning', 'reinforcement_learning'], 
                         help='Type of experiment to run (default: supervised_learning)')
+    
     parser.add_argument('--model_type', 
                         default='xgbclassifier', 
                         choices=['xgbclassifier', 'xgbregressor'], 
-                        help='Model type to train (default: xgbclassifier)')    
+                        help='Model type to train (default: xgbclassifier)') 
+    
+    parser.add_argument('--prediction_type', 
+                        default='mortality_all', 
+                        choices=['mortality_all', 'mortality_24', 'discharge_mortality'], 
+                        help='type of predictoin to make (default: mortality_all)') 
+
     parser.add_argument('--mode', type=str, default='single_fold',
                         choices=['single_fold', 'aggregate'],
                         help='Mode of training: single_fold or aggregate (default: single_fold)')
@@ -73,8 +81,8 @@ def parse_arguments():
 def validate_arguments(args):
     if args.mode == "single_fold" and args.fold is None:
         raise ValueError("--fold is required when mode is 'single_fold'")
-    if args.mode == "aggregate" and args.experiment_dir is None:
-        raise ValueError("--experiment_dir is required when mode is 'aggregate'")
+    if args.mode == "aggregate" and args.experiment_folder is None:
+        raise ValueError("--experiment_folder is required when mode is 'aggregate'")
 
 
 def log_fold_results_to_wandb(results):
@@ -104,7 +112,7 @@ def main():
         # already if another folder was run)
         # config_manager.set_experiment_name()
         
-        # # update config with n_fodls and current fold 
+        # # update config with n_folds and current fold 
         # config_manager.set_cv_config() # sets the number of outer and inner folds
         # config_manager.add_fold(args.fold)
         
@@ -137,6 +145,7 @@ def main():
             wandb.finish()
 
     elif args.mode == "aggregate":
+        config_manager.model_type
 
         # aggregate results from all folds
         results = aggregate_results_across_outer_folds(config_manager)

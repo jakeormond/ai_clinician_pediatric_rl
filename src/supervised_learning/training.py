@@ -112,7 +112,7 @@ def outer_training_loop(dataset, config_manager):
 
         if config_manager.model_type == "xgbclassifier":
             model = xgb.XGBClassifier(
-                eval_metric='logloss', 
+                eval_metric='mlogloss', 
                 verbosity=2
             )
         elif config_manager.model_type == "xgbregressor":
@@ -126,16 +126,26 @@ def outer_training_loop(dataset, config_manager):
         pipe = Pipeline([
             ('scaler', StandardScaler()),
             ('model', model)
-        ])
-        
+        ])        
 
         # grid search for hyper
+        if config_manager.model_type == "xgbclassifier":
+        # Check number of classes first
+            n_classes = len(np.unique(y_outer_train))
+            if n_classes == 2:
+                scoring_metric = 'average_precision'  # Binary classification
+            else:
+                scoring_metric = 'f1_macro'  # Multiclass classification
+        
+        elif config_manager.model_type == "xgbregressor":
+            scoring_metric = 'neg_mean_squared_error'
+        
         if config_manager.search_variant == "grid_search":
             grid_search = GridSearchCV(
                 pipe, 
                 pipe_grid, 
                 cv=kf_inner, 
-                scoring='average_precision', 
+                scoring=scoring_metric, 
                 n_jobs=-1, # use all available CPU cores
                 verbose=2
             )
@@ -145,7 +155,7 @@ def outer_training_loop(dataset, config_manager):
                 pipe_grid, 
                 n_iter=config_manager.n_search_iterations,
                 cv=kf_inner, 
-                scoring='neg_mean_squared_error', 
+                scoring=scoring_metric, 
                 n_jobs=-1, # use all available CPU cores
                 verbose=2,
                 random_state=config_manager.hospital_config["seed"]
@@ -179,18 +189,40 @@ def outer_training_loop(dataset, config_manager):
         # get predictions for the outer test set
         if config_manager.model_type == "xgbclassifier":
             y_pred = best_model.predict(X_outer_test_scaled)
-            y_pred_proba = best_model.predict_proba(X_outer_test_scaled)[:, 1]
+            y_pred_proba_raw = best_model.predict_proba(X_outer_test_scaled)
+
+            # Handle multiclass vs binary
+            if y_pred_proba_raw.shape[1] == 2:
+                # Binary classification: use positive class probabilities
+                y_pred_proba = y_pred_proba_raw[:, 1]
+            else:
+                # Multiclass: use max probability or specific class
+                y_pred_proba = y_pred_proba_raw[np.arange(len(y_outer_test)), y_outer_test.astype(int)]
+                # Or for specific class: y_pred_proba = y_pred_proba_raw[:, 2]  # Class 2 probabilities
+                
         elif config_manager.model_type == "xgbregressor":
-            y_pred = None
-            y_pred_proba = best_model.predict(X_outer_test_scaled)
+            # y_pred = None
+            # y_pred_proba = best_model.predict(X_outer_test_scaled)
+
+            y_pred_continuous = best_model.predict(X_outer_test_scaled)
+            y_pred = np.round(np.clip(y_pred_continuous, 0, 2)).astype(int)  # Round to nearest class
+            y_pred_proba = y_pred_continuous  # Use continuous values as "probabilities"
 
         # calculate metrics on the outer test set
-        metrics = calculate_metrics(y_outer_test, y_pred_proba, config_manager.model_type)
+        # calculate metrics on the outer test set
+        if config_manager.model_type == "xgbclassifier" and y_pred_proba_raw.shape[1] > 2:
+            # Pass full probability matrix for multiclass
+            metrics = calculate_metrics(y_outer_test, y_pred_proba, config_manager.model_type, y_pred_proba_raw=y_pred_proba_raw)
+        else:
+            # Binary classification or regression
+            metrics = calculate_metrics(y_outer_test, y_pred_proba, config_manager.model_type)
         print(f"Outer Fold {outer_fold}: Test metrics: {metrics}")
 
         # save to the fold directory        
         with open(os.path.join(config_manager.fold_dir, f"metrics_fold_{outer_fold}.json"), "w") as f:
-            json.dump(metrics, f)
+            serializable_metrics = {k: float(v) if isinstance(v, (np.floating, np.integer)) else v 
+                          for k, v in metrics.items()}
+            json.dump(serializable_metrics, f)
 
         # create a DataFrame to hold the predictions and true labels
         predictions_df = pd.DataFrame({
@@ -269,7 +301,8 @@ def aggregate_results_across_outer_folds(config):
     all_pred_proba = all_predictions_df["predicted_proba"].values    
 
     # calculate overall metrics
-    overall_metrics = calculate_metrics(all_true_labels, all_pred_proba)
+    overall_metrics = calculate_metrics(all_true_labels, \
+                        all_pred_proba, config.model_type)
     print(f"Overall metrics: {overall_metrics}")
     
     with open(config.experiment_dir / "overall_metrics.json", "w") as f:

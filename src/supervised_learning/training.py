@@ -140,7 +140,7 @@ def outer_training_loop(dataset, config_manager):
         elif config_manager.model_type == "xgbregressor":
             scoring_metric = 'neg_mean_squared_error'
         
-        if config_manager.env == "hpc": # set n processes to 8 for HPC
+        if config_manager.environment == "hpc": # set n processes to 8 for HPC
             n_jobs = 8
         else:
             n_jobs = -1

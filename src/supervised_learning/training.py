@@ -140,6 +140,9 @@ def outer_training_loop(dataset, config_manager):
         elif config_manager.model_type == "xgbregressor":
             scoring_metric = 'neg_mean_squared_error'
         
+        n_jobs_safe = get_safe_n_jobs()
+        print(f"Using n_jobs={n_jobs_safe} for CV (SLURM_CPUS_PER_TASK={os.environ.get('SLURM_CPUS_PER_TASK', 'not set')})")
+       
         if config_manager.search_variant == "grid_search":
             grid_search = GridSearchCV(
                 pipe, 

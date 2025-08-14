@@ -1,17 +1,17 @@
 n_estimators:
   type: randint
-  low: 50
+  low: 300
   high: 500
 
 max_depth:
   type: randint
-  low: 3
-  high: 10
+  low: 2
+  high: 6
 
 learning_rate:
   type: loguniform
-  low: 0.001
-  high: 0.3
+  low: 0.01
+  high: 0.2
 
 subsample:
   type: uniform
@@ -20,18 +20,18 @@ subsample:
 
 colsample_bytree:
   type: uniform
-  loc: 0.6
+  loc: 0.5
   scale: 0.4
 
 reg_alpha:
   type: loguniform  
-  low: 0.001
+  low: 0.01
   high: 1.0
 
 reg_lambda:
   type: loguniform
   low: 0.001
-  high: 1.0
+  high: 0.1
 
 gamma:
   type: uniform

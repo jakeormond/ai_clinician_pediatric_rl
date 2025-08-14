@@ -149,6 +149,9 @@ def outer_training_loop(dataset, config_manager):
                 scoring_metric = 'average_precision'  # Binary classification
             else:
                 scoring_metric = 'f1_macro'  # Multiclass classification
+                # Define your class weights
+                class_weights = {0: 5.0, 1: 1.0, 2: 1.0}  # Boost class 0
+                sample_weights = np.array([class_weights[int(label)] for label in y_outer_train])
         
         elif config_manager.model_type == "xgbregressor":
             scoring_metric = 'neg_mean_squared_error'
@@ -177,7 +180,13 @@ def outer_training_loop(dataset, config_manager):
                 random_state=config_manager.hospital_config["seed"]
             )
 
-        grid_search.fit(X_outer_train, y_outer_train, groups=groups)
+        if config_manager.model_type == "xgbclassifier" and n_classes > 2:
+            # For multiclass, we need to pass the sample weights
+            grid_search.fit(X_outer_train, y_outer_train, groups=groups, 
+                                    model__sample_weight=sample_weights)
+        else:
+            # For binary classification or regression, we can fit without sample weights
+            grid_search.fit(X_outer_train, y_outer_train, groups=groups)
 
         # Get best hyperparameters from inner CV
         best_params = remove_model_prefix_from_params(grid_search.best_params_)
@@ -195,7 +204,13 @@ def outer_training_loop(dataset, config_manager):
         scaler = StandardScaler()
         X_outer_train_scaled = scaler.fit_transform(X_outer_train)        
         
-        best_model.fit(X_outer_train_scaled, y_outer_train)
+        if config_manager.model_type == "xgbclassifier" and n_classes > 2:
+            # For multiclass, we need to pass the sample weights
+            best_model.fit(X_outer_train_scaled, y_outer_train, 
+                           sample_weight=sample_weights)
+        else:
+            # For binary classification or regression, we can fit without sample weights
+            best_model.fit(X_outer_train_scaled, y_outer_train)
 
         # Generate predictions on the outer test set
         X_outer_test, y_outer_test, outer_test_encounters_and_times = \

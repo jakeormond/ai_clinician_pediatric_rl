@@ -9,7 +9,7 @@ from sklearn.metrics import (accuracy_score, roc_auc_score,
 
 import numpy as np
 
-def calculate_metrics(y_true, y_pred_proba, model_type, y_pred_proba_raw=None):
+def calculate_metrics(y_true, y_pred_proba, model_type, y_pred = None, y_pred_proba_raw=None):
     """
     Calculate and return various evaluation metrics.
     """
@@ -37,17 +37,22 @@ def calculate_metrics(y_true, y_pred_proba, model_type, y_pred_proba_raw=None):
             metrics['ece'] = calculate_ece_binary(y_pred_proba, y_true)
 
         else:
-            y_pred_true_class_proba = y_pred_proba_raw[np.arange(len(y_true)), y_true.astype(int)]
-            y_pred_true_class_proba = np.clip(y_pred_true_class_proba, 1e-15, 1-1e-15)
+            if y_pred_proba_raw is None:
+                # this is the aggregation case, where y_pred_proba_raw has 
+                # already had its dimensions reduced
+                pass
+            else:
+                y_pred_true_class_proba = y_pred_proba_raw[np.arange(len(y_true)), y_true.astype(int)]
+                y_pred_true_class_proba = np.clip(y_pred_true_class_proba, 1e-15, 1-1e-15)
 
-            # For multiclass, we need different metrics
-            y_pred_classes = np.argmax(y_pred_proba_raw, axis=1)
+                # For multiclass, we need different metrics
+                y_pred = np.argmax(y_pred_proba_raw, axis=1)
             
             metrics = {
-                'accuracy': accuracy_score(y_true, y_pred_classes),
+                'accuracy': accuracy_score(y_true, y_pred),
                 'log_loss': log_loss(y_true, y_pred_proba_raw) if y_pred_proba_raw is not None else None,
-                'f1_macro': f1_score(y_true, y_pred_classes, average='macro'),
-                'f1_weighted': f1_score(y_true, y_pred_classes, average='weighted'),
+                'f1_macro': f1_score(y_true, y_pred, average='macro'),
+                'f1_weighted': f1_score(y_true, y_pred, average='weighted'),
                 'mean_true_class_probability': np.mean(y_pred_true_class_proba),  # ✅ This is what you want!
             }
 

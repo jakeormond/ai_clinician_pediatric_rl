@@ -77,6 +77,7 @@ def remove_model_prefix_from_params(best_params):
 
 def outer_training_loop(dataset, config_manager):
    
+    n_classes = len(np.unique(dataset.dataframe[config_manager.hospital_config["target_col"]]))
 
     # prepare the parameters for the pipeline
     pipe_grid = prepare_param_for_pipeline(config_manager)
@@ -144,7 +145,6 @@ def outer_training_loop(dataset, config_manager):
         # grid search for hyper
         if config_manager.model_type == "xgbclassifier":
         # Check number of classes first
-            n_classes = len(np.unique(y_outer_train))
             if n_classes == 2:
                 scoring_metric = 'average_precision'  # Binary classification
             else:
@@ -208,7 +208,7 @@ def outer_training_loop(dataset, config_manager):
             y_pred_proba_raw = best_model.predict_proba(X_outer_test_scaled)
 
             # Handle multiclass vs binary
-            if y_pred_proba_raw.shape[1] == 2:
+            if n_classes == 2:
                 # Binary classification: use positive class probabilities
                 y_pred_proba = y_pred_proba_raw[:, 1]
             else:
@@ -221,14 +221,18 @@ def outer_training_loop(dataset, config_manager):
             # y_pred_proba = best_model.predict(X_outer_test_scaled)
 
             y_pred_continuous = best_model.predict(X_outer_test_scaled)
-            y_pred = np.round(np.clip(y_pred_continuous, 0, 2)).astype(int)  # Round to nearest class
+
+            max_class = n_classes - 1   
+            
+            y_pred = np.round(np.clip(y_pred_continuous, 0, max_class)).astype(int)  # Round to nearest class
             y_pred_proba = y_pred_continuous  # Use continuous values as "probabilities"
 
         # calculate metrics on the outer test set
         # calculate metrics on the outer test set
         if config_manager.model_type == "xgbclassifier" and y_pred_proba_raw.shape[1] > 2:
             # Pass full probability matrix for multiclass
-            metrics = calculate_metrics(y_outer_test, y_pred_proba, config_manager.model_type, y_pred_proba_raw=y_pred_proba_raw)
+            metrics = calculate_metrics(y_outer_test, y_pred_proba, 
+                        config_manager.model_type, y_pred_proba_raw=y_pred_proba_raw)
         else:
             # Binary classification or regression
             metrics = calculate_metrics(y_outer_test, y_pred_proba, config_manager.model_type)
@@ -248,6 +252,12 @@ def outer_training_loop(dataset, config_manager):
             'predicted_label': y_pred,
             'predicted_proba': y_pred_proba
         })
+
+        # if xgbclassifier and multiclass, we need to save the full probability matrix
+        if config_manager.model_type == "xgbclassifier" and y_pred_proba_raw.shape[1] > 2:
+            # Add the full probability matrix to the DataFrame
+            for i in range(y_pred_proba_raw.shape[1]):
+                predictions_df[f'predicted_proba_class_{i}'] = y_pred_proba_raw[:, i]
 
         # save the predictions to a parquet file
         predictions_df.to_parquet(os.path.join(config_manager.fold_dir, 
@@ -318,19 +328,49 @@ def aggregate_results_across_outer_folds(config):
 
     # calculate overall metrics
     overall_metrics = calculate_metrics(all_true_labels, \
-                        all_pred_proba, config.model_type)
+            all_pred_proba, config.model_type, y_pred = all_predictions)
     print(f"Overall metrics: {overall_metrics}")
     
     with open(config.experiment_dir / "overall_metrics.json", "w") as f:
         json.dump(overall_metrics, f)
 
+    # make plots
+    n_classes = len(np.unique(all_true_labels))
+    is_classification = config.model_type == "xgbclassifier"
+
+        # Pass y_pred_proba_raw for multiclass
+    if is_classification and n_classes > 2:
+        # You'll need to reconstruct the full probability matrix from your saved data
+        # This depends on how you saved the individual class probabilities
+        y_pred_proba_raw = None  # Reconstruct this from your DataFrame
+        
+        create_all_plots(
+            all_true_labels, 
+            all_predictions, 
+            all_pred_proba, 
+            config.experiment_dir,
+            is_classification=is_classification,
+            y_pred_proba_raw=y_pred_proba_raw
+        )
+    else:
+        create_all_plots(
+            all_true_labels, 
+            all_predictions, 
+            all_pred_proba, 
+            config.experiment_dir,
+            is_classification=is_classification
+        )
+    
+    
+    
+    
     # plot ROC curve, precision-recall curve, calibration curve, and confusion matrix
-    if config.model_type == "xgbclassifier":
-        is_classification = True
-    elif config.model_type == "xgbregressor":
-        is_classification = False
-    create_all_plots(all_true_labels, all_predictions, all_pred_proba, \
-            config.experiment_dir, is_classification=is_classification)
+    # if config.model_type == "xgbclassifier":
+    #     is_classification = True
+    # elif config.model_type == "xgbregressor":
+    #     is_classification = False
+    # create_all_plots(all_true_labels, all_predictions, all_pred_proba, \
+    #         config.experiment_dir, is_classification=is_classification)
 
 
 

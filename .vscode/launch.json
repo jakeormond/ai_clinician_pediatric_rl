@@ -13,7 +13,7 @@
             "args": [
                 "--hospital", "choc", 
                 "--experiment_type", "supervised_learning",
-                "--model_type", "xgbregressor", 
+                "--model_type", "xgbclassifier", 
                 "--prediction_type", "discharge_mortality",
                 "--mode", "single_fold", 
                 "--fold", "0",
@@ -47,7 +47,7 @@
         },
 
         {
-            "name": "Mortality Prediction aggregate - CHOC - module",
+            "name": "Prediction aggregate - CHOC - module",
             "type": "debugpy",
             "request": "launch",
             "module": "src.scripts.supervised.supervised_learning",
@@ -55,7 +55,7 @@
                 "--hospital", "choc", 
                 "--model_type", "xgbregressor", 
                 "--mode", "aggregate", 
-                "--experiment_folder", "choc_supervised_learning_xgbclassifier_standard_20250809_235323"
+                "--experiment_folder", "choc_discharge_mortality_xgbclassifier_random_search_standard_20250814_015942"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

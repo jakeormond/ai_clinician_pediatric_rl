@@ -55,7 +55,8 @@
                 "--hospital", "choc", 
                 "--model_type", "xgbregressor", 
                 "--mode", "aggregate", 
-                "--experiment_folder", "choc_discharge_mortality_xgbclassifier_random_search_standard_20250814_015942"
+                "--experiment_folder", "choc_discharge_mortality_xgbclassifier_random_search_standard_20250814_125039",
+                "--prediction_type", "discharge_mortality"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

@@ -149,10 +149,7 @@ def outer_training_loop(dataset, config_manager):
                 scoring_metric = 'average_precision'  # Binary classification
             else:
                 scoring_metric = 'f1_macro'  # Multiclass classification
-                # Define your class weights
-                class_weights = {0: 5.0, 1: 1.0, 2: 1.0}  # Boost class 0
-                sample_weights = np.array([class_weights[int(label)] for label in y_outer_train])
-        
+                
         elif config_manager.model_type == "xgbregressor":
             scoring_metric = 'neg_mean_squared_error'
         
@@ -180,10 +177,19 @@ def outer_training_loop(dataset, config_manager):
                 random_state=config_manager.hospital_config["seed"]
             )
 
-        if config_manager.model_type == "xgbclassifier" and n_classes > 2:
-            # For multiclass, we need to pass the sample weights
-            grid_search.fit(X_outer_train, y_outer_train, groups=groups, 
-                                    model__sample_weight=sample_weights)
+        if config_manager.model_type in ["xgbclassifier", "xgbregressor"]:
+            if n_classes > 2:
+                # Define your class weights
+                class_weights = {0: 5.0, 1: 1.0, 2: 1.0}  # Boost class 0
+                sample_weights = np.array([class_weights[int(label)] for label in y_outer_train])
+        
+                print(f"Class distribution: {np.bincount(y_outer_train.astype(int))}")
+                print(f"Using class weights: {class_weights}")
+                print(f"Sample weights range: [{sample_weights.min():.2f}, {sample_weights.max():.2f}]")    
+
+                # For multiclass, we need to pass the sample weights
+                grid_search.fit(X_outer_train, y_outer_train, groups=groups, 
+                                        model__sample_weight=sample_weights)
         else:
             # For binary classification or regression, we can fit without sample weights
             grid_search.fit(X_outer_train, y_outer_train, groups=groups)
@@ -341,13 +347,24 @@ def aggregate_results_across_outer_folds(config):
     all_predictions = all_predictions_df["predicted_label"].values
     all_pred_proba = all_predictions_df["predicted_proba"].values    
 
+    if config.prediction_type == "discharge_mortality":
+        # For multiclass, we need to reconstruct the full probability matrix
+        y_pred_proba_raw = all_predictions_df.filter(like='predicted_proba_class_').values
+        if y_pred_proba_raw.size == 0:
+            y_pred_proba_raw = None
+    else:
+        y_pred_proba_raw = None
+
     # calculate overall metrics
     overall_metrics = calculate_metrics(all_true_labels, \
-            all_pred_proba, config.model_type, y_pred = all_predictions)
+            all_pred_proba, config.model_type, y_pred = all_predictions, y_pred_proba_raw=y_pred_proba_raw)
     print(f"Overall metrics: {overall_metrics}")
     
     with open(config.experiment_dir / "overall_metrics.json", "w") as f:
-        json.dump(overall_metrics, f)
+        serializable_metrics = {k: float(v) if isinstance(v, (np.floating, np.integer)) else v 
+                            for k, v in overall_metrics.items()}
+        json.dump(serializable_metrics, f, indent=2)
+
 
     # make plots
     n_classes = len(np.unique(all_true_labels))

@@ -200,7 +200,7 @@ def outer_training_loop(dataset, config_manager):
 
         # Retrain model on full outer train set with best hyperparameters
         if config_manager.model_type == "xgbclassifier":
-            best_model = xgb.XGBClassifier(**best_params, eval_metric='logloss')
+            best_model = xgb.XGBClassifier(**best_params, eval_metric='mlogloss')
         elif config_manager.model_type == "xgbregressor":
             best_model = xgb.XGBRegressor(**best_params, eval_metric='rmse')
         else:
@@ -210,7 +210,7 @@ def outer_training_loop(dataset, config_manager):
         scaler = StandardScaler()
         X_outer_train_scaled = scaler.fit_transform(X_outer_train)        
         
-        if config_manager.model_type == "xgbclassifier" and n_classes > 2:
+        if config_manager.model_type in ["xgbclassifier", "xgbregressor"] and n_classes > 2:
             # For multiclass, we need to pass the sample weights
             best_model.fit(X_outer_train_scaled, y_outer_train, 
                            sample_weight=sample_weights)

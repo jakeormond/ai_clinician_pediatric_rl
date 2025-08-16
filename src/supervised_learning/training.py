@@ -342,6 +342,21 @@ def aggregate_results_across_outer_folds(config):
 
     # concatenate all predictions DataFrames
     all_predictions_df = pd.concat(all_predictions_dfs, ignore_index=True)
+    # sort by encounter_id and time
+    all_predictions_df.sort_values(by=['encounter_id', 'time'], inplace=True)
+    all_predictions_df.reset_index(drop=True, inplace=True)
+
+    # check if there are any duplicates of encounter_id and time
+    duplicates = all_predictions_df[all_predictions_df.
+            duplicated(subset=['encounter_id', 'time'], keep=False)]
+    if duplicates.any():
+        # raise an error if there are duplicates
+        raise ValueError("Duplicate encounter_id and time found in predictions DataFrame. ")
+       
+    # extract the true labels, predicted labels, and predicted probabilities
+    # Note: y_pred_proba is the continuous prediction for regression, or the probability for classification
+    # For multiclass, y_pred_proba_raw will contain the full probability matrix
+    # For binary classification, y_pred_proba will be the probability of the positive class
     all_true_labels = all_predictions_df["true_label"].values
     all_predictions = all_predictions_df["predicted_label"].values
     all_pred_proba = all_predictions_df["predicted_proba"].values    
@@ -373,7 +388,6 @@ def aggregate_results_across_outer_folds(config):
     if is_classification and n_classes > 2:
         # You'll need to reconstruct the full probability matrix from your saved data
         # This depends on how you saved the individual class probabilities
-        y_pred_proba_raw = None  # Reconstruct this from your DataFrame
         
         create_all_plots(
             all_true_labels, 
@@ -394,16 +408,6 @@ def aggregate_results_across_outer_folds(config):
     
     
     
-    
-    # plot ROC curve, precision-recall curve, calibration curve, and confusion matrix
-    # if config.model_type == "xgbclassifier":
-    #     is_classification = True
-    # elif config.model_type == "xgbregressor":
-    #     is_classification = False
-    # create_all_plots(all_true_labels, all_predictions, all_pred_proba, \
-    #         config.experiment_dir, is_classification=is_classification)
-
-
 
 
 

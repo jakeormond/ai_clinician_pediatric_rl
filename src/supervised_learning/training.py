@@ -177,8 +177,7 @@ def outer_training_loop(dataset, config_manager):
                 random_state=config_manager.hospital_config["seed"]
             )
 
-        if config_manager.model_type in ["xgbclassifier", "xgbregressor"]:
-            if n_classes > 2:
+        if config_manager.model_type in ["xgbclassifier", "xgbregressor"] and n_classes > 2:
                 # Define your class weights
                 class_weights = {0: 5.0, 1: 1.0, 2: 1.0}  # Boost class 0
                 sample_weights = np.array([class_weights[int(label)] for label in y_outer_train])

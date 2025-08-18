@@ -1,3 +1,7 @@
+import numpy as np
+import pandas as pd  
+import matplotlib.pyplot as plt
+import shap
 from sklearn.metrics import (accuracy_score, roc_auc_score, 
                             precision_score, recall_score, 
                             f1_score, average_precision_score,
@@ -5,9 +9,7 @@ from sklearn.metrics import (accuracy_score, roc_auc_score,
                             precision_recall_curve, roc_curve, 
                             confusion_matrix, mean_squared_error,
                             mean_absolute_error, r2_score)  
-                           
 
-import numpy as np
 
 def calculate_metrics(y_true, y_pred_proba, model_type, y_pred = None, y_pred_proba_raw=None):
     """
@@ -40,6 +42,7 @@ def calculate_metrics(y_true, y_pred_proba, model_type, y_pred = None, y_pred_pr
             if y_pred_proba_raw is None:
                 # this is the aggregation case, where y_pred_proba_raw has 
                 # already had its dimensions reduced
+                y_pred_true_class_proba = np.clip(y_pred_proba, 1e-15, 1-1e-15)
                 pass
             else:
                 y_pred_true_class_proba = y_pred_proba_raw[np.arange(len(y_true)), y_true.astype(int)]
@@ -131,6 +134,89 @@ def calculate_ece_multiclass(y_pred_proba_raw, y_true, n_bins=10):
     return ece
 
 
-
+def calculate_shap_values(model, X_test, X_train_sample=None, model_type="xgbclassifier", 
+                         feature_names=None, max_display=20, save_path=None):
+    """
+    Calculate and visualize SHAP values for XGBoost models.
+    
+    Parameters:
+    - model: Trained XGBoost model
+    - X_test: Test data to explain
+    - X_train_sample: Sample of training data for TreeExplainer background (optional)
+    - model_type: 'xgbclassifier' or 'xgbregressor'
+    - feature_names: List of feature names
+    - max_display: Max features to show in plots
+    - save_path: Directory to save plots
+    """
+    
+    print("Calculating SHAP values...")
+    
+    # Create SHAP explainer - TreeExplainer is best for XGBoost
+    if X_train_sample is not None:
+        # Use training sample as background for better explanations
+        explainer = shap.TreeExplainer(model, X_train_sample)
+    else:
+        explainer = shap.TreeExplainer(model)
+    
+    # Calculate SHAP values for test set
+    shap_values = explainer.shap_values(X_test)
+    
+    print(f"SHAP values calculated. Shape: {shap_values.shape if isinstance(shap_values, np.ndarray) else [sv.shape for sv in shap_values]}")
+    
+    # Handle multiclass vs binary/regression
+    if model_type == "xgbclassifier" and isinstance(shap_values, list):
+        # Multiclass classification - shap_values is a list
+        n_classes = len(shap_values)
+        print(f"Multiclass model detected with {n_classes} classes")
+        
+        # Create plots for each class
+        for class_idx in range(n_classes):
+            print(f"\nGenerating plots for Class {class_idx}:")
+            
+            # Summary plot for this class
+            plt.figure(figsize=(10, 8))
+            shap.summary_plot(shap_values[class_idx], X_test, 
+                            feature_names=feature_names, 
+                            max_display=max_display, show=False)
+            plt.title(f'SHAP Summary Plot - Class {class_idx}')
+            if save_path:
+                plt.savefig(save_path / f'shap_summary_class_{class_idx}.png', 
+                           dpi=300, bbox_inches='tight')
+            plt.show()
+            
+            # Feature importance for this class
+            plt.figure(figsize=(10, 6))
+            shap.summary_plot(shap_values[class_idx], X_test, 
+                            feature_names=feature_names, 
+                            plot_type="bar", max_display=max_display, show=False)
+            plt.title(f'SHAP Feature Importance - Class {class_idx}')
+            if save_path:
+                plt.savefig(save_path / f'shap_importance_class_{class_idx}.png', 
+                           dpi=300, bbox_inches='tight')
+            plt.show()
+            
+    else:
+        # Binary classification or regression
+        print(f"Binary/regression model detected")
+        
+        # Summary plot (beeswarm)
+        plt.figure(figsize=(12, 8))
+        shap.summary_plot(shap_values, X_test, feature_names=feature_names, 
+                         max_display=max_display, show=False)
+        plt.title('SHAP Summary Plot')
+        if save_path:
+            plt.savefig(save_path / 'shap_summary.png', dpi=300, bbox_inches='tight')
+        plt.show()
+        
+        # Feature importance bar plot
+        plt.figure(figsize=(10, 6))
+        shap.summary_plot(shap_values, X_test, feature_names=feature_names, 
+                         plot_type="bar", max_display=max_display, show=False)
+        plt.title('SHAP Feature Importance')
+        if save_path:
+            plt.savefig(save_path / 'shap_importance.png', dpi=300, bbox_inches='tight')
+        plt.show()
+    
+    return shap_values, explainer
 
 

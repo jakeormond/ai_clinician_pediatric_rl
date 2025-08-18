@@ -19,10 +19,10 @@ class ConfigManager:
 
  
         self.paths, self.environment = load_paths()
+        self.set_hospital()
 
-        if self.mode == "single_fold":
-        
-            self.set_hospital()
+        if self.mode == "single_fold":        
+            
             self.set_experiment_name()
             self._create_experiment_dir()    
             self.set_cv_config()                   

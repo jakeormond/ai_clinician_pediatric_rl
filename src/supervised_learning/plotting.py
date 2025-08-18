@@ -7,6 +7,7 @@ from sklearn.metrics import roc_curve, auc, precision_recall_curve, confusion_ma
 from sklearn.calibration import calibration_curve
 from sklearn.preprocessing import label_binarize
 from itertools import cycle
+import shap
 
 
 # plots
@@ -244,3 +245,255 @@ def plot_confusion_matrix(y_true, y_pred, experiment_dir):
     plt.title('Confusion Matrix')
     plt.savefig(os.path.join(experiment_dir, 'confusion_matrix.png'))
     plt.close()
+
+
+def create_aggregated_shap_plots(config, all_shap_results, feature_names, max_display=20):
+    """Create SHAP plots aggregated across all folds."""
+    
+    print(f"Creating SHAP plots for {len(all_shap_results)} folds with {len(feature_names)} features")
+    
+    # Determine if this is multiclass
+    sample_shap = all_shap_results[0]['shap_values']
+    is_multiclass = len(sample_shap.shape) == 3 and sample_shap.shape[2] > 1
+    
+    if is_multiclass:
+        _create_multiclass_shap_plots(config, all_shap_results, feature_names, max_display)
+    else:
+        _create_binary_regression_shap_plots(config, all_shap_results, feature_names, max_display)
+    
+    print(f"✓ All SHAP plots saved to {config.experiment_dir}")
+
+
+def _create_multiclass_shap_plots(config, all_shap_results, feature_names, max_display):
+    """Create SHAP plots for multiclass models."""
+    
+    sample_shap = all_shap_results[0]['shap_values']
+    n_classes = sample_shap.shape[2] if len(sample_shap.shape) == 3 else 1
+    print(f"Multiclass detected: {n_classes} classes")
+    
+    # Combine data across folds for each class
+    combined_shap_by_class = [[] for _ in range(n_classes)]
+    combined_data = []
+    
+    for fold_result in all_shap_results:
+        combined_data.append(fold_result['test_data'])
+        shap_values_3d = fold_result['shap_values']  # Shape: (n_samples, n_features, n_classes)
+        
+        # ✅ Extract each class's SHAP values from 3D array
+        for class_idx in range(n_classes):
+            class_shap = shap_values_3d[:, :, class_idx]  # Shape: (n_samples, n_features)
+            combined_shap_by_class[class_idx].append(class_shap)
+    
+    # Stack arrays
+    combined_test_data = np.vstack(combined_data)
+
+    # ✅ CREATE COMBINED 3D ARRAY FOR WATERFALL PLOTS
+    combined_shap_3d = []
+    for fold_result in all_shap_results:
+        combined_shap_3d.append(fold_result['shap_values'])
+    combined_shap_3d = np.vstack(combined_shap_3d)  # Shape: (total_samples, n_features, n_classes)
+    
+    print(f"  Combined SHAP 3D shape: {combined_shap_3d.shape}")
+
+    # ✅ CREATE COMBINED MULTICLASS IMPORTANCE PLOT (3-color bar chart)
+    print("  Creating combined multiclass SHAP importance plot...")
+    plt.figure(figsize=(14, 10))
+    
+    # Use the 3D array directly with SHAP - it will automatically create multi-colored bars
+    shap.summary_plot(combined_shap_3d, combined_test_data,
+                    feature_names=feature_names, plot_type="bar", 
+                    max_display=max_display, show=False)
+    plt.title(f'SHAP Feature Importance - All Classes Combined (All Folds)', 
+             fontsize=16, pad=20)
+    plt.tight_layout()
+    plt.savefig(os.path.join(config.experiment_dir, 'shap_importance_all_classes.png'), 
+               dpi=300, bbox_inches='tight')
+    plt.close()
+        
+    print("    ✓ Combined multiclass plots saved")
+    
+    # ✅ INDIVIDUAL CLASS PLOTS (keep these for detailed analysis)
+    
+    for class_idx in range(n_classes):
+        combined_shap_class = np.vstack(combined_shap_by_class[class_idx])
+        
+        print(f"  Creating plots for Class {class_idx} ({len(combined_shap_class)} samples)")
+        
+        # ✅ Summary plot (beeswarm) - use larger figure for multiclass
+        plt.figure(figsize=(16, 12))  # Much larger for multiclass
+        shap.summary_plot(combined_shap_class, combined_test_data,
+                        feature_names=feature_names, max_display=max_display, show=False)
+        plt.title(f'SHAP Summary - Class {class_idx} (All Folds, n={len(combined_shap_class)})',
+                 fontsize=16, pad=20)
+        plt.tight_layout()
+        plt.savefig(os.path.join(config.experiment_dir, f'shap_summary_class_{class_idx}.png'), 
+                   dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # ✅ Feature importance bar plot - use taller figure
+        plt.figure(figsize=(14, 10))
+        shap.summary_plot(combined_shap_class, combined_test_data,
+                        feature_names=feature_names, plot_type="bar", 
+                        max_display=max_display, show=False)
+        plt.title(f'SHAP Feature Importance - Class {class_idx} (All Folds)',
+                 fontsize=16, pad=20)
+        plt.tight_layout()
+        plt.savefig(os.path.join(config.experiment_dir, f'shap_importance_class_{class_idx}.png'), 
+                   dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"    ✓ Class {class_idx} plots saved")
+
+    # ✅ ADD WATERFALL PLOTS FOR MULTICLASS
+    print("  Creating multiclass waterfall plots...")
+    _create_sample_waterfall_plots(config, all_shap_results, combined_shap_3d, 
+                                 combined_test_data, feature_names)
+
+
+def _create_binary_regression_shap_plots(config, all_shap_results, feature_names, max_display):
+    """Create SHAP plots for binary/regression models."""
+    
+    print("Binary/regression detected")
+    
+    combined_shap = []
+    combined_data = []
+    
+    for fold_result in all_shap_results:
+        combined_shap.append(fold_result['shap_values'])
+        combined_data.append(fold_result['test_data'])
+    
+    combined_shap = np.vstack(combined_shap)
+    combined_test_data = np.vstack(combined_data)
+    
+    print(f"  Creating plots for {len(combined_shap)} total samples")
+    
+    # Summary plot (beeswarm)
+    plt.figure(figsize=(12, 8))
+    shap.summary_plot(combined_shap, combined_test_data,
+                    feature_names=feature_names, max_display=max_display, show=False)
+    plt.title(f'SHAP Summary (All Folds, n={len(combined_shap)})')
+    plt.tight_layout()
+    plt.savefig(os.path.join(config.experiment_dir, 'shap_summary.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Feature importance bar plot
+    plt.figure(figsize=(10, 8))
+    shap.summary_plot(combined_shap, combined_test_data,
+                    feature_names=feature_names, plot_type="bar", 
+                    max_display=max_display, show=False)
+    plt.title(f'SHAP Feature Importance (All Folds)')
+    plt.tight_layout()
+    plt.savefig(os.path.join(config.experiment_dir, 'shap_importance.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print("    ✓ Summary plots saved")
+    
+    # Create a few sample explanations
+    _create_sample_waterfall_plots(config, all_shap_results, combined_shap, 
+                                 combined_test_data, feature_names)
+
+def _create_sample_waterfall_plots(config, all_shap_results, combined_shap, 
+                                 combined_test_data, feature_names, n_samples=3):
+    """Create waterfall plots for individual sample explanations."""
+    
+    n_sample_explanations = min(n_samples, len(combined_shap))
+    explainer_expected_value = all_shap_results[0]['explainer_expected_value']
+    
+    # ✅ Check if this is multiclass (SHAP values are a list)
+    sample_shap = all_shap_results[0]['shap_values']
+    is_multiclass = (len(sample_shap.shape) == 3 and sample_shap.shape[2] > 1)
+
+    if is_multiclass:
+        # ✅ For 3D array multiclass (n_samples, n_features, n_classes)
+        n_classes = sample_shap.shape[2]
+        print(f"    Creating waterfall plots for {n_classes} classes")
+        
+        for class_idx in range(n_classes):
+            for i in range(n_sample_explanations):
+                try:
+                    plt.figure(figsize=(10, 6))
+                    
+                    # ✅ Extract SHAP values for this class and sample from 3D array
+                    sample_shap_values = combined_shap[i, :, class_idx]  # Shape: (n_features,)
+                    
+                    print(f"    Sample {i}, Class {class_idx}: shap_values.shape = {sample_shap_values.shape}")
+                    
+                    # ✅ Create SHAP Explanation object for multiclass
+                    shap_explanation = shap.Explanation(
+                        values=sample_shap_values,                        # SHAP values for this class and sample
+                        base_values=explainer_expected_value[class_idx],  # Expected value for this class  
+                        data=combined_test_data[i],                       # Feature values for this sample
+                        feature_names=feature_names                       # Feature names
+                    )
+                    
+                    # ✅ Use the Explanation object with waterfall_plot
+                    shap.waterfall_plot(shap_explanation, show=False)
+                    
+                    plt.title(f'Sample {i} - Class {class_idx} Prediction Explanation')
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(config.experiment_dir, f'shap_waterfall_sample_{i}_class_{class_idx}.png'), 
+                               dpi=300, bbox_inches='tight')
+                    plt.close()
+                    
+                except Exception as e:
+                    print(f"    ⚠️  Could not create waterfall plot for sample {i}, class {class_idx}: {e}")
+        
+        print(f"    ✓ {n_sample_explanations * n_classes} waterfall plots saved")
+        
+
+    else:
+        # Binary or regression case
+
+        for i in range(n_sample_explanations):
+            try:
+                plt.figure(figsize=(10, 6))
+
+                # ✅ Create SHAP Explanation object for waterfall plot
+                # waterfall_plot expects an Explanation object, not raw arrays
+                shap_explanation = shap.Explanation(
+                    values=combined_shap[i],           # SHAP values for this sample
+                    base_values=explainer_expected_value,  # Expected value
+                    data=combined_test_data[i],        # Feature values for this sample
+                    feature_names=feature_names        # Feature names
+                )
+                
+                # ✅ Use the Explanation object with waterfall_plot
+                shap.waterfall_plot(shap_explanation, show=False)        
+
+                plt.title(f'Sample {i} Prediction Explanation')
+                plt.tight_layout()
+                plt.savefig(os.path.join(config.experiment_dir, f'shap_waterfall_sample_{i}.png'), 
+                        dpi=300, bbox_inches='tight')
+                plt.close()
+            except Exception as e:
+                print(f"    ⚠️  Could not create waterfall plot for sample {i}: {e}")
+        
+        print(f"    ✓ {n_sample_explanations} waterfall plots saved")
+
+
+def create_individual_shap_plots(config, fold, shap_values, test_data, 
+                               feature_names, explainer_expected_value, max_display=20):
+    """Create SHAP plots for individual folds (optional, for debugging)."""
+    
+    fold_dir = os.path.join(config.experiment_dir, f'shap_fold_{fold}')
+    os.makedirs(fold_dir, exist_ok=True)
+    
+    if isinstance(shap_values, list):
+        # Multiclass
+        for class_idx, class_shap in enumerate(shap_values):
+            plt.figure(figsize=(10, 6))
+            shap.summary_plot(class_shap, test_data, feature_names=feature_names,
+                            max_display=max_display, show=False)
+            plt.title(f'Fold {fold} - Class {class_idx} SHAP Summary')
+            plt.savefig(os.path.join(fold_dir, f'fold_{fold}_class_{class_idx}_summary.png'), 
+                       dpi=300, bbox_inches='tight')
+            plt.close()
+    else:
+        # Binary/regression
+        plt.figure(figsize=(10, 6))
+        shap.summary_plot(shap_values, test_data, feature_names=feature_names,
+                        max_display=max_display, show=False)
+        plt.title(f'Fold {fold} SHAP Summary')
+        plt.savefig(os.path.join(fold_dir, f'fold_{fold}_summary.png'), 
+                   dpi=300, bbox_inches='tight')
+        plt.close()

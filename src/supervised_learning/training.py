@@ -5,6 +5,8 @@ import joblib
 import glob
 import numpy as np
 import pandas as pd
+import pickle
+import shap
 import wandb
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -12,8 +14,9 @@ from sklearn.model_selection import KFold, GridSearchCV, GroupKFold, RandomizedS
 from scipy.stats import uniform, randint, loguniform
 import xgboost as xgb
 from .evaluation import calculate_metrics
-from .plotting import create_all_plots
+from .plotting import create_all_plots, create_aggregated_shap_plots
 from ..utils.logging_utilities import wandb_init
+from .dataset import Dataset
 
 
 def get_safe_n_jobs():
@@ -27,6 +30,22 @@ def get_safe_n_jobs():
     else:
         print("Local environment: Using n_jobs=-1 (all cores)")
         return -1
+    
+
+def get_feature_names_from_pipeline(pipeline, dataset):
+    """Extract feature names from the fitted pipeline."""
+    
+    # Get the original feature names from your dataset
+    # This depends on your dataset structure
+    try:
+        # If your dataset has a method to get feature names
+        base_feature_names = dataset.get_feature_names()
+    except:
+        # Fallback: use generic names
+        n_features = pipeline.named_steps['scaler'].n_features_in_
+        base_feature_names = [f'feature_{i}' for i in range(n_features)]
+    
+    return base_feature_names
 
 
 def prepare_param_for_pipeline(config_manager):
@@ -329,16 +348,46 @@ def aggregate_results_across_outer_folds(config):
     n_folds = config.cv_config["n_outer_folds"]
 
     # load the parquet files for each fold
+    all_test_data = []
+    
     all_predictions_dfs = []
+    all_test_data = []    
+    
+    
     for fold in range(n_folds):
 
         # find the folder in the experiment directory that begins with f"fold_{fold}" and ends with some random numbers
         fold_dir = config.experiment_dir / f"fold_{fold}_*"
 
         # within that folder, find the parquet file that starts with "predictions_fold_" and ends with ".parquet"
-        fold_predictions_path = glob.glob(os.path.join(fold_dir, f"predictions_fold_{fold}.parquet"))
+        fold_predictions_path = glob.glob(os.path.join(fold_dir, 
+                                    f"predictions_fold_{fold}.parquet"))
         fold_df = pd.read_parquet(fold_predictions_path, engine='pyarrow')
         all_predictions_dfs.append(fold_df)
+
+        # Load model and scaler for SHAP
+        model_path = fold_dir / f"model_fold_{fold}.joblib"
+        scaler_path = fold_dir / f"scaler_fold_{fold}.joblib"
+
+        # Load model and scaler for SHAP
+        model_path = glob.glob(os.path.join(fold_dir, 
+                                    f"model_fold_{fold}.joblib"))[0]
+        scaler_path = glob.glob(os.path.join(fold_dir, 
+                                    f"scaler_fold_{fold}.joblib"))[0]
+
+        model = joblib.load(model_path)
+        scaler = joblib.load(scaler_path)
+
+        # ✅ Store as comprehensive fold data
+        fold_data = {
+            'fold': fold,
+            'model': model,
+            'scaler': scaler,
+            'predictions_df': fold_df
+        }
+        
+        all_test_data.append(fold_data)  # Reuse this list for comprehensive data            
+        print(f"✓ Loaded complete data for fold {fold}")
 
     # concatenate all predictions DataFrames
     all_predictions_df = pd.concat(all_predictions_dfs, ignore_index=True)
@@ -349,7 +398,7 @@ def aggregate_results_across_outer_folds(config):
     # check if there are any duplicates of encounter_id and time
     duplicates = all_predictions_df[all_predictions_df.
             duplicated(subset=['encounter_id', 'time'], keep=False)]
-    if duplicates.any():
+    if not duplicates.empty:
         # raise an error if there are duplicates
         raise ValueError("Duplicate encounter_id and time found in predictions DataFrame. ")
        
@@ -379,35 +428,200 @@ def aggregate_results_across_outer_folds(config):
                             for k, v in overall_metrics.items()}
         json.dump(serializable_metrics, f, indent=2)
 
-
     # make plots
     n_classes = len(np.unique(all_true_labels))
     is_classification = config.model_type == "xgbclassifier"
 
-        # Pass y_pred_proba_raw for multiclass
-    if is_classification and n_classes > 2:
-        # You'll need to reconstruct the full probability matrix from your saved data
-        # This depends on how you saved the individual class probabilities
+    # Pass y_pred_proba_raw for multiclass
+    ############################# TEMPORARILY DISABLED PLOTS #############################
+    # if is_classification and n_classes > 2:
+    #     # You'll need to reconstruct the full probability matrix from your saved data
+    #     # This depends on how you saved the individual class probabilities
         
-        create_all_plots(
-            all_true_labels, 
-            all_predictions, 
-            all_pred_proba, 
-            config.experiment_dir,
-            is_classification=is_classification,
-            y_pred_proba_raw=y_pred_proba_raw
-        )
-    else:
-        create_all_plots(
-            all_true_labels, 
-            all_predictions, 
-            all_pred_proba, 
-            config.experiment_dir,
-            is_classification=is_classification
-        )
+    #     create_all_plots(
+    #         all_true_labels, 
+    #         all_predictions, 
+    #         all_pred_proba, 
+    #         config.experiment_dir,
+    #         is_classification=is_classification,
+    #         y_pred_proba_raw=y_pred_proba_raw
+    #     )
+    # else:
+    #     create_all_plots(
+    #         all_true_labels, 
+    #         all_predictions, 
+    #         all_pred_proba, 
+    #         config.experiment_dir,
+    #         is_classification=is_classification
+    #     )
+
+    # save all_predictions_df to a parquet file
+    all_predictions_df.to_parquet(config.experiment_dir / "all_predictions.parquet", 
+                                  engine='pyarrow', index=False)
     
+    # SHAP calculation
+    if config.calculate_shap:
+        print("\n=== Calculating SHAP Values ===")
+        
+        shap_results = calculate_shap_for_aggregated_results(config, all_test_data)
+            
+        shap_save_path = config.experiment_dir / "shap_analysis.pkl"
+        with open(shap_save_path, 'wb') as f:
+            pickle.dump(shap_results, f)
+        print(f"✓ SHAP results saved to {shap_save_path}") 
+
     
+def calculate_shap_for_aggregated_results(config, all_test_data): 
     
+    """
+    Calculate SHAP values for all models using the fold_data structure.
+    
+    Args:
+        config: Configuration object
+        all_test_data: List of fold_data dictionaries with 'fold', 'model', 'scaler', 'predictions_df'
+    """
+    import time
+
+    # Get parameters from config
+    max_samples_per_fold = getattr(config, 'shap_max_samples', None)  # None = use all
+    background_samples = getattr(config, 'shap_background_samples', 100)  # Default 100
+    
+    print(f"SHAP Configuration:")
+    print(f"  Max samples per fold: {max_samples_per_fold if max_samples_per_fold else 'All samples'}")
+    print(f"  Background samples: {background_samples if background_samples else 'None'}")
+       
+    dataset = Dataset(config.hospital_config)
+
+    # Recreate the same CV splits as in training
+    kf_outer = KFold(n_splits=config.cv_config["n_outer_folds"], 
+                     shuffle=True, random_state=config.hospital_config["seed"])
+
+    # Create mapping of fold -> test_encounters
+    fold_to_encounters = {}
+    fold_to_train_encounters = {}
+    for fold, (train_idx, test_idx) in enumerate(kf_outer.split(dataset.encounter_ids())):
+        fold_to_encounters[fold] = dataset.encounter_ids()[test_idx]
+        fold_to_train_encounters[fold] = dataset.encounter_ids()[train_idx]
+    
+    all_shap_results = []
+    feature_names = None
+    background_data = None
+
+    print(f"Processing SHAP for {len(all_test_data)} folds...")
+    
+    for fold_data in all_test_data:
+        fold = fold_data['fold']
+        model = fold_data['model'] 
+        scaler = fold_data['scaler']
+        predictions_df = fold_data['predictions_df']
+        
+        print(f"  Processing fold {fold}...")
+
+        test_encounters = fold_to_encounters[fold]
+        X_test, y_test, _ = dataset.modeling_data(test_encounters)
+        
+        # Get feature names (only need to do this once)
+        if feature_names is None:
+            feature_names = X_test.columns.tolist()
+            print(f"    Found {len(feature_names)} features")
+        
+        # ✅ OPTIMIZATION 1: Create background dataset (once per fold)
+        if background_samples and background_samples > 0 and background_data is None:
+            print(f"    Creating background dataset with {background_samples} samples...")
+            train_encounters = fold_to_train_encounters[fold]
+            X_bg, _, _ = dataset.modeling_data(train_encounters)
+            
+            # Sample background data
+            if len(X_bg) > background_samples:
+                bg_indices = np.random.choice(len(X_bg), size=background_samples, replace=False)
+                X_bg_sample = X_bg.iloc[bg_indices]
+            else:
+                X_bg_sample = X_bg
+                
+            # Scale background data using the fold's scaler
+            background_data = scaler.transform(X_bg_sample)
+            print(f"    ✓ Background dataset created: {len(background_data)} samples")
+        
+        # Scale test data using the fold's scaler
+        X_test_scaled = scaler.transform(X_test)
+        
+        # Verify data alignment
+        if len(X_test_scaled) != len(predictions_df):
+            raise ValueError(
+                f"Data length mismatch: X_test({len(X_test_scaled)}) vs predictions({len(predictions_df)})"
+            )
+
+        # ✅ OPTIMIZATION 2: Downsample test data
+        n_samples_original = len(X_test_scaled)
+        if max_samples_per_fold and n_samples_original > max_samples_per_fold:
+            print(f"    Downsampling from {n_samples_original} to {max_samples_per_fold} samples")
+            
+            # Stratified sampling to maintain class distribution
+            sample_indices = np.random.choice(n_samples_original, size=max_samples_per_fold, replace=False)
+            X_test_scaled_sample = X_test_scaled[sample_indices]
+            y_test_sample = y_test.values[sample_indices]
+            n_samples = max_samples_per_fold
+        else:
+            X_test_scaled_sample = X_test_scaled
+            y_test_sample = y_test.values
+            n_samples = n_samples_original
+        
+        print(f"    Calculating SHAP for {n_samples} samples...")
+
+        # Calculate SHAP values using TreeExplainer
+        start_time = time.time()
+        
+        # Verify data alignment
+        if len(X_test_scaled) != len(predictions_df):
+            print(f"    ⚠️  Data length mismatch: X_test({len(X_test_scaled)}) vs predictions({len(predictions_df)})")
+            # Try to align by encounter_id/time if possible
+            # This is complex, so skip for now
+            continue
+               
+        if background_data is not None:
+            explainer = shap.TreeExplainer(model, background_data)
+            print(f"    Using background dataset with {len(background_data)} samples")
+        else:
+            explainer = shap.TreeExplainer(model)
+            print(f"    Using default TreeExplainer (no background)")
+
+        shap_values_fold = explainer.shap_values(X_test_scaled_sample)
+
+        end_time = time.time()
+        print(f"    ✓ Fold {fold} SHAP complete in {end_time - start_time:.1f}s ({n_samples} samples)")
+               
+        # Store results
+        fold_result = {
+            'fold': fold,
+            'shap_values': shap_values_fold,
+            'test_data': X_test_scaled_sample,
+            'true_labels': y_test_sample,
+            'feature_names': feature_names,
+            'explainer_expected_value': explainer.expected_value,
+            'n_samples': n_samples,
+            'n_samples_original': n_samples_original
+        }
+        
+        all_shap_results.append(fold_result)
+
+        
+    # Create aggregated SHAP plots
+    print("Creating aggregated SHAP plots...")
+    create_aggregated_shap_plots(config, all_shap_results, feature_names)
+
+    total_samples = sum(r['n_samples'] for r in all_shap_results)
+    total_original = sum(r['n_samples_original'] for r in all_shap_results)
+    print(f"✓ SHAP analysis complete: {total_samples} samples processed (out of {total_original} total)")
 
 
-
+    return {
+        'fold_results': all_shap_results,
+        'feature_names': feature_names,
+        'n_folds_processed': len(all_shap_results),
+        'total_samples': total_samples,
+        'total_original_samples': total_original,
+        'config': {
+            'max_samples_per_fold': max_samples_per_fold,
+            'background_samples': background_samples
+        }
+    }

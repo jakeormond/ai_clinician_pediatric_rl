@@ -68,6 +68,16 @@ def parse_arguments():
     parser.add_argument('--start_time', type=str, default = None,                  # ✅ New argument
                     help='Start time for this experiment run')
     
+    parser.add_argument('--calculate_shap', type=str, default='false',
+                        choices=['true', 'false'],
+                        help='Whether to calculate SHAP values (default: false)')
+    
+    parser.add_argument('--shap_max_samples', type=int, default=5000,
+                        help='Maximum number of samples to use for SHAP analysis (default: None - use all)')
+    
+    parser.add_argument('--shap_background_samples', type=int, default=100,
+                        help='Number of background samples for SHAP analysis (default: 100)')
+    
     
     args = parser.parse_args()
 

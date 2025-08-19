@@ -334,7 +334,7 @@ class DataProcessor:
         for i, target in enumerate(self.actions):
             target_transform = self.config["action_transforms"][i]
 
-            if target_transform == "yeo-johnson": # mo other transforms yet implemented
+            if target_transform == "yeo-johnson": # no other transforms yet implemented
                 pt = PowerTransformer(method='yeo-johnson')
 
                 train_target_data = self.train_data['actions'][:, i]

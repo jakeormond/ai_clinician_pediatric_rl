@@ -1,4 +1,3 @@
-    model_type: "percent_behaviour_cloning"
     eval_freq: 5  # How often (epochs) we evaluate
     n_episodes: 100  # How many episodes run during evaluation
     n_epochs: 1000  # Max time steps to run environment

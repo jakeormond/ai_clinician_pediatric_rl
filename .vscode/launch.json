@@ -27,19 +27,19 @@
         },
 
         {
-            "name": "Mortality Prediction - CHOC - xgbregressor",
+            "name": "reinforcement_learning",
             "type": "debugpy",
             "request": "launch",
-            "module": "src.scripts.supervised.supervised_learning",
+            "module": "src.scripts.rl.any_percent_bc",
             "args": [
                 "--hospital", "choc", 
-                "--experiment_type", "supervised_learning",
-                "--model_type", "xgbregressor", 
+                "--experiment_type", "reinforcement_learning",
+                "--model_type", "any_percent_bc", 
                 "--mode", "single_fold", 
                 "--fold", "0",
-                "--experiment_variant", "standard",
+                "--experiment_variant", "quick_test",
                 "--search_variant", "random_search",
-                "--n_search_iterations", "50"
+                "--n_search_iterations", "2"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
@@ -84,24 +84,7 @@
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env"
-        }, 
-
-        {
-            "name": "combine aggregates",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.scripts.supervised.supervised_learning",
-            "args": [
-                "--hospital", "choc", 
-                "--model_type", "xgbregressor", 
-                "--mode", "combine_aggregates", 
-                "--experiment_dir", "xgbregressor_mortality_prediction_choc_grid_search"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
         }
-
-
+        
     ]
 }

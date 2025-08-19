@@ -17,6 +17,8 @@ class ConfigManager:
         for key, value in vars(args).items():
             setattr(self, key, value)
 
+        if self.experiment_type == "reinforcement_learning":
+            self.prediction_type = None  # prediction type is for supervised learning only
  
         self.paths, self.environment = load_paths()
         self.set_hospital()
@@ -28,6 +30,11 @@ class ConfigManager:
             self.set_cv_config()                   
             self._build_wandb_config()
             self.add_fold(self.fold)
+
+            if self.experiment_type == 'reinforcement_learning':
+                # load the rl config
+                rl_config_path = self.get_config_path("rl")
+
 
         elif self.mode == "aggregate":
             
@@ -90,6 +97,9 @@ class ConfigManager:
             
         elif config_type == "hospital":
             return self.config_dir / "datasets" / f"{self.hospital}_{self.experiment_type}.yaml"
+        
+        elif config_type == "rl":
+            return self.config_dir / "models" / f"{self.model_type}.yaml"
 
 
     def set_hospital(self,):
@@ -99,7 +109,7 @@ class ConfigManager:
         with open(hospital_config_path, 'r') as f:
             self._hospital_config = yaml.safe_load(f)
 
-        # get prediction type from config
+   
         self._hospital_config['prediction_type'] = self.prediction_type
 
         if 'dataframe_path' in self._hospital_config:
@@ -140,10 +150,10 @@ class ConfigManager:
             self._wandb_config['mode'] = 'online'
 
         # Apply experiment type configuration
-        if self.experiment_type == "supervised_learning":
-
-            # and cv_config to the W&B config
+        if self.mode == "single_fold":
             self._wandb_config['cv_config'] = self.cv_config
+        
+        if self.experiment_type == "supervised_learning":
             
             # Build tags
             tags = ["mortality", self.hospital, self.model_type]

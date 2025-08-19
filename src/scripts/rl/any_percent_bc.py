@@ -1,7 +1,10 @@
+import argparse
 from typing import Any, Dict, List, Optional, Tuple, Union
 from dataclasses import asdict
 from pathlib import Path
 import os
+import time
+
 
 import pyrallis
 
@@ -11,14 +14,88 @@ import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 
-from utilities import load_config, set_seed
-from training_utilities import TrainConfig
-from src.utils.logging_utilities import wandb_init
-from src.data.data_processor import DataProcessor
-from src.rl.replay_buffer import ReplayBuffer
+
+from ...config_manager import ConfigManager  # Import the config manager
+from ...supervised_learning.dataset import Dataset
+from ...utils.logging_utilities import wandb_init  # Add this import
+
+# from src.data.data_processor import DataProcessor
+# from src.rl.replay_buffer import ReplayBuffer
 
 
 TensorBatch = List[torch.Tensor]
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='Train mortality prediction model')
+    parser.add_argument('--hospital', 
+                        default='choc', 
+                        choices=['choc', 'mimic'], 
+                        help='Hospital dataset to use (default: choc)')
+    
+    parser.add_argument('--experiment_type', 
+                        default='reinforcement_learning', 
+                        choices=['supervised_learning', 'reinforcement_learning'], 
+                        help='Type of experiment to run (default: reinforcement_learning)')
+    
+    parser.add_argument('--model_type', 
+                        default='any_percent_bc', 
+                        choices=['any_percent_bc'], 
+                        help='Model type to train (default: any_percent_bc)') 
+
+    parser.add_argument('--mode', type=str, default='single_fold',
+                        choices=['single_fold', 'aggregate'],
+                        help='Mode of training: single_fold or aggregate (default: single_fold)')
+    
+    # mode-specific arguments    
+    parser.add_argument('--fold', type=int,
+                       help='Fold number to train (required for single_fold mode)')
+
+    parser.add_argument('--experiment_variant', 
+                        default='quick_test', 
+                        choices=['quick_test', 'full_test'], 
+                        help='Variant of the experiment to run (default: quick_test)')
+
+    parser.add_argument('--search_variant', 
+                        default='random_search', 
+                        choices=['random_search', 'grid_search'], 
+                        help='Variant of the search to use (default: random_search)')
+
+    parser.add_argument('--n_search_iterations', type=int, default=2,
+                        help='Number of search iterations to run (default: 2)')
+    
+    parser.add_argument('--start_time', type=str, default = None,                  
+                    help='Start time for this experiment run')
+    
+    args = parser.parse_args()
+
+    # If start_time is not provided, generate a timestamp
+    if args.start_time is None:
+        args.start_time = time.strftime("%Y%m%d_%H%M%S")
+
+    return args 
+
+
+
+def validate_arguments(args):
+    if args.mode == "single_fold" and args.fold is None:
+        raise ValueError("--fold is required when mode is 'single_fold'")
+    if args.mode == "aggregate" and args.experiment_folder is None:
+        raise ValueError("--experiment_folder is required when mode is 'aggregate'")
+    
+
+def log_fold_results_to_wandb(results):
+    """Log fold results to W&B."""
+    if wandb.run is None:  # Check if W&B is active
+        return
+    
+    fold = results['fold']
+    
+    # Use global wandb state
+    wandb.log({
+        f"fold_{fold}/best_cv_score": results['best_cv_score'],
+        **{f"fold_{fold}/{k}": v for k, v in results['test_metrics'].items()}
+    }, step=fold)
 
 
 def keep_best_trajectories(
@@ -140,7 +217,7 @@ class BC:
 
 
 
-def train(dataset: Dict, config: TrainConfig):
+def train(dataset, config):
     # set the seed for reproducibility
     set_seed(config.seed, deterministic_torch=True) # this is the same seed used in the data processing for making splits
 
@@ -259,6 +336,26 @@ def train(dataset: Dict, config: TrainConfig):
 # we can use pyrallis to parse command line arguments and load configurations when
 # we're further along in the project
 def main():
+
+    args = parse_arguments()
+    validate_arguments(args)
+
+    # Initialize config manager, it holds paths and environment info
+    config_manager = ConfigManager(args)
+
+    if args.mode == "single_fold":
+        # create the name and directory for this fold
+        config_manager.set_fold_name() # check code, we now now want a parent dir, with inner date dir
+
+        # load data
+        dataset = Dataset(config_manager.hospital_config)
+        print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
+
+        # load any_percent_bc config
+        any_percent_bc_config_path = f"config/any_percent_bc.yaml"
+        any_percent_bc_cfg = load_config(any_percent_bc_config_path)
+
+
     
     hospital = 'choc'  # or 'mimic'
     data_config_path = f"config/{hospital}.yaml"

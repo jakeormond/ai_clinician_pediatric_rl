@@ -1,5 +1,6 @@
 dataframe_path: "combined_data/hourly/combined_hourly_features_phoenix_sepsis.parquet"
 features_to_use_path: "dataframes/features_to_use.csv"
+model_type: "supervised_learning"
 
 seed: 42
 

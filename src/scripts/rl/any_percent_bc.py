@@ -22,6 +22,9 @@ from ...utils.logging_utilities import wandb_init  # Add this import
 # from src.data.data_processor import DataProcessor
 # from src.rl.replay_buffer import ReplayBuffer
 
+from ...rl.training import outer_training_loop
+from ...data.data_processor import DataProcessor
+
 
 TensorBatch = List[torch.Tensor]
 
@@ -348,31 +351,30 @@ def main():
         config_manager.set_fold_name() # check code, we now now want a parent dir, with inner date dir
 
         # load data
-        dataset = Dataset(config_manager.hospital_config)
+        dataset = Dataset(config_manager.data_config)
         print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
 
-        # load any_percent_bc config
-        any_percent_bc_config_path = f"config/any_percent_bc.yaml"
-        any_percent_bc_cfg = load_config(any_percent_bc_config_path)
+        # Initialize W&B - will implement later
+        # log_fold_results_to_wandb(results)
+
+        # load training config
+        config_manager.set_training_config()
 
 
-    
-    hospital = 'choc'  # or 'mimic'
-    data_config_path = f"config/{hospital}.yaml"
-    data_config = load_config(data_config_path)
-    processed_data = DataProcessor(data_config, test_size = 0.15, val_size = 0.15)
-    
-    any_percent_bc_config_path = f"config/any_percent_bc.yaml"
-    any_percent_bc_cfg = load_config(any_percent_bc_config_path)
-    # merge the data_config into any_percent_bc_cfg
-    any_percent_bc_cfg.update(data_config)
-    any_percent_bc_cfg['seed'] = data_config['seed']
-    any_percent_bc_cfg['hospital'] = data_config['hospital']
-    
-    train_cfg = TrainConfig(**any_percent_bc_cfg)  # Convert to TrainConfig dataclass
-    print(train_cfg)
+        print(f"Running on {config_manager.environment} environment")
+        print(f"Experiment directory: {config_manager.experiment_dir}")
+        print(f"Fold directory: {config_manager.fold_dir}")
 
-    train(processed_data, train_cfg)
+        results = outer_training_loop(dataset, config_manager)
+
+        # LOG TO W&B in main script
+        # log_fold_results_to_wandb(results)
+
+        print(f"Fold {args.fold} completed successfully")
+        print(f"Test metrics: {results['test_metrics']}")
+        
+        if wandb.run is not None:
+            wandb.finish()
 
     
 

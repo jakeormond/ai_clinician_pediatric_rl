@@ -16,42 +16,22 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import PowerTransformer
 
 class DataProcessor:
-    def __init__(self, 
-                 config, 
-                 test_size=0.2, 
-                 val_size=0.2,
+    def __init__(self,
+                 dataset, 
                  normalize_obs = True,
                  normalize_actions = True,
                  transform_targets = True):
         
-        self.config = config
-        self.reward = config["reward"]
-        self.flip_reward = config["flip_reward"]
-
-        self.actions = config["actions"]
-        self.create_binary_actions = config["create_binary_actions"]
-        self.transform_actions = config["transform_actions"]
-        self.action_transforms = config["action_transforms"]
-
-        self.proportion_w_data = config["proportions_to_use"]
-        self.test_size = test_size
-        self.val_size = val_size
-
-        if self.val_size > 0.0:
-            self.include_val = True
-        else:
-            self.include_val = False
+        # self should inherit all the key value pairs from the dataset except the dataframe
+        for key, value in vars(dataset).items():
+            if key != "dataframe":
+                setattr(self, key, value)
         
-        self.random_state = config["seed"]
-        
-        self, dataframe = self._load_dataset()
-        self._split_and_process(dataframe)
-
         if self.create_binary_actions:
-            self._create_binary_actions()
+            self._create_binary_actions(dataset)
 
         if self.transform_actions: # this has to occur before normalization
-            self._transform_actions()
+            self._transform_actions(dataset)
 
         self.normalize_obs = normalize_obs
         self.normalize_actions = normalize_actions
@@ -81,118 +61,7 @@ class DataProcessor:
                 self.val_data.pop('binary_actions', None)      
                 
             
-
-    def _load_dataset(self):
-        dataframe = pd.read_parquet(self.config["dataframe_path"])
-        features_to_use_df = pd.read_csv(self.config["features_to_use_path"])
-
-        dataframe = pd.read_parquet(self.config["dataframe_path"])
-        
-        features_to_use_df = pd.read_csv(self.config["features_to_use_path"])
-
-        # drop terminal reward column if terminal_reward is False
-        if not self.config["terminal_reward"]:
-            if self.config["terminal_reward_col"] in features_to_use_df['feature'].values:
-                features_to_use_df = features_to_use_df[features_to_use_df['feature'] != self.config["terminal_reward_col"]]
-        
-        # drop any rows where "do not use" is 1
-        features_to_use_df = features_to_use_df[features_to_use_df['do not use'] != 1]
-
-        # drop any rows where "proportion_sepsis" is less than proportion_w_data and
-        # imputation_method is "interpolation"
-        features_to_use_df = features_to_use_df[
-            (features_to_use_df['proportion_sepsis'] >= self.proportion_w_data) |   
-            (features_to_use_df['imputation_method'] != 'interpolation')
-        ]
-
-        # save lists of the observation features, actions, and rewards
-        features = features_to_use_df['feature'].tolist()
-        # drop self.action_features from obs_features
-        self.obs_features = [f for f in features if f not in self.actions]
-        # save the actions features
-
-        # add to these the encounter_col, time_col, and the reward
-        features_to_keep = [self.config["encounter_col"], self.config["time_col"], \
-                                        self.config["reward"]] + features
-
-        dataframe = dataframe[features_to_keep].copy()
-        
-        n_encounter_ids_before = dataframe[self.config["encounter_col"]].nunique()
-        n_rows_before = dataframe.shape[0]  
-
-        # remove rows with NaN values anywhere in the dataframe
-        dataframe = dataframe.dropna()
-        dataframe = dataframe.reset_index(drop=True)
-
-        n_encounter_ids_after = dataframe[self.config["encounter_col"]].nunique()
-        n_rows_after = dataframe.shape[0]
-
-        print(f"Removed {n_encounter_ids_before - n_encounter_ids_after} "
-                f"encounter IDs and {n_rows_before - n_rows_after} rows with NaN values.")
-        print(f"Remaining encounter IDs: {n_encounter_ids_after}, Remaining rows: {n_rows_after}")       
-
-        return self, dataframe
-
-        
-    def _split_and_process(self, dataframe):
-
-        encounter_ids = dataframe[self.config["encounter_col"]].unique()
-
-        # First split off the test set
-        train_ids, test_ids = train_test_split(
-            encounter_ids, test_size=self.test_size, 
-            random_state=self.random_state
-        )     
-
-        if self.include_val:
-            val_size_adjusted = self.val_size / (1 - self.test_size)
-
-            train_ids, val_ids = train_test_split(
-                train_ids, test_size=val_size_adjusted,
-                random_state=self.random_state
-            )
-
-        else:
-            val_ids = None
-
-        train_data_dataframe = dataframe[dataframe[self.config["encounter_col"]].isin(train_ids)].copy()
-        test_data_dataframe = dataframe[dataframe[self.config["encounter_col"]].isin(test_ids)].copy()
-        if self.include_val:
-            val_dataframe = dataframe[dataframe[self.config["encounter_col"]].isin(val_ids)].copy()
-        else:
-            val_dataframe = None
-
-        # check for any all-zero columns in any of the dataframes
-        zero_cols_train = [col for col in train_data_dataframe.columns if (train_data_dataframe[col] == 0).all()]
-        zero_cols_test = [col for col in test_data_dataframe.columns if (test_data_dataframe[col] == 0).all()]
-        if self.include_val:
-            zero_cols_val = [col for col in val_dataframe.columns if (val_dataframe[col] == 0).all()]
-
-        # if len(zero_cols_train) > 0 or len(zero_cols_test) > 0:
-        #     raise ValueError(
-        #         f"Found all-zero columns in train or test data: "
-        #         f"train: {zero_cols_train}, test: {zero_cols_test}"
-        #     )
-
-        drop_cols = set(zero_cols_train + zero_cols_test)
-        if self.include_val:
-            drop_cols.update(zero_cols_val)
-
-        if len(drop_cols) > 0:
-            print(f"Dropping all-zero columns: {drop_cols}")
-            train_data_dataframe = train_data_dataframe.drop(columns=drop_cols)
-            test_data_dataframe = test_data_dataframe.drop(columns=drop_cols)
-            if self.include_val:
-                val_dataframe = val_dataframe.drop(columns=drop_cols)
-
-        # split the dataframes into the arrays needed for RL
-        self.train_data = self._split_into_rl_dataset(train_data_dataframe)
-        self.test_data = self._split_into_rl_dataset(test_data_dataframe)
-        if self.include_val:
-            self.val_data = self._split_into_rl_dataset(val_dataframe)
-        else:
-            self.val_data = None
-
+            
         
     def _split_into_rl_dataset(self, dataframe):
         # This function will split the dataframe into the format needed for RL
@@ -271,23 +140,14 @@ class DataProcessor:
         }
     
 
-    def _create_binary_actions(self):
-        
-        self.train_data['binary_actions'] = self.train_data['actions'].copy()
-        self.test_data['binary_actions'] = self.test_data['actions'].copy()
-        if self.include_val:
-            self.val_data['binary_actions'] = self.val_data['actions'].copy()        
-        
-        for i, action in enumerate(self.actions):
+    def _create_binary_actions(self, dataset):
+                
+        for i, action in enumerate(dataset.actions):
             # create a binary action for each action, where 1 means the action was given
             # and 0 means it was not given
-            self.train_data['binary_actions'][:, i] = \
-                (self.train_data['binary_actions'][:, i] != 0).astype(int)
-            self.test_data['binary_actions'][:, i] = \
-                (self.test_data['binary_actions'][:, i] != 0).astype(int)
-            if self.include_val:
-                self.val_data['binary_actions'][:, i] = \
-                    (self.val_data['binary_actions'][:, i] != 0).astype(int)
+            binary_col_name = f"{action}_binary"
+            dataset.dataframe[binary_col_name] = (dataset.dataframe[action] != 0).astype(int)
+
 
 
     def _normalize_data(self):
@@ -327,35 +187,27 @@ class DataProcessor:
             print("Action normalization complete.")
 
 
-    def _transform_actions(self):
+    def _transform_actions(self, dataset):
 
         n_targets = len(self.actions)
 
+        # ✅ Store the fitted transformers for later use
+        self.action_transformers = {}
+
         for i, target in enumerate(self.actions):
-            target_transform = self.config["action_transforms"][i]
+            target_transform = self.action_transforms[i]
 
             if target_transform == "yeo-johnson": # no other transforms yet implemented
-                pt = PowerTransformer(method='yeo-johnson')
-
-                train_target_data = self.train_data['actions'][:, i]
-                train_target_no_zeros = train_target_data[train_target_data != 0]
-                n_feature_rows = len(train_target_no_zeros)
-                n_rows = len(train_target_data)
-                print(f"Feature: {target}, Rows with data: {n_feature_rows} out of {n_rows} ({n_feature_rows / n_rows * 100:.2f}%)")
+                pt = PowerTransformer(method='yeo-johnson')                 
 
                 # fit to the non-zero data in the training set
-                pt.fit(train_target_no_zeros.reshape(-1, 1))
+                pt.fit(dataset.dataframe[target].values.reshape(-1, 1))  # Reshape to 2D array
+                self.action_transformers[target] = pt
 
                 # transform the training data
-                self.train_data['actions'][:, i] = pt.transform(
-                    self.train_data['actions'][:, i].reshape(-1, 1)).flatten()
-                # transform the test data
-                self.test_data['actions'][:, i] = pt.transform(
-                    self.test_data['actions'][:, i].reshape(-1, 1)).flatten()
-                if self.include_val:
-                    self.val_data['actions'][:, i] = pt.transform(
-                        self.val_data['actions'][:, i].reshape(-1, 1)).flatten()
-                    
+                dataset.dataframe[target] = pt.transform(
+                    dataset.dataframe[target].values.reshape(-1, 1)).flatten()
+                                   
                 print(f"Transformed target {target} with Yeo-Johnson transform.")
                 
 

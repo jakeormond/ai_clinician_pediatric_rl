@@ -21,7 +21,7 @@ class ConfigManager:
             self.prediction_type = None  # prediction type is for supervised learning only
  
         self.paths, self.environment = load_paths()
-        self.set_hospital()
+        self.set_data()
 
         if self.mode == "single_fold":        
             
@@ -30,10 +30,6 @@ class ConfigManager:
             self.set_cv_config()                   
             self._build_wandb_config()
             self.add_fold(self.fold)
-
-            if self.experiment_type == 'reinforcement_learning':
-                # load the rl config
-                rl_config_path = self.get_config_path("rl")
 
 
         elif self.mode == "aggregate":
@@ -82,7 +78,15 @@ class ConfigManager:
                 return variant_path
             else:
                 raise FileNotFoundError(f"CV config not found for variant: {self.experiment_variant}")
-            
+
+        elif config_type == "training":
+            variant_name = f"{self.model_type}.yaml"
+            variant_path = self.config_dir / "models" / variant_name
+            if variant_path.exists():
+                return variant_path
+            else:
+                raise FileNotFoundError(f"Training config not found for model type: {self.model_type}")
+
         elif config_type == "search_grid":
             variant_name = f"{self.model_type}_{self.search_variant}.yaml"
             variant_path = self.config_dir / "search_spaces" / variant_name
@@ -95,36 +99,38 @@ class ConfigManager:
             # W&B config usually doesn't need variants
             return self.config_dir / "wandb" / "wandb.yaml"
             
-        elif config_type == "hospital":
+        elif config_type == "data":
             return self.config_dir / "datasets" / f"{self.hospital}_{self.experiment_type}.yaml"
         
         elif config_type == "rl":
             return self.config_dir / "models" / f"{self.model_type}.yaml"
-
-
-    def set_hospital(self,):
-        hospital_config_path = self.get_config_path("hospital")
-        if not hospital_config_path.exists():
-            raise FileNotFoundError(f"Hospital config file not found: {hospital_config_path}")
-        with open(hospital_config_path, 'r') as f:
-            self._hospital_config = yaml.safe_load(f)
-
    
-        self._hospital_config['prediction_type'] = self.prediction_type
 
-        if 'dataframe_path' in self._hospital_config:
-            if not os.path.isabs(self._hospital_config['dataframe_path']):
-                self._hospital_config['dataframe_path'] = os.path.join(
+    def set_data(self,):
+        data_config_path = self.get_config_path("data")
+        if not data_config_path.exists():
+            raise FileNotFoundError(f"Data config file not found: {data_config_path}")
+        with open(data_config_path, 'r') as f:
+            self._data_config = yaml.safe_load(f)
+
+        # set self.seed to the seed in the data config
+        self.seed = self._data_config['seed']
+    
+        self._data_config['prediction_type'] = self.prediction_type
+
+        if 'dataframe_path' in self._data_config:
+            if not os.path.isabs(self._data_config['dataframe_path']):
+                self._data_config['dataframe_path'] = os.path.join(
                     self.get_data_dir, 
-                    self._hospital_config['dataframe_path']
+                    self._data_config['dataframe_path']
                 )
-                print(f"Updated dataframe_path to absolute: {self._hospital_config['dataframe_path']}")
+                print(f"Updated dataframe_path to absolute: {self._data_config['dataframe_path']}")
         
-        if 'features_to_use_path' in self._hospital_config:
-            if not os.path.isabs(self._hospital_config['features_to_use_path']):
-                self._hospital_config['features_to_use_path'] = os.path.join(
+        if 'features_to_use_path' in self._data_config:
+            if not os.path.isabs(self._data_config['features_to_use_path']):
+                self._data_config['features_to_use_path'] = os.path.join(
                     self.get_code_dir, 
-                    self._hospital_config['features_to_use_path']
+                    self._data_config['features_to_use_path']
                 )
 
     def _build_wandb_config(self):
@@ -138,7 +144,7 @@ class ConfigManager:
         self._wandb_config['hospital'] = self.hospital
         self._wandb_config['experiment_type'] = self.experiment_type
         self._wandb_config['model_type'] = self.model_type        
-        self._wandb_config['seed'] = self._hospital_config['seed'] if self.hospital_config else None
+        self._wandb_config['seed'] = self._data_config['seed'] if self.data_config else None
         self._wandb_config['group'] = f"{self.hospital}_{self.model_type}_{self.experiment_variant}"
 
         self.wandb_config['experiment_name'] = self.experiment_name       
@@ -177,6 +183,15 @@ class ConfigManager:
             print(f"Copied CV config to: {experiment_copy_path}")
         else:
             print(f"CV config already exists at: {experiment_copy_path}, skipping copy")
+
+
+    def set_training_config(self):
+        model_type = self.model_type
+        training_config_path = self.get_config_path("training")
+        if not training_config_path.exists():
+            raise FileNotFoundError(f"Training config file not found: {training_config_path}")
+        with open(training_config_path, 'r') as f:
+            self.training_config = yaml.safe_load(f)
 
         
     def add_fold(self, fold):
@@ -244,11 +259,11 @@ class ConfigManager:
     
     # Properties for accessing hospital config
     @property
-    def hospital_config(self):
+    def data_config(self):
         """Get the complete hospital configuration."""
-        if self._hospital_config is None:
+        if self._data_config is None:
             raise ValueError("Hospital not set. Call set_hospital() first.")
-        return self._hospital_config
+        return self._data_config
     
     @property
     def wandb_config(self):

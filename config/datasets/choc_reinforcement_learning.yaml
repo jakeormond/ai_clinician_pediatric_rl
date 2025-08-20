@@ -1,5 +1,6 @@
 dataframe_path: "combined_data/hourly/combined_hourly_features_phoenix_sepsis.parquet"
 features_to_use_path: "dataframes/features_to_use.csv"
+model_type: "reinforcement_learning"
 
 seed: 42
 
@@ -10,7 +11,7 @@ encounter_col: "MASKED_ENCNTR_ID"
 
 action_feature_sets: ["vasoactive_inotropic_infusion", "input_output"]
 actions: ["intake", "vis"]
-create_binary_actions: True # don't remember if this is needed, CHECK!!!!!!
+create_binary_actions: True # because rewards are sparse, AI suggested supplementing with binary actions
 transform_actions: True
 action_transforms: ["yeo-johnson", "yeo-johnson"]
 

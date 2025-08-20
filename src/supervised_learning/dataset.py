@@ -1,4 +1,5 @@
 import pandas as pd
+import copy
 
 # this class holds the complete dataset, the folds can 
 # access the data they need using the encounter IDs
@@ -6,48 +7,58 @@ import pandas as pd
 class Dataset:
     def __init__(self, config):
         
-        self.target_col = config["target_col"]
-        self.encounter_col = config["encounter_col"]
-        self.time_col = config["time_col"]
-        self.config = config
+        # Dataset should store all the key value pairs from the config
+        for key, value in config.items():
+            setattr(self, key, value)
         
         self._load_dataset()
-        self._transform_target()
+        
+        if "target_col" in config: # this is generally used for supervised learning, so gets
+            self._transform_target() # accept dataframe as input
+
+
 
     def _load_dataset(self):
-        self.dataframe = pd.read_parquet(self.config["dataframe_path"])
-        features_to_use_df = pd.read_csv(self.config["features_to_use_path"])
+        self.dataframe = pd.read_parquet(self.dataframe_path) # here I will have to add code to load the df with the reward
+        features_to_use_df = pd.read_csv(self.features_to_use_path)
 
          # drop any rows where "do not use" is 1
         features_to_use_df = features_to_use_df[features_to_use_df['do not use'] != 1]
 
+        # if this is supervised learning, we need to drop the action features,
+        # but if this is reinforcement learning, we need to keep them
+        if self.model_type == "supervised_learning":
+            # get rid of actions
+            features_to_use_df = features_to_use_df[features_to_use_df['feature_set'] != feature_set]
+        
         # drop any rows where "proportion_sepsis" is less than proportion_w_data and
         # imputation_method is "interpolation"
         features_to_use_df = features_to_use_df[
-            (features_to_use_df['proportion_sepsis'] >= self.config["proportion_w_data"]) |   
+            (features_to_use_df['proportion_sepsis'] >= self.proportion_w_data) |   
             (features_to_use_df['imputation_method'] != 'interpolation')
         ]
-
-        # drop all features in the action_feature_sets
-        for feature_set in self.config["action_feature_sets"]:
-            features_to_use_df = features_to_use_df[features_to_use_df['feature_set'] != feature_set]
 
         # make list of features
         features = features_to_use_df['feature'].tolist()
 
+
+        # append reward col, self.reward, to features if reinforcement learning
+        if self.model_type == "reinforcement_learning":
+            features.append(self.reward)
+
         # add to these the encounter_col, time_col,
-        features_to_keep = [self.config["encounter_col"], self.config["time_col"]] + features
+        features_to_keep = [self.encounter_col, self.time_col] + features
 
         self.dataframe = self.dataframe[features_to_keep].copy()
         
-        n_encounter_ids_before = self.dataframe[self.config["encounter_col"]].nunique()
+        n_encounter_ids_before = self.dataframe[self.encounter_col].nunique()
         n_rows_before = self.dataframe.shape[0]  
 
         # remove rows with NaN values anywhere in the dataframe
         self.dataframe = self.dataframe.dropna()
         self.dataframe = self.dataframe.reset_index(drop=True)
 
-        n_encounter_ids_after = self.dataframe[self.config["encounter_col"]].nunique()
+        n_encounter_ids_after = self.dataframe[self.encounter_col].nunique()
         n_rows_after = self.dataframe.shape[0]
 
         print(f"Removed {n_encounter_ids_before - n_encounter_ids_after} "
@@ -135,8 +146,9 @@ class Dataset:
             else:
                 # not implemented yet, so raise an error
                 raise NotImplementedError("Prediction time 'specific' is not implemented yet.")
+          
 
-    def modeling_data(self, encounter_ids):
+    def modeling_data(self, encounter_ids, split_x_y=False):
         """
         Returns the modeling data as a DataFrame.
         This is the data that will be used for training and testing.
@@ -145,14 +157,33 @@ class Dataset:
         modeling_data = self.dataframe[self.dataframe[self.encounter_col].isin(encounter_ids)].copy()
         
         encounters_and_times = modeling_data[[self.encounter_col, self.time_col]]
+
+        modeling_data = modeling_data.drop(columns=[self.target_col]).copy()
+
+        if split_x_y:
         
-        X_train = modeling_data.drop(columns=[self.encounter_col, self.time_col, self.target_col])
-        y_train = modeling_data[self.target_col]
+            X_train = modeling_data.drop(columns=[self.target_col]).copy()
+            y_train = modeling_data[self.target_col].copy()
                 
-        return X_train, y_train, encounters_and_times   
+            return X_train, y_train, encounters_and_times   
+        
+        else:
+            return modeling_data, encounters_and_times
+        
+
     
     def encounter_ids(self):
         """
         Returns the unique encounter IDs in the dataset.
         """
         return self.dataframe[self.encounter_col].unique()
+    
+
+    def create_subset(self, encounter_ids):
+        """
+        Returns a new Dataset object that is a subset of the current dataset,
+        containing only the specified encounter IDs.
+        """
+        subset = copy.deepcopy(self)
+        subset.dataframe = subset.dataframe[self.dataframe[self.encounter_col].isin(encounter_ids)].copy()
+        return subset

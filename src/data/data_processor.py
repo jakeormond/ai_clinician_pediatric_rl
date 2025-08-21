@@ -1,5 +1,9 @@
 """
 Creates DataProcessor class to process data for RL training.
+Note all normalization and transformation is done here, not in the 
+preceding dataset.py file (that's because Dataset is only used
+for supervised learning with XGBoost, which does not require
+normalization).
 
 to do: check the vis scores, i think there are some outliers that are far too high. 
 
@@ -8,6 +12,7 @@ to do: check the vis scores, i think there are some outliers that are far too hi
 
 
 import yaml
+import copy
 import pandas as pd
 import numpy as np
 import time
@@ -16,54 +21,55 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import PowerTransformer
 
 class DataProcessor:
-    def __init__(self,
-                 dataset, 
-                 normalize_obs = True,
-                 normalize_actions = True,
-                 transform_targets = True):
-        
+    def __init__(self, dataset, training_config):
+                
         # self should inherit all the key value pairs from the dataset except the dataframe
         for key, value in vars(dataset).items():
             if key != "dataframe":
-                setattr(self, key, value)
+                if isinstance(value, (list, dict, set)):
+                    # Deep copy mutable objects
+                    setattr(self, key, copy.deepcopy(value))
+                else:
+                    # Shallow copy is fine for immutable objects (str, int, float, etc.)
+                    setattr(self, key, value)
+
+        # self should also inherit all the key value pairs from the training_config
+        for key, value in training_config.items():
+            setattr(self, key, value)
         
-        if self.create_binary_actions:
-            self._create_binary_actions(dataset)
+        # drop any features in self.features_to_drop
+        for feature in self.features_to_drop:
+            if feature in dataset.dataframe.columns:
+                dataset.dataframe = dataset.dataframe.drop(columns=[feature])
+        
+        # before creating the binary actions, we need to make a list of all the input features;
+        # these are the columns minus the reward, the actions and the encounter and time columns
+        self.input_features = [col for col in dataset.dataframe.columns
+                               if col not in dataset.actions and 
+                               col != self.reward and 
+                               col != self.encounter_col and 
+                               col != self.time_col]
+        
+        for f in self.input_features:
+            print(f"Input feature: {f}")
+        
+        if self.normalize_obs:
+            self._normalize_obs(dataset)               
 
         if self.transform_actions: # this has to occur before normalization
             self._transform_actions(dataset)
 
-        self.normalize_obs = normalize_obs
-        self.normalize_actions = normalize_actions
+        if self.normalize_actions:
+            self._normalize_actions(dataset)
+        
+        if self.create_binary_actions: # note that this requires zeros to have remained zeros after transformation and normalization
+            self._create_binary_actions(dataset)
 
-        if self.normalize_obs or self.normalize_actions:
-            self._normalize_data()
-
-        # combine actions and binary actions
-        if self.create_binary_actions:
-            self.train_data['actions'] = \
-                np.concatenate((self.train_data['actions'], 
-                           self.train_data['binary_actions']), axis=1)
-            
-            # remove the binary actions from train_data
-            self.train_data.pop('binary_actions', None)
-
-
-            self.test_data['actions'] = \
-                np.concatenate((self.test_data['actions'], 
-                           self.test_data['binary_actions']), axis=1)
-            self.test_data.pop('binary_actions', None)
-
-            if self.include_val:
-                self.val_data['actions'] = \
-                    np.concatenate((self.val_data['actions'], 
-                               self.val_data['binary_actions']), axis=1) 
-                self.val_data.pop('binary_actions', None)      
-                
-            
+        # split into the rl_dataset
+        self.rl_dataset = self._split_into_rl_dataset(dataset)               
             
         
-    def _split_into_rl_dataset(self, dataframe):
+    def _split_into_rl_dataset(self, dataset):
         # This function will split the dataframe into the format needed for RL
         # It will return a dictionary with the following keys:
         # - observations
@@ -80,34 +86,35 @@ class DataProcessor:
 
         # we piece off the rewards and actions and then will have the observations left
 
-        rewards = dataframe[self.config["reward"]].copy()    
+        ##### SHOULD ADD SOME KIND OF UNIT TEST HERE TO CONFIRM EVERYTHING IS WORKING AS EXPECTED #####
+
+        rewards = dataset.dataframe[self.reward].copy()    
         # process the rewards
         if self.flip_reward:
             rewards = -rewards
 
         # now compute hourly change in reward
         rewards = rewards.diff().fillna(0)
-        first_indices = dataframe.groupby(self.config["encounter_col"]).head(1).index
+        first_indices = dataset.dataframe.groupby(self.encounter_col).head(1).index
         rewards.loc[first_indices] = 0        
         
-        actions = dataframe[self.config["actions"]].copy()
-        observations = dataframe.drop(columns=[self.config["reward"]] + self.config["actions"]).copy()
+        actions = dataset.dataframe[self.actions].copy()
+        observations = dataset.dataframe[self.input_features].copy()
 
         # compute terminated
         # terminate is 0 everywhere except the final timestep for each patient
-        dataframe = dataframe.copy()
-        dataframe['terminated'] = 0
-        dataframe.loc[dataframe.groupby(self.config["encounter_col"]).tail(1).index, 'terminated'] = 1
-        terminated = dataframe['terminated'].copy()
+        dataset.dataframe['terminated'] = 0
+        dataset.dataframe.loc[dataset.dataframe.groupby(self.encounter_col).tail(1).index, 'terminated'] = 1
+        terminated = dataset.dataframe['terminated'].copy()
 
         # get the next observations
         next_observations = observations.copy()
 
         # get the indices of all the trajectory starts, i.e. the first index of each patient
-        trajectory_starts = dataframe.groupby(self.config["encounter_col"]).head(1).index
+        trajectory_starts = dataset.dataframe.groupby(self.encounter_col).head(1).index
 
         # get the trajectory ends, i.e. the last index of each patient
-        trajectory_ends = dataframe.groupby(self.config["encounter_col"]).tail(1).index
+        trajectory_ends = dataset.dataframe.groupby(self.encounter_col).tail(1).index
 
         # for observations and actions, we remove the trajectory ends
         observations = observations.drop(index=trajectory_ends)
@@ -118,11 +125,6 @@ class DataProcessor:
         next_observations = next_observations.drop(index=trajectory_starts)
         terminated = terminated.drop(index=trajectory_starts)
 
-        # remove the encounter and time columns from observations and next_observations 
-        observations = observations.drop(columns=[self.config["encounter_col"], 
-                    self.config["time_col"]])
-        next_observations = next_observations.drop(columns=[self.config["encounter_col"], 
-                        self.config["time_col"]])
 
         # convert to numpy arrays
         observations = observations.to_numpy()  
@@ -146,63 +148,101 @@ class DataProcessor:
             # create a binary action for each action, where 1 means the action was given
             # and 0 means it was not given
             binary_col_name = f"{action}_binary"
+            self.actions.append(binary_col_name)
             dataset.dataframe[binary_col_name] = (dataset.dataframe[action] != 0).astype(int)
 
 
 
-    def _normalize_data(self):
-        # FIX THIS CODE!!!!!!!!!!!!!!!!!!!!!!!
-        # We should apply min max normalization to all drugs!!!!!!!!
+    def _normalize_obs(self, dataset):
+        # apply min-max normalization to drugs and ordinal features, 
+        # leave one hot encoded features as they are, and z-score normalize 
+        # the continuous features
 
-        # This function will normalize the observations using the mean and std of the training set
-        # It will return the normalized observations (centred at 0)
-        if self.normalize_obs:
-            self.mean_obs = self.train_data['observations'].mean(axis=0)
-            self.std_obs = self.train_data['observations'].std(axis=0)
+        norm_dict = {}
 
-            self.train_data['observations'] = (self.train_data['observations'] 
-                                               - self.mean_obs) / self.std_obs
-            self.test_data['observations'] = (self.test_data['observations'] 
-                                              - self.mean_obs) / self.std_obs
-            if self.include_val:
-                self.val_data['observations'] = (self.val_data['observations'] 
-                                                 - self.mean_obs) / self.std_obs
+        for feature in self.input_features:
+            
+            norm_dict[feature] = {}
+            
+            # get the features row in self.features_to_use
+            feature_row = self.features_to_use[self.features_to_use['feature'] == feature]
+            data_type = feature_row['data_type'].values[0]
+            feature_set = feature_row['feature_set'].values[0]
+
+            min_val = dataset.dataframe[feature].min()
+            max_val = dataset.dataframe[feature].max()
+            mean_val = dataset.dataframe[feature].mean()
+            std_val = dataset.dataframe[feature].std()
+            
+            if data_type == 'ordinal' or feature_set == 'infusion' or \
+                feature_set == 'other_meds' or feature_set == 'sedation':
                 
-            print("Observation normalization complete.")
-        
-        if self.normalize_actions: # these should be 0 to 1, since we
-            # have many zeros. Note min can be negative because of transforms
-            self.min_actions = self.train_data['actions'].min(axis=0)            
-            self.max_actions = self.train_data['actions'].max(axis=0)
+                # min-max normalize the feature
+                norm_dict[feature]['normalization_type'] = 'min-max'
+                dataset.dataframe.loc[:, feature] = (dataset.dataframe[feature] - min_val) / (max_val - min_val)                
 
-            self.train_data['actions'] = (self.train_data['actions'] - self.min_actions) / \
-                                          (self.max_actions - self.min_actions)
+            elif data_type == 'binary':
+                # binary features are already normalized, so we just store the normalization type
+                norm_dict[feature]['normalization_type'] = 'none'
 
-            self.test_data['actions'] = (self.test_data['actions'] - self.min_actions) / \
-                                          (self.max_actions - self.min_actions)
-            if self.include_val:
-                self.val_data['actions'] = (self.val_data['actions'] - self.min_actions) / \
-                                          (self.max_actions - self.min_actions)
-                  
-            print("Action normalization complete.")
+            elif data_type == 'continuous':
+                # z-score normalize the feature
+                norm_dict[feature]['normalization_type'] = 'z-score'
+                dataset.dataframe.loc[:, feature] = (dataset.dataframe[feature] - mean_val) / std_val
+
+            norm_dict[feature]['min'] = min_val
+            norm_dict[feature]['max'] = max_val
+            norm_dict[feature]['mean'] = mean_val
+            norm_dict[feature]['std'] = std_val
+
+            print(f"Normalized feature {feature} with {norm_dict[feature]['normalization_type']} normalization. "
+                  f"Min: {min_val}, Max: {max_val}, Mean: {mean_val}, Std: {std_val}")
 
 
-    def _transform_actions(self, dataset):
+        # store the normalization dict for later use
+        self.obs_norm_dict = norm_dict
 
-        n_targets = len(self.actions)
+        print("Observation normalization complete.")                        
 
-        # ✅ Store the fitted transformers for later use
+    
+    def _normalize_actions(self, dataset):
+        # normalize actions between 0 and 1
+        # will need to store the min and max for later use
+        self.action_minimum = {}
+        self.action_maximum = {}
+
+        for i, action in enumerate(dataset.actions):
+            # normalize each action between 0 and 1
+            # we will use the min and max of the training set to normalize the test set
+            min_action = dataset.dataframe[action].min()
+            max_action = dataset.dataframe[action].max()
+
+            dataset.dataframe.loc[:, action] = (dataset.dataframe[action] - min_action) / \
+                                                  (max_action - min_action) 
+
+            self.action_minimum[action] = min_action
+            self.action_maximum[action] = max_action     
+
+            print(f"Normalized action {action} between 0 and 1.")        
+
+
+    def _transform_actions(self, dataset, transform_included=False):
+
+        # Store the fitted transformers for later use
         self.action_transformers = {}
 
         for i, target in enumerate(self.actions):
             target_transform = self.action_transforms[i]
 
             if target_transform == "yeo-johnson": # no other transforms yet implemented
-                pt = PowerTransformer(method='yeo-johnson')                 
+                
+                if not transform_included:
+                    pt = PowerTransformer(method='yeo-johnson')    
+                    pt.fit(dataset.dataframe[target].values.reshape(-1, 1))  # Reshape to 2D array
+                    self.action_transformers[target] = pt  
 
-                # fit to the non-zero data in the training set
-                pt.fit(dataset.dataframe[target].values.reshape(-1, 1))  # Reshape to 2D array
-                self.action_transformers[target] = pt
+                else:
+                    pt = self.action_transformers[target]            
 
                 # transform the training data
                 dataset.dataframe[target] = pt.transform(
@@ -212,16 +252,6 @@ class DataProcessor:
                 
 
 def main():
-    hospital = 'choc'  # or 'mimic'
-    config_path = f"config/{hospital}.yaml"
-    config = load_config(config_path)
-
-    tick = time.time()
-    processed_data = DataProcessor(config, 
-                    test_size=0.2, val_size=0.0,)
-    tock = time.time()
-    print(f"Data processing took {tock - tick:.2f} seconds.")
-    
     pass
 
 if __name__ == "__main__":

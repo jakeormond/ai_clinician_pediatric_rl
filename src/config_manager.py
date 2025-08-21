@@ -186,7 +186,6 @@ class ConfigManager:
 
 
     def set_training_config(self):
-        model_type = self.model_type
         training_config_path = self.get_config_path("training")
         if not training_config_path.exists():
             raise FileNotFoundError(f"Training config file not found: {training_config_path}")

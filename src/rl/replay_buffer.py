@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import torch
 
-from src.data.data_processor import DataProcessor, load_config
 
 
 TensorBatch = List[torch.Tensor]
@@ -67,18 +66,7 @@ class ReplayBuffer:
 
 def main():  
 
-    hospital = 'choc'  # or 'mimic'
-    config_path = f"config/{hospital}.yaml"
-    config = load_config(config_path)
-    
-    processed_data = DataProcessor(config, proportion_w_data=0.8, random_state=42)
-    
-    training_buffer = ReplayBuffer(processed_data.train_data)
-
-    data_sample = training_buffer.sample(batch_size=32)
-
     pass
-
 
 if __name__ == "__main__":
     main()

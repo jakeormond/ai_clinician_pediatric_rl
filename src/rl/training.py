@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import json
 import joblib
 import glob
+import copy
 import numpy as np
 import pandas as pd
 import pickle
@@ -19,6 +20,7 @@ import xgboost as xgb
 from ..utils.logging_utilities import wandb_init
 from ..data.data_processor import DataProcessor
 # from .dataset import Dataset
+from .replay_buffer import ReplayBuffer
 
 
 def get_safe_n_jobs():
@@ -52,30 +54,33 @@ def get_feature_names_from_pipeline(pipeline, dataset):
 
 
 def keep_best_trajectories(
-    dataset: Dict[str, np.ndarray],
-    frac: float,
-    discount: float,
-    max_episode_steps: int = 1000,
+    dataprocessor: Dict[str, np.ndarray],
     ):
-
+   
     ids_by_trajectories = []
     returns = []
     cur_ids = []
     cur_return = 0
     reward_scale = 1.0
-    for i, (reward, done) in enumerate(zip(dataset["rewards"], dataset["terminated"])):
+
+    for i, (reward, done) in enumerate(zip(dataprocessor.dataset["rewards"], 
+                                           dataprocessor.dataset["terminated"])):
         cur_return += reward_scale * reward
         cur_ids.append(i)
-        reward_scale *= discount
-        if done == 1.0 or len(cur_ids) == max_episode_steps:
-            ids_by_trajectories.append(list(cur_ids))
-            returns.append(cur_return)
+        reward_scale *= dataprocessor.discount     
+        
+        if done == 1.0:
+            if len(cur_ids) <= dataprocessor.max_traj_len:
+                # don't use trajectories that are too long
+                ids_by_trajectories.append(list(cur_ids))
+                returns.append(cur_return)
+            
             cur_ids = []
             cur_return = 0
             reward_scale = 1.0
 
     sort_ord = np.argsort(returns, axis=0)[::-1].reshape(-1)
-    top_trajs = sort_ord[: max(1, int(frac * len(sort_ord)))]
+    top_trajs = sort_ord[: max(1, int(dataprocessor.frac * len(sort_ord)))]
     top_returns = np.array(returns)[top_trajs]
     print(f"mean top returns: {np.mean(top_returns)}")
 
@@ -83,13 +88,13 @@ def keep_best_trajectories(
     for i in top_trajs:
         order += ids_by_trajectories[i]
     order = np.array(order)
-    dataset["observations"] = dataset["observations"][order]
-    dataset["actions"] = dataset["actions"][order]
-    dataset["next_observations"] = dataset["next_observations"][order]
-    dataset["rewards"] = dataset["rewards"][order]
-    dataset["terminated"] = dataset["terminated"][order]
+    dataprocessor.dataset["observations"] = dataprocessor.dataset["observations"][order]
+    dataprocessor.dataset["actions"] = dataprocessor.dataset["actions"][order]
+    dataprocessor.dataset["next_observations"] = dataprocessor.dataset["next_observations"][order]
+    dataprocessor.dataset["rewards"] = dataprocessor.dataset["rewards"][order]
+    dataprocessor.dataset["terminated"] = dataprocessor.dataset["terminated"][order]
 
-    return dataset
+    return
 
 
 def outer_training_loop(dataset, config_manager): 
@@ -98,9 +103,7 @@ def outer_training_loop(dataset, config_manager):
     n_outer_folds = config_manager.cv_config["n_outer_folds"]
     n_inner_folds = config_manager.cv_config["n_inner_folds"]
     
-    print(f"Using {n_outer_folds} outer folds and {n_inner_folds} inner folds") 
-
-    
+    print(f"Using {n_outer_folds} outer folds and {n_inner_folds} inner folds")    
 
     print(f"Number of unique encounter IDs: {len(dataset.encounter_ids())}")
 
@@ -142,8 +145,16 @@ def outer_training_loop(dataset, config_manager):
             inner_train_dataset = train_dataset.create_subset(train_dataset.encounter_ids()[inner_train_id])
             inner_val_dataset = train_dataset.create_subset(train_dataset.encounter_ids()[inner_val_id])
 
-            # create data_processors from the datasets
-            inner_train_processor = DataProcessor(inner_train_dataset)
+            # create data_processors from the datasets, and then replay buffers
+            inner_train_processor = DataProcessor(inner_train_dataset, config_manager.training_config)
+
+            inner_train_processor = keep_best_trajectories(inner_train_processor)
+
+            training_buffer = ReplayBuffer(inner_train_processor)
+            
+            
+            
+
 
             pass
 

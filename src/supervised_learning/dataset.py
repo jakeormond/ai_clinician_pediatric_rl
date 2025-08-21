@@ -17,29 +17,28 @@ class Dataset:
             self._transform_target() # accept dataframe as input
 
 
-
     def _load_dataset(self):
         self.dataframe = pd.read_parquet(self.dataframe_path) # here I will have to add code to load the df with the reward
-        features_to_use_df = pd.read_csv(self.features_to_use_path)
+        self.features_to_use = pd.read_csv(self.features_to_use_path)
 
          # drop any rows where "do not use" is 1
-        features_to_use_df = features_to_use_df[features_to_use_df['do not use'] != 1]
+        self.features_to_use = self.features_to_use[self.features_to_use['do not use'] != 1]
 
         # if this is supervised learning, we need to drop the action features,
         # but if this is reinforcement learning, we need to keep them
         if self.model_type == "supervised_learning":
             # get rid of actions
-            features_to_use_df = features_to_use_df[features_to_use_df['feature_set'] != feature_set]
+            self.features_to_use = self.features_to_use[self.features_to_use['feature_set'] != feature_set]
         
         # drop any rows where "proportion_sepsis" is less than proportion_w_data and
         # imputation_method is "interpolation"
-        features_to_use_df = features_to_use_df[
-            (features_to_use_df['proportion_sepsis'] >= self.proportion_w_data) |   
-            (features_to_use_df['imputation_method'] != 'interpolation')
+        self.features_to_use = self.features_to_use[
+            (self.features_to_use['proportion_sepsis'] >= self.proportion_w_data) |   
+            (self.features_to_use['imputation_method'] != 'interpolation')
         ]
 
         # make list of features
-        features = features_to_use_df['feature'].tolist()
+        features = self.features_to_use['feature'].tolist()
 
 
         # append reward col, self.reward, to features if reinforcement learning

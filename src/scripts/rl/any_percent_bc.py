@@ -358,9 +358,8 @@ def main():
         # log_fold_results_to_wandb(results)
 
         # load training config
-        config_manager.set_training_config()
-
-
+        config_manager.set_training_config() # based on model type (i.e. any_percent_bc.yaml in this case)   
+    
         print(f"Running on {config_manager.environment} environment")
         print(f"Experiment directory: {config_manager.experiment_dir}")
         print(f"Fold directory: {config_manager.fold_dir}")

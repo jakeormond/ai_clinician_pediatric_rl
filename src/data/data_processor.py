@@ -21,7 +21,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import PowerTransformer
 
 class DataProcessor:
-    def __init__(self, dataset, training_config):
+    def __init__(self, dataset, training_config, norm_params=None):
                 
         # self should inherit all the key value pairs from the dataset except the dataframe
         for key, value in vars(dataset).items():
@@ -52,6 +52,18 @@ class DataProcessor:
         
         for f in self.input_features:
             print(f"Input feature: {f}")
+
+        if norm_params is not None:
+            # if normalization parameters are provided, use them to normalize the data
+            self.obs_norm_dict = norm_params['obs_norm_dict']
+            self.action_minimum = norm_params['action_minimum']
+            self.action_maximum = norm_params['action_maximum']
+            self.action_transformers = norm_params['action_transformers']
+        else:
+            self.obs_norm_dict = None
+            self.action_minimum = None
+            self.action_maximum = None
+            self.action_transformers = None
         
         if self.normalize_obs:
             self._normalize_obs(dataset)               
@@ -249,6 +261,15 @@ class DataProcessor:
                     dataset.dataframe[target].values.reshape(-1, 1)).flatten()
                                    
                 print(f"Transformed target {target} with Yeo-Johnson transform.")
+
+    
+    def get_normalization_params(self):
+        return {
+            "obs_norm_dict": self.obs_norm_dict,
+            "action_minimum": self.action_minimum,
+            "action_maximum": self.action_maximum,
+            "action_transformers": self.action_transformers
+        }
                 
 
 def main():

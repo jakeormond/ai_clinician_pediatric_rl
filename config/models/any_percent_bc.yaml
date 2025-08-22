@@ -6,3 +6,4 @@
     discount: 0.999  # Discount factor
     frac: 0.2  # Best data fraction to use
     max_traj_len: 2000  # Max trajectory length
+    device: "cuda"  # Device (cuda or cpu)

@@ -29,14 +29,18 @@ class ReplayBuffer:
         self._rewards = self._to_tensor(rl_dataset["rewards"])
         self._next_states = self._to_tensor(rl_dataset["next_observations"])
         self._dones = self._to_tensor(rl_dataset["terminated"])
-        self._size = self._states.shape[0]       
+        self.size = self._states.shape[0]   
 
-        print(f"Replay buffer initialized with {self._size} transitions.")
+        # n transitions is the number of rows in the dataset minus 
+        # the number of dones
+        self.n_transitions = self.size - self._dones.sum().item()   
+
+        print(f"Replay buffer initialized with {self.n_transitions} transitions.")
 
     def _to_tensor(self, data: np.ndarray) -> torch.Tensor:
         return torch.tensor(data, dtype=torch.float32, device=self._device)
 
-    # Loads data icu dataset
+    # Loads data icu dataset - IS THIS UNUSED?????????????
     def load_icu_dataset(self, data: Dict[str, np.ndarray]):
         if self._size != 0:
             raise ValueError("Trying to load data into non-empty replay buffer")
@@ -53,6 +57,9 @@ class ReplayBuffer:
         self._size += n_transitions
 
         print(f"Dataset size: {n_transitions}")
+
+    def __len__(self) -> int:
+        return self._size
 
     def sample(self, batch_size: int) -> TensorBatch:
         indices = np.random.randint(0, self._size, size=batch_size)

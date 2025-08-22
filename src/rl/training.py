@@ -1,6 +1,7 @@
 import os
 import yaml
 from typing import Any, Dict, List, Optional, Tuple, Union
+from dataclasses import asdict
 import json
 import joblib
 import glob
@@ -15,12 +16,16 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, GridSearchCV, GroupKFold, RandomizedSearchCV
 from scipy.stats import uniform, randint, loguniform
 import xgboost as xgb
+import torch
 # from .evaluation import calculate_metrics
 # from .plotting import create_all_plots, create_aggregated_shap_plots
 from ..utils.logging_utilities import wandb_init
 from ..data.data_processor import DataProcessor
 # from .dataset import Dataset
 from .replay_buffer import ReplayBuffer
+from .models.behavioural_cloning import Actor, BC
+from ..utils.utilities import set_seed
+from ..utils.logging_utilities import wandb_init 
 
 
 def get_safe_n_jobs():
@@ -53,9 +58,7 @@ def get_feature_names_from_pipeline(pipeline, dataset):
 
 
 
-def keep_best_trajectories(
-    dataprocessor: Dict[str, np.ndarray],
-    ):
+def keep_best_trajectories(dataprocessor):
    
     ids_by_trajectories = []
     returns = []
@@ -63,8 +66,8 @@ def keep_best_trajectories(
     cur_return = 0
     reward_scale = 1.0
 
-    for i, (reward, done) in enumerate(zip(dataprocessor.dataset["rewards"], 
-                                           dataprocessor.dataset["terminated"])):
+    for i, (reward, done) in enumerate(zip(dataprocessor.rl_dataset["rewards"], 
+                                           dataprocessor.rl_dataset["terminated"])):
         cur_return += reward_scale * reward
         cur_ids.append(i)
         reward_scale *= dataprocessor.discount     
@@ -88,11 +91,11 @@ def keep_best_trajectories(
     for i in top_trajs:
         order += ids_by_trajectories[i]
     order = np.array(order)
-    dataprocessor.dataset["observations"] = dataprocessor.dataset["observations"][order]
-    dataprocessor.dataset["actions"] = dataprocessor.dataset["actions"][order]
-    dataprocessor.dataset["next_observations"] = dataprocessor.dataset["next_observations"][order]
-    dataprocessor.dataset["rewards"] = dataprocessor.dataset["rewards"][order]
-    dataprocessor.dataset["terminated"] = dataprocessor.dataset["terminated"][order]
+    dataprocessor.rl_dataset["observations"] = dataprocessor.rl_dataset["observations"][order]
+    dataprocessor.rl_dataset["actions"] = dataprocessor.rl_dataset["actions"][order]
+    dataprocessor.rl_dataset["next_observations"] = dataprocessor.rl_dataset["next_observations"][order]
+    dataprocessor.rl_dataset["rewards"] = dataprocessor.rl_dataset["rewards"][order]
+    dataprocessor.rl_dataset["terminated"] = dataprocessor.rl_dataset["terminated"][order]
 
     return
 
@@ -147,11 +150,75 @@ def outer_training_loop(dataset, config_manager):
 
             # create data_processors from the datasets, and then replay buffers
             inner_train_processor = DataProcessor(inner_train_dataset, config_manager.training_config)
+            inner_val_processor = DataProcessor(inner_val_dataset, config_manager.training_config, 
+                                                norm_params=inner_train_processor.get_normalization_params())
 
-            inner_train_processor = keep_best_trajectories(inner_train_processor)
 
-            training_buffer = ReplayBuffer(inner_train_processor)
-            
+            ######### MAKE A VAL PROCESSOR, HAS TO BE NORMALIZED USING THE TRAIN PROCESSOR STATS #########
+
+
+
+            keep_best_trajectories(inner_train_processor)
+
+            training_buffer = ReplayBuffer(inner_train_processor.rl_dataset)
+
+            # get the max action from the dataset
+            max_action = np.max(np.abs(inner_train_processor.rl_dataset["actions"])) # not sure if this should be n-dimensional???
+
+            # set seeds
+            set_seed(config_manager.seed)
+
+            # create the actor
+            state_dim = inner_train_processor.rl_dataset["observations"].shape[1]
+            action_dim = inner_train_processor.rl_dataset["actions"].shape[1]
+            actor = Actor(state_dim, action_dim, max_action).to("cuda" if torch.cuda.is_available() else "cpu")
+            actor_optimizer = torch.optim.Adam(actor.parameters(), lr=3e-4)
+
+            # the training class requires a dictionary of keyword arguments
+            kwargs = {
+                "max_action": max_action,
+                "actor": actor,
+                "actor_optimizer": actor_optimizer,
+                "discount": config_manager.training_config['discount'],
+                "device": config_manager.training_config['device'],
+            }
+
+            print("---------------------------------------")
+            print(f"Training BC, Hosp: {config_manager.hospital}, Seed: {config_manager.seed}")
+            print("---------------------------------------")
+
+            trainer = BC(**kwargs)
+
+            # CORL provides an option to load a checkpoint here, a path is provided
+            # in config_manager.training_config
+
+            # wandb_init(config_manager.training_config)
+
+            best_val_loss = float("inf")
+            patience = 5  # Number of iterations to wait before stopping
+            patience_counter = 0
+
+            num_batches = training_buffer.size // config_manager.training_config['batch_size']
+
+            for e in range(config_manager.training_config['n_epochs']): # previously max_timesteps
+                for batch_idx in range(num_batches):
+                    if batch_idx % 100 == 0:
+                        print(f"Epoch {e}, Batch {batch_idx}/{num_batches}")
+
+                        batch = training_buffer.sample(config_manager.training_config['batch_size'])
+
+                        log_dict = trainer.train(batch)
+
+                        if e % config_manager.training_config['eval_freq'] == 0:
+                            
+                            
+                            
+                            
+                            val_batch = val_replay_buffer.sample(config.batch_size)
+                            with torch.no_grad():
+                                val_loss = F.mse_loss(trainer.actor(val_batch[0]), val_batch[1]).item()
+                            wandb.log({"val_loss": val_loss}, step=trainer.total_it)
+                            print(f"Epoch {e}, Validation Loss: {val_loss:.4f}")
             
             
 

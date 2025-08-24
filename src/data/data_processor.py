@@ -21,7 +21,9 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import PowerTransformer
 
 class DataProcessor:
-    def __init__(self, dataset, training_config, norm_params=None):
+    def __init__(self, dataset, training_config, norm_params=None, 
+                 normalize_obs = True, normalize_actions = True,
+                 transform_actions = True, create_binary_actions = True):
                 
         # self should inherit all the key value pairs from the dataset except the dataframe
         for key, value in vars(dataset).items():
@@ -53,12 +55,32 @@ class DataProcessor:
         for f in self.input_features:
             print(f"Input feature: {f}")
 
-        if norm_params is not None:
+        # split into the rl_dataset
+        self.rl_dataset = self._split_into_rl_dataset(dataset)           
+            
+        self.norm_params = norm_params
+        self.normalize_obs = normalize_obs
+        self.normalize_actions = normalize_actions
+        self.transform_actions = transform_actions
+
+        if self.normalize_obs or self.normalize_actions or self.transform_actions:
+            self.normalize()
+
+        if create_binary_actions: # note that this requires zeros to have remained zeros after transformation and normalization
+            self._create_binary_actions()
+
+
+    def normalize(self, norm_params=None):
+
+        if self.norm_params is None and norm_params is not None:
+            self.norm_params = norm_params
+        
+        if self.norm_params is not None:
             # if normalization parameters are provided, use them to normalize the data
-            self.obs_norm_dict = norm_params['obs_norm_dict']
-            self.action_minimum = norm_params['action_minimum']
-            self.action_maximum = norm_params['action_maximum']
-            self.action_transformers = norm_params['action_transformers']
+            self.obs_norm_dict = self.norm_params['obs_norm_dict']
+            self.action_minimum = self.norm_params['action_minimum']
+            self.action_maximum = self.norm_params['action_maximum']
+            self.action_transformers = self.norm_params['action_transformers']
         else:
             self.obs_norm_dict = None
             self.action_minimum = None
@@ -66,19 +88,13 @@ class DataProcessor:
             self.action_transformers = None
         
         if self.normalize_obs:
-            self._normalize_obs(dataset)               
+            self._normalize_obs()               
 
         if self.transform_actions: # this has to occur before normalization
-            self._transform_actions(dataset)
+            self._transform_actions()
 
         if self.normalize_actions:
-            self._normalize_actions(dataset)
-        
-        if self.create_binary_actions: # note that this requires zeros to have remained zeros after transformation and normalization
-            self._create_binary_actions(dataset)
-
-        # split into the rl_dataset
-        self.rl_dataset = self._split_into_rl_dataset(dataset)               
+            self._normalize_actions() 
             
         
     def _split_into_rl_dataset(self, dataset):
@@ -154,15 +170,29 @@ class DataProcessor:
         }
     
 
-    def _create_binary_actions(self, dataset):
+    def _create_binary_actions(self):
                 
-        for i, action in enumerate(dataset.actions):
-            # create a binary action for each action, where 1 means the action was given
-            # and 0 means it was not given
-            binary_col_name = f"{action}_binary"
-            self.actions.append(binary_col_name)
-            dataset.dataframe[binary_col_name] = (dataset.dataframe[action] != 0).astype(int)
-
+        # loop through the columns in self.rl_dataset['actions'] and create a
+        # binary action for each action, where 1 means the action was given
+        # and 0 means it was not given, adding the column onto the array       
+    
+        actions_array = self.rl_dataset['actions']
+        
+        # Vectorized binary creation for all columns at once
+        binary_actions = (actions_array > 0).astype(int)
+        
+        # Concatenate original and binary actions
+        self.rl_dataset['actions'] = np.concatenate([actions_array, binary_actions], axis=1)
+        
+        # Update action names
+        original_names = self.actions.copy()  # Preserve original names
+        binary_names = [f"{name}_binary" for name in original_names]
+        self.actions.extend(binary_names)
+        
+        print(f"Created {binary_actions.shape[1]} binary actions")
+        print(f"Original actions: {original_names}")
+        print(f"Binary actions: {binary_names}")
+        print(f"New action array shape: {self.rl_dataset['actions'].shape}")
 
 
     def _normalize_obs(self, dataset):
@@ -170,33 +200,39 @@ class DataProcessor:
         # leave one hot encoded features as they are, and z-score normalize 
         # the continuous features
 
+        if self.obs_norm_dict is None:
+            self.obs_norm_dict = {}
 
-        for feature in self.input_features:
-            
-            
+        for i, feature in enumerate(self.input_features):
+                    
             # get the features row in self.features_to_use
             feature_row = self.features_to_use[self.features_to_use['feature'] == feature]
             data_type = feature_row['data_type'].values[0]
             feature_set = feature_row['feature_set'].values[0]
 
-            if self.obs_norm_dict is not None:
-                # if normalization parameters are provided, use them to normalize the data
-                min_val = self.obs_norm_dict[feature]['min']
-                max_val = self.obs_norm_dict[feature]['max']
-                mean_val = self.obs_norm_dict[feature]['mean']
-                std_val = self.obs_norm_dict[feature]['std']
-            else:
-                min_val = dataset.dataframe[feature].min()
-                max_val = dataset.dataframe[feature].max()
-                mean_val = dataset.dataframe[feature].mean()
-                std_val = dataset.dataframe[feature].std()
+            if feature not in self.obs_norm_dict:
+                self.obs_norm_dict[feature] = {}
+                self.obs_norm_dict[feature]['min'] = dataset.dataframe[feature].min()
+                self.obs_norm_dict[feature]['max'] = dataset.dataframe[feature].max()
+                self.obs_norm_dict[feature]['mean'] = dataset.dataframe[feature].mean()
+                self.obs_norm_dict[feature]['std'] = dataset.dataframe[feature].std()
             
             if data_type == 'ordinal' or feature_set == 'infusion' or \
                 feature_set == 'other_meds' or feature_set == 'sedation':
                 
                 # min-max normalize the feature
                 normalization_type = 'min-max'
-                dataset.dataframe.loc[:, feature] = (dataset.dataframe[feature] - min_val) / (max_val - min_val)                
+                
+                # normalize the ith col in self.rl_dataset['observations']
+                # using the min and max from the training set
+                self.rl_dataset['observations'][:, i] = (self.rl_dataset['observations'][:, i] - 
+                    self.obs_norm_dict[feature]['min']) / (self.obs_norm_dict[feature]['max'] 
+                                                           - self.obs_norm_dict[feature]['min'])
+                
+                # also normalize the next_observations
+                self.rl_dataset['next_observations'][:, i] = (self.rl_dataset['next_observations'][:, i] - 
+                    self.obs_norm_dict[feature]['min']) / (self.obs_norm_dict[feature]['max'] 
+                                                           - self.obs_norm_dict[feature]['min'])          
 
             elif data_type == 'binary':
                 # binary features are already normalized, so we just store the normalization type
@@ -205,66 +241,68 @@ class DataProcessor:
             elif data_type == 'continuous':
                 # z-score normalize the feature
                 normalization_type = 'z-score'
-                dataset.dataframe.loc[:, feature] = (dataset.dataframe[feature] - mean_val) / std_val
 
-            if self.obs_norm_dict is None:
-                self.obs_norm_dict = {}
-                self.obs_norm_dict[feature] = {}
-                self.obs_norm_dict[feature]['min'] = min_val
-                self.obs_norm_dict[feature]['max'] = max_val
-                self.obs_norm_dict[feature]['mean'] = mean_val
-                self.obs_norm_dict[feature]['std'] = std_val
-                self.obs_norm_dict[feature]['normalization_type'] = normalization_type
+                # normalize the ith col in self.rl_dataset['observations']
+                # using the mean and std from the training set
+                self.rl_dataset['observations'][:, i] = (self.rl_dataset['observations'][:, i] - 
+                    self.obs_norm_dict[feature]['mean']) / self.obs_norm_dict[feature]['std']
+                
+                # also normalize the next_observations
+                self.rl_dataset['next_observations'][:, i] = (self.rl_dataset['next_observations'][:, i] - 
+                    self.obs_norm_dict[feature]['mean']) / self.obs_norm_dict[feature]['std']
 
             print(f"Normalized feature {feature} with {normalization_type} normalization. "
-                f"Min: {min_val}, Max: {max_val}, Mean: {mean_val}, Std: {std_val}")
+                f"Min: {self.obs_norm_dict[feature]['min']}, \
+                    Max: {self.obs_norm_dict[feature]['max']}, \
+                        Mean: {self.obs_norm_dict[feature]['mean']}, \
+                            Std: {self.obs_norm_dict[feature]['std']}")
 
         print("Observation normalization complete.")                        
 
     
     def _normalize_actions(self, dataset):
         # normalize actions between 0 and 1
+        if self.action_minimum is None and self.action_maximum is None:
+            self.action_minimum = {}
+            self.action_maximum = {}
         
         for i, action in enumerate(dataset.actions):
-            # normalize each action between 0 and 1
-            # we will use the min and max of the training set to normalize the test set
-            if self.action_minimum is not None and self.action_maximum is not None:
-                min_action = self.action_minimum[action]
-                max_action = self.action_maximum[action]
-            else:
-                if i == 0:
-                    self.action_minimum = {}
-                    self.action_maximum = {}                             
-                self.action_minimum[action] = dataset.dataframe[action].min()
-                self.action_maximum[action] = dataset.dataframe[action].max()
+            # normalize the ith col in self.rl_dataset['actions']
+            # using min-max normalization between 0 and 1;
+            if action not in self.action_minimum and action not in self.action_maximum:
+                self.action_minimum[action] = self.rl_dataset['actions'][:, i].min()
+                self.action_maximum[action] = self.rl_dataset['actions'][:, i].max()
 
-            dataset.dataframe.loc[:, action] = (dataset.dataframe[action] - self.action_minimum[action]) / \
-                                                  (self.action_maximum[action] - self.action_minimum) 
+            self.rl_dataset['actions'][:, i] = (self.rl_dataset['actions'][:, i] - self.action_minimum[action]) / \
+                                              (self.action_maximum[action] - self.action_minimum[action])
+            
 
             print(f"Normalized action {action} between 0 and 1.")        
 
 
-    def _transform_actions(self, dataset, transform_included=False):
+    def _transform_actions(self, dataset):
 
         # Store the fitted transformers for later use
-        self.action_transformers = {}
+        if self.action_transformers is None:
+            self.action_transformers = {}
 
         for i, target in enumerate(self.actions):
             target_transform = self.action_transforms[i]
 
             if target_transform == "yeo-johnson": # no other transforms yet implemented
                 
-                if not transform_included:
+                if target not in self.action_transformers:
+                    # fit the transformer on the training data
                     pt = PowerTransformer(method='yeo-johnson')    
-                    pt.fit(dataset.dataframe[target].values.reshape(-1, 1))  # Reshape to 2D array
+                    pt.fit(self.rl_dataset['actions'][:, i].reshape(-1, 1))  # Reshape to 2D array
                     self.action_transformers[target] = pt  
 
                 else:
                     pt = self.action_transformers[target]            
 
                 # transform the training data
-                dataset.dataframe[target] = pt.transform(
-                    dataset.dataframe[target].values.reshape(-1, 1)).flatten()
+                self.rl_dataset['actions'][:, i] = pt.transform(
+                    self.rl_dataset['actions'][:, i].reshape(-1, 1)).flatten()
                                    
                 print(f"Transformed target {target} with Yeo-Johnson transform.")
 

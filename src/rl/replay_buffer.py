@@ -62,7 +62,7 @@ class ReplayBuffer:
         return self._size
 
     def sample(self, batch_size: int) -> TensorBatch:
-        indices = np.random.randint(0, self._size, size=batch_size)
+        indices = np.random.randint(0, self.size, size=batch_size)
         states = self._states[indices]
         actions = self._actions[indices]
         rewards = self._rewards[indices]

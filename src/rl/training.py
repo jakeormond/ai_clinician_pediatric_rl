@@ -2,7 +2,9 @@ import os
 import yaml
 from typing import Any, Dict, List, Optional, Tuple, Union
 from dataclasses import asdict
+from pathlib import Path
 import json
+import itertools
 import joblib
 import glob
 import copy
@@ -17,44 +19,15 @@ from sklearn.model_selection import KFold, GridSearchCV, GroupKFold, RandomizedS
 from scipy.stats import uniform, randint, loguniform
 import xgboost as xgb
 import torch
+import torch.nn.functional as F
 # from .evaluation import calculate_metrics
 # from .plotting import create_all_plots, create_aggregated_shap_plots
 from ..utils.logging_utilities import wandb_init
 from ..data.data_processor import DataProcessor
 # from .dataset import Dataset
 from .replay_buffer import ReplayBuffer
-from .models.behavioural_cloning import Actor, BC
+from .models.behavioural_cloning import Actor, MixedActionActor, BC
 from ..utils.utilities import set_seed
-from ..utils.logging_utilities import wandb_init 
-
-
-def get_safe_n_jobs():
-    """Get safe number of parallel jobs based on environment."""
-    if 'SLURM_CPUS_PER_TASK' in os.environ:
-        slurm_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', '4'))
-        # Use half the allocated CPUs for safety
-        n_jobs = min(4, max(1, slurm_cpus // 2))
-        print(f"SLURM detected: Using n_jobs={n_jobs} (SLURM_CPUS_PER_TASK={slurm_cpus})")
-        return n_jobs
-    else:
-        print("Local environment: Using n_jobs=-1 (all cores)")
-        return -1
-    
-
-def get_feature_names_from_pipeline(pipeline, dataset):
-    """Extract feature names from the fitted pipeline."""
-    
-    # Get the original feature names from your dataset
-    # This depends on your dataset structure
-    try:
-        # If your dataset has a method to get feature names
-        base_feature_names = dataset.get_feature_names()
-    except:
-        # Fallback: use generic names
-        n_features = pipeline.named_steps['scaler'].n_features_in_
-        base_feature_names = [f'feature_{i}' for i in range(n_features)]
-    
-    return base_feature_names
 
 
 
@@ -100,7 +73,7 @@ def keep_best_trajectories(dataprocessor):
     return
 
 
-def outer_training_loop(dataset, config_manager): 
+def outer_training_loop_V1(dataset, config_manager): 
 
     # Get CV configuration from config
     n_outer_folds = config_manager.cv_config["n_outer_folds"]
@@ -109,12 +82,6 @@ def outer_training_loop(dataset, config_manager):
     print(f"Using {n_outer_folds} outer folds and {n_inner_folds} inner folds")    
 
     print(f"Number of unique encounter IDs: {len(dataset.encounter_ids())}")
-
-    # Get CV configuration from config
-    n_outer_folds = config_manager.cv_config["n_outer_folds"]
-    n_inner_folds = config_manager.cv_config["n_inner_folds"]
-    
-    print(f"Using {n_outer_folds} outer folds and {n_inner_folds} inner folds") 
     
     ######################################### OUTER SPLITS #################################################
        
@@ -124,17 +91,32 @@ def outer_training_loop(dataset, config_manager):
                      shuffle=True, random_state=config_manager.data_config["seed"])
 
     target_fold = config_manager.cv_config['fold']
-    encounter_col = config_manager.data_config["encounter_col"]
-    time_col = config_manager.data_config["time_col"]
 
     for outer_fold, (outer_train_id, outer_test_id) in enumerate(kf_outer.split(dataset.encounter_ids())):
         if target_fold is not None and outer_fold != target_fold:
             print(f"Skipping outer fold {outer_fold} as it is not the target fold {target_fold}")
             continue
 
-        train_dataset = dataset.create_subset(dataset.encounter_ids()[outer_train_id])
+        train_dataset = dataset.create_subset(dataset.encounter_ids()[outer_train_id])     
         test_dataset = dataset.create_subset(dataset.encounter_ids()[outer_test_id])
+               
+        # even though the train dataset will be further split for hyperparameter tuning,
+        # we need to create a processor now to get normalization stats
+        train_processor = DataProcessor(train_dataset, config_manager.training_config, 
+                                        normalize_obs = False, normalize_actions=False,
+                                        transform_actions = False, create_binary_action = False)
+        keep_best_trajectories(train_processor)
+        train_processor.normalize()     
         
+        # we create the test processor and replay buffer, but it is used later
+        test_processor = DataProcessor(test_dataset, config_manager.training_config, 
+                                       norm_params=train_processor.get_normalization_params())
+        keep_best_trajectories(test_processor)
+        test_buffer = ReplayBuffer(test_processor.rl_dataset)
+
+        ######################################### HYPERPARAMETER OPTIMIZATION #################################################
+
+
         # split the train dataset into train and validation sets
         kf_inner = KFold(n_splits=n_inner_folds, 
                 shuffle=True, random_state=config_manager.data_config["seed"])
@@ -149,18 +131,18 @@ def outer_training_loop(dataset, config_manager):
             inner_val_dataset = train_dataset.create_subset(train_dataset.encounter_ids()[inner_val_id])
 
             # create data_processors from the datasets, and then replay buffers
-            inner_train_processor = DataProcessor(inner_train_dataset, config_manager.training_config)
+            inner_train_processor = DataProcessor(inner_train_dataset, config_manager.training_config, 
+                                                  norm_params=train_processor.get_normalization_params())
             inner_val_processor = DataProcessor(inner_val_dataset, config_manager.training_config, 
-                                                norm_params=inner_train_processor.get_normalization_params())
+                                                norm_params=train_processor.get_normalization_params())
 
 
             ######### MAKE A VAL PROCESSOR, HAS TO BE NORMALIZED USING THE TRAIN PROCESSOR STATS #########
-
-
-
             keep_best_trajectories(inner_train_processor)
+            keep_best_trajectories(inner_val_processor)
 
             training_buffer = ReplayBuffer(inner_train_processor.rl_dataset)
+            val_replay_buffer = ReplayBuffer(inner_val_processor.rl_dataset)
 
             # get the max action from the dataset
             max_action = np.max(np.abs(inner_train_processor.rl_dataset["actions"])) # not sure if this should be n-dimensional???
@@ -192,7 +174,7 @@ def outer_training_loop(dataset, config_manager):
             # CORL provides an option to load a checkpoint here, a path is provided
             # in config_manager.training_config
 
-            # wandb_init(config_manager.training_config)
+            wandb_init(config_manager.training_config)
 
             best_val_loss = float("inf")
             patience = 5  # Number of iterations to wait before stopping
@@ -200,327 +182,292 @@ def outer_training_loop(dataset, config_manager):
 
             num_batches = training_buffer.size // config_manager.training_config['batch_size']
 
-            for e in range(config_manager.training_config['n_epochs']): # previously max_timesteps
+            for e in range(config_manager.training_config['n_epochs']): # previously max_timesteps       
                 for batch_idx in range(num_batches):
-                    if batch_idx % 100 == 0:
-                        print(f"Epoch {e}, Batch {batch_idx}/{num_batches}")
+                    if e % 100 == 0 and batch_idx == 0:
+                        # print(f"Epoch {e}")
 
                         batch = training_buffer.sample(config_manager.training_config['batch_size'])
 
-                        log_dict = trainer.train(batch)
-
-                        if e % config_manager.training_config['eval_freq'] == 0:
-                            
-                            
-                            
-                            
-                            val_batch = val_replay_buffer.sample(config.batch_size)
-                            with torch.no_grad():
-                                val_loss = F.mse_loss(trainer.actor(val_batch[0]), val_batch[1]).item()
-                            wandb.log({"val_loss": val_loss}, step=trainer.total_it)
-                            print(f"Epoch {e}, Validation Loss: {val_loss:.4f}")
-            
-            
-
-
-            pass
-
-
-
-
-
-
-        
-
-
-
-    
-
-
-def aggregate_results_across_outer_folds(config):
-    """
-    This function is used to combine the results across outer folds.
-    It will read the predictions and metrics from each outer fold and combine them into a single DataFrame.
-    """
-    print(f"Aggregating results from experiment directory: {config.experiment_dir}")
-    
-    n_folds = config.cv_config["n_outer_folds"]
-
-    # load the parquet files for each fold
-    all_test_data = []
-    
-    all_predictions_dfs = []
-    all_test_data = []    
-    
-    
-    for fold in range(n_folds):
-
-        # find the folder in the experiment directory that begins with f"fold_{fold}" and ends with some random numbers
-        fold_dir = config.experiment_dir / f"fold_{fold}_*"
-
-        # within that folder, find the parquet file that starts with "predictions_fold_" and ends with ".parquet"
-        fold_predictions_path = glob.glob(os.path.join(fold_dir, 
-                                    f"predictions_fold_{fold}.parquet"))
-        fold_df = pd.read_parquet(fold_predictions_path, engine='pyarrow')
-        all_predictions_dfs.append(fold_df)
-
-        # Load model and scaler for SHAP
-        model_path = fold_dir / f"model_fold_{fold}.joblib"
-        scaler_path = fold_dir / f"scaler_fold_{fold}.joblib"
-
-        # Load model and scaler for SHAP
-        model_path = glob.glob(os.path.join(fold_dir, 
-                                    f"model_fold_{fold}.joblib"))[0]
-        scaler_path = glob.glob(os.path.join(fold_dir, 
-                                    f"scaler_fold_{fold}.joblib"))[0]
-
-        model = joblib.load(model_path)
-        scaler = joblib.load(scaler_path)
-
-        # ✅ Store as comprehensive fold data
-        fold_data = {
-            'fold': fold,
-            'model': model,
-            'scaler': scaler,
-            'predictions_df': fold_df
-        }
-        
-        all_test_data.append(fold_data)  # Reuse this list for comprehensive data            
-        print(f"✓ Loaded complete data for fold {fold}")
-
-    # concatenate all predictions DataFrames
-    all_predictions_df = pd.concat(all_predictions_dfs, ignore_index=True)
-    # sort by encounter_id and time
-    all_predictions_df.sort_values(by=['encounter_id', 'time'], inplace=True)
-    all_predictions_df.reset_index(drop=True, inplace=True)
-
-    # check if there are any duplicates of encounter_id and time
-    duplicates = all_predictions_df[all_predictions_df.
-            duplicated(subset=['encounter_id', 'time'], keep=False)]
-    if not duplicates.empty:
-        # raise an error if there are duplicates
-        raise ValueError("Duplicate encounter_id and time found in predictions DataFrame. ")
-       
-    # extract the true labels, predicted labels, and predicted probabilities
-    # Note: y_pred_proba is the continuous prediction for regression, or the probability for classification
-    # For multiclass, y_pred_proba_raw will contain the full probability matrix
-    # For binary classification, y_pred_proba will be the probability of the positive class
-    all_true_labels = all_predictions_df["true_label"].values
-    all_predictions = all_predictions_df["predicted_label"].values
-    all_pred_proba = all_predictions_df["predicted_proba"].values    
-
-    if config.prediction_type == "discharge_mortality":
-        # For multiclass, we need to reconstruct the full probability matrix
-        y_pred_proba_raw = all_predictions_df.filter(like='predicted_proba_class_').values
-        if y_pred_proba_raw.size == 0:
-            y_pred_proba_raw = None
-    else:
-        y_pred_proba_raw = None
-
-    # calculate overall metrics
-    overall_metrics = calculate_metrics(all_true_labels, \
-            all_pred_proba, config.model_type, y_pred = all_predictions, y_pred_proba_raw=y_pred_proba_raw)
-    print(f"Overall metrics: {overall_metrics}")
-    
-    with open(config.experiment_dir / "overall_metrics.json", "w") as f:
-        serializable_metrics = {k: float(v) if isinstance(v, (np.floating, np.integer)) else v 
-                            for k, v in overall_metrics.items()}
-        json.dump(serializable_metrics, f, indent=2)
-
-    # make plots
-    n_classes = len(np.unique(all_true_labels))
-    is_classification = config.model_type == "xgbclassifier"
-
-    # Pass y_pred_proba_raw for multiclass
-    ############################# TEMPORARILY DISABLED PLOTS #############################
-    # if is_classification and n_classes > 2:
-    #     # You'll need to reconstruct the full probability matrix from your saved data
-    #     # This depends on how you saved the individual class probabilities
-        
-    #     create_all_plots(
-    #         all_true_labels, 
-    #         all_predictions, 
-    #         all_pred_proba, 
-    #         config.experiment_dir,
-    #         is_classification=is_classification,
-    #         y_pred_proba_raw=y_pred_proba_raw
-    #     )
-    # else:
-    #     create_all_plots(
-    #         all_true_labels, 
-    #         all_predictions, 
-    #         all_pred_proba, 
-    #         config.experiment_dir,
-    #         is_classification=is_classification
-    #     )
-
-    # save all_predictions_df to a parquet file
-    all_predictions_df.to_parquet(config.experiment_dir / "all_predictions.parquet", 
-                                  engine='pyarrow', index=False)
-    
-    # SHAP calculation
-    if config.calculate_shap:
-        print("\n=== Calculating SHAP Values ===")
-        
-        shap_results = calculate_shap_for_aggregated_results(config, all_test_data)
-            
-        shap_save_path = config.experiment_dir / "shap_analysis.pkl"
-        with open(shap_save_path, 'wb') as f:
-            pickle.dump(shap_results, f)
-        print(f"✓ SHAP results saved to {shap_save_path}") 
-
-    
-def calculate_shap_for_aggregated_results(config, all_test_data): 
-    
-    """
-    Calculate SHAP values for all models using the fold_data structure.
-    
-    Args:
-        config: Configuration object
-        all_test_data: List of fold_data dictionaries with 'fold', 'model', 'scaler', 'predictions_df'
-    """
-    import time
-
-    # Get parameters from config
-    max_samples_per_fold = getattr(config, 'shap_max_samples', None)  # None = use all
-    background_samples = getattr(config, 'shap_background_samples', 100)  # Default 100
-    
-    print(f"SHAP Configuration:")
-    print(f"  Max samples per fold: {max_samples_per_fold if max_samples_per_fold else 'All samples'}")
-    print(f"  Background samples: {background_samples if background_samples else 'None'}")
-       
-    dataset = Dataset(config.hospital_config)
-
-    # Recreate the same CV splits as in training
-    kf_outer = KFold(n_splits=config.cv_config["n_outer_folds"], 
-                     shuffle=True, random_state=config.hospital_config["seed"])
-
-    # Create mapping of fold -> test_encounters
-    fold_to_encounters = {}
-    fold_to_train_encounters = {}
-    for fold, (train_idx, test_idx) in enumerate(kf_outer.split(dataset.encounter_ids())):
-        fold_to_encounters[fold] = dataset.encounter_ids()[test_idx]
-        fold_to_train_encounters[fold] = dataset.encounter_ids()[train_idx]
-    
-    all_shap_results = []
-    feature_names = None
-    background_data = None
-
-    print(f"Processing SHAP for {len(all_test_data)} folds...")
-    
-    for fold_data in all_test_data:
-        fold = fold_data['fold']
-        model = fold_data['model'] 
-        scaler = fold_data['scaler']
-        predictions_df = fold_data['predictions_df']
-        
-        print(f"  Processing fold {fold}...")
-
-        test_encounters = fold_to_encounters[fold]
-        X_test, y_test, _ = dataset.modeling_data(test_encounters)
-        
-        # Get feature names (only need to do this once)
-        if feature_names is None:
-            feature_names = X_test.columns.tolist()
-            print(f"    Found {len(feature_names)} features")
-        
-        # ✅ OPTIMIZATION 1: Create background dataset (once per fold)
-        if background_samples and background_samples > 0 and background_data is None:
-            print(f"    Creating background dataset with {background_samples} samples...")
-            train_encounters = fold_to_train_encounters[fold]
-            X_bg, _, _ = dataset.modeling_data(train_encounters)
-            
-            # Sample background data
-            if len(X_bg) > background_samples:
-                bg_indices = np.random.choice(len(X_bg), size=background_samples, replace=False)
-                X_bg_sample = X_bg.iloc[bg_indices]
-            else:
-                X_bg_sample = X_bg
+                        train_metrics = trainer.train(batch)
+                        
+                        wandb.log(train_metrics, step=trainer.total_it)
+                        
+                    if e % config_manager.training_config['eval_freq'] == 0:
+                        # val_batch = val_replay_buffer.sample(config_manager.training_config['batch_size'])
+                        # with torch.no_grad():
+                        #     val_loss = F.mse_loss(trainer.actor(val_batch[0]), val_batch[1]).item()
+                        # wandb.log({"val_loss": val_loss}, step=trainer.total_it)
+                        # print(f"Epoch {e}, Validation Loss: {val_loss:.4f}")                      
+                        
+                        val_metrics = trainer.evaluate(val_replay_buffer, batch_size=512)
                 
-            # Scale background data using the fold's scaler
-            background_data = scaler.transform(X_bg_sample)
-            print(f"    ✓ Background dataset created: {len(background_data)} samples")
-        
-        # Scale test data using the fold's scaler
-        X_test_scaled = scaler.transform(X_test)
-        
-        # Verify data alignment
-        if len(X_test_scaled) != len(predictions_df):
-            raise ValueError(
-                f"Data length mismatch: X_test({len(X_test_scaled)}) vs predictions({len(predictions_df)})"
-            )
+                        # Print progress
+                        print(f"Epoch {e}/{config_manager.training_config['n_epochs']}")
+                        print(f"  Train Loss: {train_metrics['actor_loss']:.4f} "
+                            f"(Dose: {train_metrics['dose_loss']:.4f}, "
+                            f"Binary: {train_metrics['binary_loss']:.4f})")
+                        print(f"  Val Loss: {val_metrics['eval/total_loss']:.4f} "
+                            f"(Dose RMSE: {val_metrics['eval/dose_rmse']:.4f}, "
+                            f"Binary Acc: {val_metrics['eval/binary_accuracy']:.3f})")
+                        
+                        # log to wandb
+                        wandb.log(val_metrics, step=trainer.total_it)
+                              
+                        # Early stopping logic
+                        if val_metrics['eval/total_loss'] < best_val_loss:
+                            best_val_loss = val_metrics['eval/total_loss']
+                            patience_counter = 0
+                            # Optionally save the best model
+                            save_path = Path(config_manager.training_config['checkpoints_path']) / f"best_model_inner_fold{inner_fold}.pt"
+                            torch.save(trainer.state_dict(), save_path)
 
-        # ✅ OPTIMIZATION 2: Downsample test data
-        n_samples_original = len(X_test_scaled)
-        if max_samples_per_fold and n_samples_original > max_samples_per_fold:
-            print(f"    Downsampling from {n_samples_original} to {max_samples_per_fold} samples")
+                        else:
+                            patience_counter += 1
+                            if patience_counter >= patience:
+                                print(f"Early stopping at epoch {e} due to no improvement in validation loss.")
+                                break
+                        
+                        if config_manager.training_config['checkpoints_path'] is not None:
+                            torch.save(
+                                trainer.state_dict(),
+                                os.path.join(config_manager.training_config['checkpoints_path'], f"inner_fold{inner_fold}_checkpoint_{e}.pt"),
+                            )
+
+        # Final evaluation on the outer test set
+        print("Evaluating on the outer test set...")
+        
+        test_metrics = trainer.evaluate(test_buffer, batch_size=512)
+        print(f"Final Test Metrics: {test_metrics}")
+        wandb.log(test_metrics)
+
+        # Save the final model
+        final_save_path = Path(config_manager.training_config['checkpoints_path']) / "inner_fold{inner_fold}_final_model.pt"
+        torch.save(trainer.state_dict(), final_save_path)
+        print(f"Final model saved to {final_save_path}")
+        
+   
+def outer_training_loop(dataset, config_manager): 
+    """Runs single outer fold - designed for HPC job array."""
+    
+    # Get CV configuration
+    n_outer_folds = config_manager.cv_config["n_outer_folds"]
+    n_inner_folds = config_manager.cv_config["n_inner_folds"]
+    target_fold = config_manager.cv_config['fold']  # This comes from job array index when running on HPC
+    
+    if target_fold is None:
+        raise ValueError("target_fold must be specified")
+    
+    print(f"Processing outer fold {target_fold}/{n_outer_folds}")
+    
+    # Outer CV split
+    kf_outer = KFold(n_splits=n_outer_folds, shuffle=True, 
+                     random_state=config_manager.data_config["seed"])
+
+    for outer_fold, (outer_train_id, outer_test_id) in enumerate(kf_outer.split(dataset.encounter_ids())):
+        if outer_fold != target_fold:
+            continue  # Skip other folds
             
-            # Stratified sampling to maintain class distribution
-            sample_indices = np.random.choice(n_samples_original, size=max_samples_per_fold, replace=False)
-            X_test_scaled_sample = X_test_scaled[sample_indices]
-            y_test_sample = y_test.values[sample_indices]
-            n_samples = max_samples_per_fold
-        else:
-            X_test_scaled_sample = X_test_scaled
-            y_test_sample = y_test.values
-            n_samples = n_samples_original
+        print(f"=== OUTER FOLD {outer_fold} ===")
         
-        print(f"    Calculating SHAP for {n_samples} samples...")
+        # Create outer train/test splits
+        train_dataset = dataset.create_subset(dataset.encounter_ids()[outer_train_id])     
+        test_dataset = dataset.create_subset(dataset.encounter_ids()[outer_test_id])
 
-        # Calculate SHAP values using TreeExplainer
-        start_time = time.time()
+        # even though the train dataset will be further split for hyperparameter tuning,
+        # we need to create a processor now to get normalization stats
+        train_processor = DataProcessor(train_dataset, config_manager.training_config, 
+                                        normalize_obs = False, normalize_actions=False,
+                                        transform_actions = False, create_binary_action = False)
+        keep_best_trajectories(train_processor)
+        train_processor.normalize()     
+        norm_params = train_processor.get_normalization_params() 
+
+        ###################   HYPERPARAMETER OPTIMIZATION #############################
+        print("Phase 1: Hyperparameter Optimization")
+        best_hyperparameters = optimize_hyperparameters(
+            train_dataset, config_manager, n_inner_folds=n_inner_folds, 
+            norm_params=norm_params, outer_fold=outer_fold
+        )
+        print(f"Best hyperparameters: {best_hyperparameters}")
+
+        #################### RETRAIN FINAL MODEL #############################
+        print("Phase 2: Final Model Training & Evaluation")
         
-        # Verify data alignment
-        if len(X_test_scaled) != len(predictions_df):
-            print(f"    ⚠️  Data length mismatch: X_test({len(X_test_scaled)}) vs predictions({len(predictions_df)})")
-            # Try to align by encounter_id/time if possible
-            # This is complex, so skip for now
-            continue
-               
-        if background_data is not None:
-            explainer = shap.TreeExplainer(model, background_data)
-            print(f"    Using background dataset with {len(background_data)} samples")
-        else:
-            explainer = shap.TreeExplainer(model)
-            print(f"    Using default TreeExplainer (no background)")
-
-        shap_values_fold = explainer.shap_values(X_test_scaled_sample)
-
-        end_time = time.time()
-        print(f"    ✓ Fold {fold} SHAP complete in {end_time - start_time:.1f}s ({n_samples} samples)")
-               
-        # Store results
-        fold_result = {
-            'fold': fold,
-            'shap_values': shap_values_fold,
-            'test_data': X_test_scaled_sample,
-            'true_labels': y_test_sample,
-            'feature_names': feature_names,
-            'explainer_expected_value': explainer.expected_value,
-            'n_samples': n_samples,
-            'n_samples_original': n_samples_original
-        }
+        test_processor = DataProcessor(test_dataset, config_manager.training_config, 
+                                       norm_params=norm_params)
+        keep_best_trajectories(test_processor)
+       
+        final_results = train_final_model(
+            train_processor, test_processor, config_manager, best_hyperparameters
+        )
         
-        all_shap_results.append(fold_result)
-
+        # Save results for this outer fold
+        results_path = Path(config_manager.training_config['checkpoints_path']) / f"fold_{outer_fold}_results.json"
+        with open(results_path, 'w') as f:
+            json.dump({
+                'outer_fold': outer_fold,
+                'best_hyperparameters': best_hyperparameters,
+                'final_metrics': final_results,
+                'config': asdict(config_manager.training_config)
+            }, f, indent=2)
         
-    # Create aggregated SHAP plots
-    print("Creating aggregated SHAP plots...")
-    create_aggregated_shap_plots(config, all_shap_results, feature_names)
+        print(f"✓ Outer fold {outer_fold} complete. Results saved to {results_path}")
+        return final_results
+    
 
-    total_samples = sum(r['n_samples'] for r in all_shap_results)
-    total_original = sum(r['n_samples_original'] for r in all_shap_results)
-    print(f"✓ SHAP analysis complete: {total_samples} samples processed (out of {total_original} total)")
+def optimize_hyperparameters(train_dataset, config_manager,
+                                        n_inner_folds=None, 
+                                            norm_params=None, 
+                                                outer_fold=None):
+    """Inner CV loop for hyperparameter optimization."""
+    
+    # the hyperparameter space to search consists of the parameters that are lists 
+    # in config_manager.training_config
+    hyperparameter_space = {k: v for k, v in asdict(config_manager.training_config).items() if isinstance(v, list)}
+    if not hyperparameter_space:
+        raise ValueError("No hyperparameters to optimize. Ensure that config_manager.training_config contains lists of values to search over.")
+    
+    best_hyperparams = None
+    best_val_score = float('inf')
+    
+    # Grid search over hyperparameters 
+    param_combinations = list(itertools.product(*hyperparameter_space.values()))
+    param_names = list(hyperparameter_space.keys())
+        
+    for i, param_values in enumerate(param_combinations):
+        current_params = dict(zip(param_names, param_values))
+        print(f"Testing hyperparameters {i+1}/{len(param_combinations)}: {current_params}")
+        
+        # Inner CV evaluation for these hyperparameters
+        val_scores = []
+        kf_inner = KFold(n_splits=n_inner_folds, shuffle=True, 
+                         random_state=config_manager.data_config["seed"])
+        
+        for inner_fold, (inner_train_id, inner_val_id) in enumerate(kf_inner.split(train_dataset.encounter_ids())):
+            # Create inner splits
+            inner_train_dataset = train_dataset.create_subset(train_dataset.encounter_ids()[inner_train_id])
+            inner_val_dataset = train_dataset.create_subset(train_dataset.encounter_ids()[inner_val_id])
+            
+            # Create processors with shared normalization
+            inner_train_processor = DataProcessor(inner_train_dataset, config_manager.training_config, 
+                                                  norm_params=norm_params)
+            inner_val_processor = DataProcessor(inner_val_dataset, config_manager.training_config, 
+                                               norm_params=norm_params)
+            
+            keep_best_trajectories(inner_train_processor)
+            keep_best_trajectories(inner_val_processor)
+            
+            # Train with current hyperparameters
+            val_score = train_with_hyperparameters(
+                inner_train_processor, inner_val_processor, config_manager, current_params
+            )
+            val_scores.append(val_score)
+        
+        # Average validation score across inner folds
+        avg_val_score = np.mean(val_scores)
+        print(f"  Average validation score: {avg_val_score:.4f}")
+        
+        # Update best hyperparameters
+        if avg_val_score < best_val_score:
+            best_val_score = avg_val_score
+            best_hyperparams = current_params.copy()
+            print(f"  ✓ New best hyperparameters found!")
+    
+    return best_hyperparams
 
 
-    return {
-        'fold_results': all_shap_results,
-        'feature_names': feature_names,
-        'n_folds_processed': len(all_shap_results),
-        'total_samples': total_samples,
-        'total_original_samples': total_original,
-        'config': {
-            'max_samples_per_fold': max_samples_per_fold,
-            'background_samples': background_samples
-        }
-    }
+def train_with_hyperparameters(train_processor, val_processor, config_manager, hyperparams):
+    """Train model with specific hyperparameters and return validation score."""
+    
+    # Create replay buffers
+    training_buffer = ReplayBuffer(train_processor.rl_dataset)
+    val_replay_buffer = ReplayBuffer(val_processor.rl_dataset)
+    
+    # Create model with hyperparameters
+    state_dim = train_processor.rl_dataset["observations"].shape[1]
+    action_dim = train_processor.rl_dataset["actions"].shape[1]
+    max_action = np.max(np.abs(train_processor.rl_dataset["actions"]))
+    
+    actor = MixedActionActor(state_dim=state_dim, dose_actions=action_dim/2, 
+                    binary_actions=action_dim/2, hidden_dim=hyperparams['hidden_dim'], 
+                                                                max_action = max_action)
+    actor_optimizer = torch.optim.Adam(actor.parameters(), lr=hyperparams['learning_rate'])
+    
+    trainer = BC(
+        max_action=max_action,
+        actor=actor,
+        actor_optimizer=actor_optimizer,
+        discount=config_manager.training_config['discount'],
+        device=config_manager.training_config['device'],
+    )
+    
+    # Train for specified epochs
+    n_epochs = hyperparams['n_epochs']
+    batch_size = hyperparams['batch_size']
+    
+    for epoch in range(n_epochs):
+        batch = training_buffer.sample(batch_size)
+        trainer.train(batch)
+    
+    # Evaluate on validation set
+    val_metrics = trainer.evaluate(val_replay_buffer, batch_size=512)
+    return val_metrics['eval/total_loss']
+
+
+def train_final_model(train_dataset, test_dataset, config_manager, best_hyperparams):
+    """Train final model with best hyperparameters on full outer train set."""
+    
+    print("Training final model with best hyperparameters...")
+    
+    # Create processors for final training
+    train_processor = DataProcessor(train_dataset, config_manager.training_config, 
+                                    normalize_obs=False, normalize_actions=False,
+                                    transform_actions=False, create_binary_actions=False)
+    keep_best_trajectories(train_processor)
+    train_processor.normalize()
+    
+    test_processor = DataProcessor(test_dataset, config_manager.training_config, 
+                                   norm_params=train_processor.get_normalization_params())
+    keep_best_trajectories(test_processor)
+    
+    # Create replay buffers
+    training_buffer = ReplayBuffer(train_processor.rl_dataset)
+    test_buffer = ReplayBuffer(test_processor.rl_dataset)
+    
+    # Create final model with best hyperparameters
+    state_dim = train_processor.rl_dataset["observations"].shape[1]
+    action_dim = train_processor.rl_dataset["actions"].shape[1]
+    max_action = np.max(np.abs(train_processor.rl_dataset["actions"]))
+    
+    actor = Actor(state_dim, action_dim, max_action).to(config_manager.training_config['device'])
+    actor_optimizer = torch.optim.Adam(actor.parameters(), lr=best_hyperparams['learning_rate'])
+    
+    final_trainer = BC(
+        max_action=max_action,
+        actor=actor,
+        actor_optimizer=actor_optimizer,
+        discount=config_manager.training_config['discount'],
+        device=config_manager.training_config['device'],
+    )
+    
+    # Train final model
+    n_epochs = best_hyperparams['n_epochs']
+    batch_size = best_hyperparams['batch_size']
+    
+    for epoch in range(n_epochs):
+        batch = training_buffer.sample(batch_size)
+        train_metrics = final_trainer.train(batch)
+        
+        if epoch % 100 == 0:
+            print(f"Final training epoch {epoch}: loss = {train_metrics['actor_loss']:.4f}")
+    
+    # Final evaluation on test set
+    test_metrics = final_trainer.evaluate(test_buffer, batch_size=1024)
+    print(f"Final test metrics: {test_metrics}")
+    
+    # Save final model
+    model_path = Path(config_manager.training_config['checkpoints_path']) / "final_model.pt"
+    torch.save(final_trainer.state_dict(), model_path)
+    
+    return test_metrics

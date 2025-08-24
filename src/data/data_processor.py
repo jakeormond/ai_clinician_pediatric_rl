@@ -36,7 +36,7 @@ class DataProcessor:
         # self should also inherit all the key value pairs from the training_config
         for key, value in training_config.items():
             setattr(self, key, value)
-        
+              
         # drop any features in self.features_to_drop
         for feature in self.features_to_drop:
             if feature in dataset.dataframe.columns:
@@ -170,70 +170,76 @@ class DataProcessor:
         # leave one hot encoded features as they are, and z-score normalize 
         # the continuous features
 
-        norm_dict = {}
 
         for feature in self.input_features:
             
-            norm_dict[feature] = {}
             
             # get the features row in self.features_to_use
             feature_row = self.features_to_use[self.features_to_use['feature'] == feature]
             data_type = feature_row['data_type'].values[0]
             feature_set = feature_row['feature_set'].values[0]
 
-            min_val = dataset.dataframe[feature].min()
-            max_val = dataset.dataframe[feature].max()
-            mean_val = dataset.dataframe[feature].mean()
-            std_val = dataset.dataframe[feature].std()
+            if self.obs_norm_dict is not None:
+                # if normalization parameters are provided, use them to normalize the data
+                min_val = self.obs_norm_dict[feature]['min']
+                max_val = self.obs_norm_dict[feature]['max']
+                mean_val = self.obs_norm_dict[feature]['mean']
+                std_val = self.obs_norm_dict[feature]['std']
+            else:
+                min_val = dataset.dataframe[feature].min()
+                max_val = dataset.dataframe[feature].max()
+                mean_val = dataset.dataframe[feature].mean()
+                std_val = dataset.dataframe[feature].std()
             
             if data_type == 'ordinal' or feature_set == 'infusion' or \
                 feature_set == 'other_meds' or feature_set == 'sedation':
                 
                 # min-max normalize the feature
-                norm_dict[feature]['normalization_type'] = 'min-max'
+                normalization_type = 'min-max'
                 dataset.dataframe.loc[:, feature] = (dataset.dataframe[feature] - min_val) / (max_val - min_val)                
 
             elif data_type == 'binary':
                 # binary features are already normalized, so we just store the normalization type
-                norm_dict[feature]['normalization_type'] = 'none'
+                normalization_type = 'none'
 
             elif data_type == 'continuous':
                 # z-score normalize the feature
-                norm_dict[feature]['normalization_type'] = 'z-score'
+                normalization_type = 'z-score'
                 dataset.dataframe.loc[:, feature] = (dataset.dataframe[feature] - mean_val) / std_val
 
-            norm_dict[feature]['min'] = min_val
-            norm_dict[feature]['max'] = max_val
-            norm_dict[feature]['mean'] = mean_val
-            norm_dict[feature]['std'] = std_val
+            if self.obs_norm_dict is None:
+                self.obs_norm_dict = {}
+                self.obs_norm_dict[feature] = {}
+                self.obs_norm_dict[feature]['min'] = min_val
+                self.obs_norm_dict[feature]['max'] = max_val
+                self.obs_norm_dict[feature]['mean'] = mean_val
+                self.obs_norm_dict[feature]['std'] = std_val
+                self.obs_norm_dict[feature]['normalization_type'] = normalization_type
 
-            print(f"Normalized feature {feature} with {norm_dict[feature]['normalization_type']} normalization. "
-                  f"Min: {min_val}, Max: {max_val}, Mean: {mean_val}, Std: {std_val}")
-
-
-        # store the normalization dict for later use
-        self.obs_norm_dict = norm_dict
+            print(f"Normalized feature {feature} with {normalization_type} normalization. "
+                f"Min: {min_val}, Max: {max_val}, Mean: {mean_val}, Std: {std_val}")
 
         print("Observation normalization complete.")                        
 
     
     def _normalize_actions(self, dataset):
         # normalize actions between 0 and 1
-        # will need to store the min and max for later use
-        self.action_minimum = {}
-        self.action_maximum = {}
-
+        
         for i, action in enumerate(dataset.actions):
             # normalize each action between 0 and 1
             # we will use the min and max of the training set to normalize the test set
-            min_action = dataset.dataframe[action].min()
-            max_action = dataset.dataframe[action].max()
+            if self.action_minimum is not None and self.action_maximum is not None:
+                min_action = self.action_minimum[action]
+                max_action = self.action_maximum[action]
+            else:
+                if i == 0:
+                    self.action_minimum = {}
+                    self.action_maximum = {}                             
+                self.action_minimum[action] = dataset.dataframe[action].min()
+                self.action_maximum[action] = dataset.dataframe[action].max()
 
-            dataset.dataframe.loc[:, action] = (dataset.dataframe[action] - min_action) / \
-                                                  (max_action - min_action) 
-
-            self.action_minimum[action] = min_action
-            self.action_maximum[action] = max_action     
+            dataset.dataframe.loc[:, action] = (dataset.dataframe[action] - self.action_minimum[action]) / \
+                                                  (self.action_maximum[action] - self.action_minimum) 
 
             print(f"Normalized action {action} between 0 and 1.")        
 

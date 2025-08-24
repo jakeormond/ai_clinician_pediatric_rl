@@ -111,7 +111,7 @@ class BC:
         actor_optimizer: torch.optim.Optimizer,
         discount: float = 0.99,
         device: str = "cpu",
-        dose_actions: int = 2,  # ✅ Number of dose actions
+        dose_actions: int = 2,  #  Number of dose actions
         binary_actions: int = 2
     ):
         self.actor = actor
@@ -125,7 +125,6 @@ class BC:
         self.device = device
 
     def train(self, batch: TensorBatch) -> Dict[str, float]:
-
         
         log_dict = {}
         self.total_it += 1

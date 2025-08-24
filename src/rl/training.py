@@ -278,7 +278,7 @@ def outer_training_loop(dataset, config_manager):
         # we need to create a processor now to get normalization stats
         train_processor = DataProcessor(train_dataset, config_manager.training_config, 
                                         normalize_obs = False, normalize_actions=False,
-                                        transform_actions = False, create_binary_action = False)
+                                        transform_actions = False, create_binary_actions = False)
         keep_best_trajectories(train_processor)
         train_processor.normalize()     
         norm_params = train_processor.get_normalization_params() 
@@ -324,14 +324,15 @@ def optimize_hyperparameters(train_dataset, config_manager,
     
     # the hyperparameter space to search consists of the parameters that are lists 
     # in config_manager.training_config
-    hyperparameter_space = {k: v for k, v in asdict(config_manager.training_config).items() if isinstance(v, list)}
+    hyperparameter_space = {k: v for k, v in 
+            config_manager.training_config.items() if isinstance(v, list)}
     if not hyperparameter_space:
         raise ValueError("No hyperparameters to optimize. Ensure that config_manager.training_config contains lists of values to search over.")
     
     best_hyperparams = None
     best_val_score = float('inf')
     
-    # Grid search over hyperparameters 
+    # grid search over hyperparameters 
     param_combinations = list(itertools.product(*hyperparameter_space.values()))
     param_names = list(hyperparameter_space.keys())
         
@@ -345,6 +346,8 @@ def optimize_hyperparameters(train_dataset, config_manager,
                          random_state=config_manager.data_config["seed"])
         
         for inner_fold, (inner_train_id, inner_val_id) in enumerate(kf_inner.split(train_dataset.encounter_ids())):
+            print(f"  Inner fold {inner_fold+1}/{n_inner_folds}")
+            
             # Create inner splits
             inner_train_dataset = train_dataset.create_subset(train_dataset.encounter_ids()[inner_train_id])
             inner_val_dataset = train_dataset.create_subset(train_dataset.encounter_ids()[inner_val_id])
@@ -363,17 +366,26 @@ def optimize_hyperparameters(train_dataset, config_manager,
                 inner_train_processor, inner_val_processor, config_manager, current_params
             )
             val_scores.append(val_score)
+            print(f"  Inner fold {inner_fold+1} score: {val_score:.4f}")
         
         # Average validation score across inner folds
         avg_val_score = np.mean(val_scores)
-        print(f"  Average validation score: {avg_val_score:.4f}")
+        std_val_score = np.std(val_scores)
+        print(f"Average validation score: {avg_val_score:.4f} ± {std_val_score:.4f}")
         
         # Update best hyperparameters
         if avg_val_score < best_val_score:
+            improvement = best_val_score - avg_val_score
             best_val_score = avg_val_score
             best_hyperparams = current_params.copy()
-            print(f"  ✓ New best hyperparameters found!")
-    
+            print(f"New best hyperparameters found! (improvement: {improvement:.4f})")
+        else:
+            print(f"No improvement (current best: {best_val_score:.4f})")
+
+    print(f"\nHyperparameter optimization complete!")
+    print(f"Best validation score: {best_val_score:.4f}")
+    print(f"Best hyperparameters: {best_hyperparams}")
+
     return best_hyperparams
 
 
@@ -389,10 +401,18 @@ def train_with_hyperparameters(train_processor, val_processor, config_manager, h
     action_dim = train_processor.rl_dataset["actions"].shape[1]
     max_action = np.max(np.abs(train_processor.rl_dataset["actions"]))
     
-    actor = MixedActionActor(state_dim=state_dim, dose_actions=action_dim/2, 
-                    binary_actions=action_dim/2, hidden_dim=hyperparams['hidden_dim'], 
-                                                                max_action = max_action)
-    actor_optimizer = torch.optim.Adam(actor.parameters(), lr=hyperparams['learning_rate'])
+    actor = MixedActionActor(
+        state_dim=state_dim, 
+        dose_actions=action_dim/2, 
+        binary_actions=action_dim/2, 
+        hidden_dim=hyperparams['hidden_dim'], 
+        max_action = max_action
+        ).to(config_manager.training_config['device'])
+    
+    actor_optimizer = torch.optim.Adam(
+        actor.parameters(), 
+        lr=hyperparams['learning_rate']
+        )
     
     trainer = BC(
         max_action=max_action,
@@ -400,19 +420,58 @@ def train_with_hyperparameters(train_processor, val_processor, config_manager, h
         actor_optimizer=actor_optimizer,
         discount=config_manager.training_config['discount'],
         device=config_manager.training_config['device'],
+        dose_actions=action_dim//2,
+        binary_actions=action_dim//2
     )
     
-    # Train for specified epochs
+    # Early stopping configuration for THIS hyperparameter combination
     n_epochs = hyperparams['n_epochs']
     batch_size = hyperparams['batch_size']
+    patience = hyperparams.get('patience', 10)  # How many evaluations to wait
+    eval_freq = hyperparams.get('eval_freq', 10)  # Evaluate every N epochs
+    min_delta = hyperparams.get('min_delta', 1e-4)  # Minimum improvement
+
+    best_val_loss = float('inf')
+    patience_counter = 0
+    best_model_state = None
+
+    print(f"Training with early stopping (patience={patience}, eval_freq={eval_freq})")
     
+    # Training loop with early stopping for this hyperparameter combination
     for epoch in range(n_epochs):
         batch = training_buffer.sample(batch_size)
-        trainer.train(batch)
+        train_metrics = trainer.train(batch)
+
+        # Evaluate periodically
+        if epoch % config_manager.training_config['eval_freq'] == 0 \
+                                                    or epoch == n_epochs - 1:
+            val_metrics = trainer.evaluate(val_replay_buffer, batch_size=512)
+            current_val_loss = val_metrics['eval/total_loss']
+
+            # Check for improvement
+            improvement = best_val_loss - current_val_loss
+            if improvement > min_delta:
+                best_val_loss = current_val_loss
+                patience_counter = 0
+                # Save best model state for this hyperparameter combination
+                best_model_state = trainer.actor.state_dict().copy()
+                print(f"      Epoch {epoch}: New best val_loss = {best_val_loss:.4f}")
+            else:
+                patience_counter += 1
+                print(f"      Epoch {epoch}: No improvement ({patience_counter}/{patience})")
+            
+            #  Early stopping - stop training THIS hyperparameter combination
+            if patience_counter >= patience:
+                print(f" Early stopping this hyperparameter combination at epoch {epoch}/{n_epochs}")
+                print(f" Best validation loss: {best_val_loss:.4f}")
+                break
     
-    # Evaluate on validation set
-    val_metrics = trainer.evaluate(val_replay_buffer, batch_size=512)
-    return val_metrics['eval/total_loss']
+    # Restore best model state before returning score
+    if best_model_state is not None:
+        trainer.actor.load_state_dict(best_model_state)
+        print(f"    Restored best model (val_loss={best_val_loss:.4f})")
+
+    return best_val_loss
 
 
 def train_final_model(train_dataset, test_dataset, config_manager, best_hyperparams):

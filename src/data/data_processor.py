@@ -70,7 +70,8 @@ class DataProcessor:
             self._create_binary_actions()
 
 
-    def normalize(self, norm_params=None):
+    def normalize(self, norm_params=None, normalize_obs=True,
+                  normalize_actions=True, transform_actions=True):
 
         if self.norm_params is None and norm_params is not None:
             self.norm_params = norm_params
@@ -87,13 +88,13 @@ class DataProcessor:
             self.action_maximum = None
             self.action_transformers = None
         
-        if self.normalize_obs:
+        if normalize_obs:
             self._normalize_obs()               
 
-        if self.transform_actions: # this has to occur before normalization
+        if transform_actions: # this has to occur before normalization
             self._transform_actions()
 
-        if self.normalize_actions:
+        if normalize_actions:
             self._normalize_actions() 
             
         
@@ -195,7 +196,7 @@ class DataProcessor:
         print(f"New action array shape: {self.rl_dataset['actions'].shape}")
 
 
-    def _normalize_obs(self, dataset):
+    def _normalize_obs(self):
         # apply min-max normalization to drugs and ordinal features, 
         # leave one hot encoded features as they are, and z-score normalize 
         # the continuous features
@@ -212,10 +213,10 @@ class DataProcessor:
 
             if feature not in self.obs_norm_dict:
                 self.obs_norm_dict[feature] = {}
-                self.obs_norm_dict[feature]['min'] = dataset.dataframe[feature].min()
-                self.obs_norm_dict[feature]['max'] = dataset.dataframe[feature].max()
-                self.obs_norm_dict[feature]['mean'] = dataset.dataframe[feature].mean()
-                self.obs_norm_dict[feature]['std'] = dataset.dataframe[feature].std()
+                self.obs_norm_dict[feature]['min'] = self.rl_dataset['observations'][:, i].min()
+                self.obs_norm_dict[feature]['max'] = self.rl_dataset['observations'][:, i].max()
+                self.obs_norm_dict[feature]['mean'] = self.rl_dataset['observations'][:, i].mean()
+                self.obs_norm_dict[feature]['std'] = self.rl_dataset['observations'][:, i].std()
             
             if data_type == 'ordinal' or feature_set == 'infusion' or \
                 feature_set == 'other_meds' or feature_set == 'sedation':
@@ -260,13 +261,13 @@ class DataProcessor:
         print("Observation normalization complete.")                        
 
     
-    def _normalize_actions(self, dataset):
+    def _normalize_actions(self):
         # normalize actions between 0 and 1
         if self.action_minimum is None and self.action_maximum is None:
             self.action_minimum = {}
             self.action_maximum = {}
         
-        for i, action in enumerate(dataset.actions):
+        for i, action in enumerate(self.actions):
             # normalize the ith col in self.rl_dataset['actions']
             # using min-max normalization between 0 and 1;
             if action not in self.action_minimum and action not in self.action_maximum:
@@ -280,7 +281,7 @@ class DataProcessor:
             print(f"Normalized action {action} between 0 and 1.")        
 
 
-    def _transform_actions(self, dataset):
+    def _transform_actions(self):
 
         # Store the fitted transformers for later use
         if self.action_transformers is None:

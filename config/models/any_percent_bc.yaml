@@ -12,3 +12,8 @@
     learning_rate: [1e-3, 1e-4, 1e-5]  # Learning rates to try
     batch_size: [256, 512, 1024]  # Batch size for all networks
     hidden_dim: [[256, 256], [512, 256], [128, 256, 512]]  # Hidden dimension for all networks
+
+    # Early stopping parameters (fixed for all combinations)
+    patience: 15        # Stop if no improvement for 15 evaluations
+    eval_freq: 20       # Evaluate every 20 epochs  
+    min_delta: 0.0001   # Minimum improvement threshold

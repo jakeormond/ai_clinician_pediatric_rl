@@ -57,7 +57,7 @@
                 "--mode", "aggregate", 
 
                 "--experiment_folder", 
-                "xgbclassifier_discharge_mortality_choc_grid_search/20250814_015942",
+                "xgbclassifier_discharge_mortality_choc_grid_search/20250814_125039",
                 
                 "--prediction_type", "discharge_mortality",
                 "--calculate_shap", "true", 

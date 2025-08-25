@@ -77,15 +77,18 @@ class MixedActionActor(nn.Module):
                 nn.ReLU()
             ])
             input_dim = h_dim
+
+        # Create the shared network (this was missing!)
+        self.shared_net = nn.Sequential(*layers)
         
         # Separate heads for different action types
         self.dose_head = nn.Sequential(
-            nn.Linear(256, dose_actions),
+            nn.Linear(input_dim, dose_actions),
             nn.Sigmoid()  # Outputs in [0,1] range for doses
         )
         
         self.binary_head = nn.Sequential(
-            nn.Linear(256, binary_actions), 
+            nn.Linear(input_dim, binary_actions), 
             nn.Sigmoid()  # Outputs probabilities for binary actions
         )
         

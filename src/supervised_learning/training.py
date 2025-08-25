@@ -418,6 +418,21 @@ def aggregate_results_across_outer_folds(config):
     else:
         y_pred_proba_raw = None
 
+    # convert y_pred_proba_raw to health score if 
+    # config.prediction_type == "discharge_mortality" and
+    # config.model_type == "xgbclassifier". For 2 class or 
+    # regression, this is not needed
+    if config.prediction_type == "discharge_mortality" and \
+       config.model_type == "xgbclassifier":
+        
+        # health score is the sum of column probabilities 
+        # multiplied by the ith column index (0, 1, 2) 
+        health_score = np.sum(y_pred_proba_raw * np.arange(y_pred_proba_raw.shape[1]), axis=1)
+        all_predictions_df['health_score'] = health_score
+
+    else:
+        pass
+
     # calculate overall metrics
     overall_metrics = calculate_metrics(all_true_labels, \
             all_pred_proba, config.model_type, y_pred = all_predictions, y_pred_proba_raw=y_pred_proba_raw)
@@ -482,7 +497,7 @@ def calculate_shap_for_aggregated_results(config, all_test_data):
     """
     import time
 
-    # Get parameters from config
+    # Get parameters from config - WHAT CONFIG ARE THESE SET IN?
     max_samples_per_fold = getattr(config, 'shap_max_samples', None)  # None = use all
     background_samples = getattr(config, 'shap_background_samples', 100)  # Default 100
     
@@ -490,11 +505,11 @@ def calculate_shap_for_aggregated_results(config, all_test_data):
     print(f"  Max samples per fold: {max_samples_per_fold if max_samples_per_fold else 'All samples'}")
     print(f"  Background samples: {background_samples if background_samples else 'None'}")
        
-    dataset = Dataset(config.hospital_config)
+    dataset = Dataset(config.data_config)
 
     # Recreate the same CV splits as in training
     kf_outer = KFold(n_splits=config.cv_config["n_outer_folds"], 
-                     shuffle=True, random_state=config.hospital_config["seed"])
+                     shuffle=True, random_state=config.data_config["seed"])
 
     # Create mapping of fold -> test_encounters
     fold_to_encounters = {}
@@ -518,7 +533,7 @@ def calculate_shap_for_aggregated_results(config, all_test_data):
         print(f"  Processing fold {fold}...")
 
         test_encounters = fold_to_encounters[fold]
-        X_test, y_test, _ = dataset.modeling_data(test_encounters)
+        X_test, y_test, _ = dataset.modeling_data(test_encounters, split_x_y=True)
         
         # Get feature names (only need to do this once)
         if feature_names is None:
@@ -529,7 +544,7 @@ def calculate_shap_for_aggregated_results(config, all_test_data):
         if background_samples and background_samples > 0 and background_data is None:
             print(f"    Creating background dataset with {background_samples} samples...")
             train_encounters = fold_to_train_encounters[fold]
-            X_bg, _, _ = dataset.modeling_data(train_encounters)
+            X_bg, _, _ = dataset.modeling_data(train_encounters, split_x_y=True)
             
             # Sample background data
             if len(X_bg) > background_samples:
@@ -622,6 +637,7 @@ def calculate_shap_for_aggregated_results(config, all_test_data):
         'total_original_samples': total_original,
         'config': {
             'max_samples_per_fold': max_samples_per_fold,
-            'background_samples': background_samples
+            'background_samples': background_samples,
+            'config': config
         }
     }

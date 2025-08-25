@@ -391,7 +391,7 @@ def optimize_hyperparameters(train_dataset, config_manager,
 
 def train_with_hyperparameters(train_processor, val_processor, config_manager, hyperparams):
     """Train model with specific hyperparameters and return validation score."""
-    
+
     # Create replay buffers
     training_buffer = ReplayBuffer(train_processor.rl_dataset)
     val_replay_buffer = ReplayBuffer(val_processor.rl_dataset)
@@ -401,17 +401,19 @@ def train_with_hyperparameters(train_processor, val_processor, config_manager, h
     action_dim = train_processor.rl_dataset["actions"].shape[1]
     max_action = np.max(np.abs(train_processor.rl_dataset["actions"]))
     
+    learning_rate = float(hyperparams['learning_rate'])
+
     actor = MixedActionActor(
         state_dim=state_dim, 
-        dose_actions=action_dim/2, 
-        binary_actions=action_dim/2, 
+        dose_actions=action_dim//2, 
+        binary_actions=action_dim//2, 
         hidden_dim=hyperparams['hidden_dim'], 
         max_action = max_action
         ).to(config_manager.training_config['device'])
     
     actor_optimizer = torch.optim.Adam(
         actor.parameters(), 
-        lr=hyperparams['learning_rate']
+        lr=learning_rate
         )
     
     trainer = BC(
@@ -425,11 +427,11 @@ def train_with_hyperparameters(train_processor, val_processor, config_manager, h
     )
     
     # Early stopping configuration for THIS hyperparameter combination
-    n_epochs = hyperparams['n_epochs']
+    n_epochs = config_manager.training_config['n_epochs']
     batch_size = hyperparams['batch_size']
-    patience = hyperparams.get('patience', 10)  # How many evaluations to wait
-    eval_freq = hyperparams.get('eval_freq', 10)  # Evaluate every N epochs
-    min_delta = hyperparams.get('min_delta', 1e-4)  # Minimum improvement
+    patience = config_manager.training_config['patience']  # How many evaluations to wait
+    eval_freq = config_manager.training_config['eval_freq']  # Evaluate every N epochs
+    min_delta = config_manager.training_config['min_delta']  # Minimum improvement
 
     best_val_loss = float('inf')
     patience_counter = 0
@@ -498,9 +500,12 @@ def train_final_model(train_dataset, test_dataset, config_manager, best_hyperpar
     state_dim = train_processor.rl_dataset["observations"].shape[1]
     action_dim = train_processor.rl_dataset["actions"].shape[1]
     max_action = np.max(np.abs(train_processor.rl_dataset["actions"]))
+    learning_rate = float(best_hyperparams['learning_rate'])
     
+    
+    ################# FIX TO MULTI ACTOR #################
     actor = Actor(state_dim, action_dim, max_action).to(config_manager.training_config['device'])
-    actor_optimizer = torch.optim.Adam(actor.parameters(), lr=best_hyperparams['learning_rate'])
+    actor_optimizer = torch.optim.Adam(actor.parameters(), lr=learning_rate)
     
     final_trainer = BC(
         max_action=max_action,

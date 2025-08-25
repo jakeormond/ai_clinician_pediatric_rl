@@ -135,6 +135,8 @@ class DataProcessor:
         dataset.dataframe['terminated'] = 0
         dataset.dataframe.loc[dataset.dataframe.groupby(self.encounter_col).tail(1).index, 'terminated'] = 1
         terminated = dataset.dataframe['terminated'].copy()
+        # drop the terminated column from the dataframe
+        dataset.dataframe = dataset.dataframe.drop(columns=['terminated'])
 
         # get the next observations
         next_observations = observations.copy()
@@ -153,7 +155,6 @@ class DataProcessor:
         rewards = rewards.drop(index=trajectory_starts)
         next_observations = next_observations.drop(index=trajectory_starts)
         terminated = terminated.drop(index=trajectory_starts)
-
 
         # convert to numpy arrays
         observations = observations.to_numpy()  
@@ -230,10 +231,17 @@ class DataProcessor:
                     self.obs_norm_dict[feature]['min']) / (self.obs_norm_dict[feature]['max'] 
                                                            - self.obs_norm_dict[feature]['min'])
                 
+                # it is possible here that if both min and max are 0, we will get NaNs;
+                # in this case, we set the normalized value to 0
+                self.rl_dataset['observations'][:, i] = \
+                    np.nan_to_num(self.rl_dataset['observations'][:, i], nan=0.0)
+                
                 # also normalize the next_observations
                 self.rl_dataset['next_observations'][:, i] = (self.rl_dataset['next_observations'][:, i] - 
                     self.obs_norm_dict[feature]['min']) / (self.obs_norm_dict[feature]['max'] 
-                                                           - self.obs_norm_dict[feature]['min'])          
+                                                           - self.obs_norm_dict[feature]['min'])     
+                self.rl_dataset['next_observations'][:, i] = \
+                    np.nan_to_num(self.rl_dataset['next_observations'][:, i], nan=0.0)     
 
             elif data_type == 'binary':
                 # binary features are already normalized, so we just store the normalization type
@@ -251,6 +259,11 @@ class DataProcessor:
                 # also normalize the next_observations
                 self.rl_dataset['next_observations'][:, i] = (self.rl_dataset['next_observations'][:, i] - 
                     self.obs_norm_dict[feature]['mean']) / self.obs_norm_dict[feature]['std']
+
+            # check for NaNs in the normalized feature
+            if np.isnan(self.rl_dataset['observations'][:, i]).any() or \
+               np.isnan(self.rl_dataset['next_observations'][:, i]).any():
+                raise ValueError(f"NaNs found in normalized feature {feature}")
 
             print(f"Normalized feature {feature} with {normalization_type} normalization. "
                 f"Min: {self.obs_norm_dict[feature]['min']}, \

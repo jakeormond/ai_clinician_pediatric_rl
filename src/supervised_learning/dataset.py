@@ -28,7 +28,7 @@ class Dataset:
         # but if this is reinforcement learning, we need to keep them
         if self.model_type == "supervised_learning":
             # get rid of actions
-            self.features_to_use = self.features_to_use[self.features_to_use['feature_set'] != feature_set]
+            self.features_to_use = self.features_to_use[self.features_to_use['state_or_action'] != 'action']
         
         # drop any rows where "proportion_sepsis" is less than proportion_w_data and
         # imputation_method is "interpolation"
@@ -77,7 +77,7 @@ class Dataset:
         they survive) only for those specific timepoints.
         """
 
-        encounter_ids = self.dataframe[self.config["encounter_col"]].unique()
+        encounter_ids = self.dataframe[self.encounter_col].unique()
 
         # find the encounter_ids that have target_data equal to 1
         target_encounter_ids = self.dataframe[self.dataframe[self.target_col] == 1][self.encounter_col].unique()
@@ -86,7 +86,7 @@ class Dataset:
         # get the surviving encounter_ids
         surviving_encounter_ids = set(encounter_ids) - set(target_encounter_ids)
         
-        if self.config["prediction_type"] == "mortality_all":
+        if self.prediction_type == "mortality_all":
             # all values for the target_data are 1 for the encounter_ids that have target_data equal to 1
             self.dataframe[self.target_col] = self.dataframe[self.encounter_col].apply(
                 lambda x: 1 if x in target_encounter_ids else 0
@@ -97,7 +97,7 @@ class Dataset:
                     self.dataframe[self.encounter_col].isin(target_encounter_ids)
                 ].copy()
             
-            if self.config["prediction_type"] == "mortality_24":
+            if self.prediction_type == "mortality_24":
                 # just the last 24 rows are labelled as 1 for the encounter_ids that have target_data equal to 1
                 # Get data for encounters that should have mortality=1
                 
@@ -107,7 +107,7 @@ class Dataset:
                 # Set target to 1 for these rows
                 self.dataframe.loc[last_24_rows.index, self.target_col] = 1  
 
-            elif self.config["prediction_type"] == "discharge_mortality":                    
+            elif self.prediction_type == "discharge_mortality":                    
                 
                 # for each encounter in survivor_data, set the first half of rows to 1
                 first_half_indices = (
@@ -157,14 +157,14 @@ class Dataset:
         
         encounters_and_times = modeling_data[[self.encounter_col, self.time_col]]
 
-        modeling_data = modeling_data.drop(columns=[self.target_col]).copy()
+        modeling_data = modeling_data.drop(columns=[self.encounter_col, self.time_col]).copy()
 
         if split_x_y:
         
-            X_train = modeling_data.drop(columns=[self.target_col]).copy()
-            y_train = modeling_data[self.target_col].copy()
+            X = modeling_data.drop(columns=[self.target_col]).copy()
+            y = modeling_data[self.target_col].copy()
                 
-            return X_train, y_train, encounters_and_times   
+            return X, y, encounters_and_times   
         
         else:
             return modeling_data, encounters_and_times

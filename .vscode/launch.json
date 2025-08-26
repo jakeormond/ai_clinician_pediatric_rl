@@ -70,6 +70,29 @@
         },
 
         {
+            "name": "Plot SHAP - CHOC",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--model_type", "xgbclassifier", 
+                "--mode", "plot_shap", 
+
+                "--experiment_folder", 
+                "xgbclassifier_discharge_mortality_choc_grid_search/20250814_125039",
+                
+                "--prediction_type", "discharge_mortality",
+                "--calculate_shap", "true", 
+                "--shap_max_samples", "5000",          
+                "--shap_background_samples", "1000"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
             "name": "Prediction aggregate - CHOC - module",
             "type": "debugpy",
             "request": "launch",

@@ -485,6 +485,31 @@ def aggregate_results_across_outer_folds(config):
             pickle.dump(shap_results, f)
         print(f"✓ SHAP results saved to {shap_save_path}") 
 
+
+def plot_saved_shap_results(shap_results_path):
+    """
+    Load and plot previously saved SHAP results.
+    
+    Args:
+        shap_results_path: Path to the saved SHAP results pickle file
+    """
+    with open(shap_results_path, 'rb') as f:
+        shap_data = pickle.load(f)
+    
+    config = shap_data['config']['config']
+    all_shap_results = shap_data['fold_results']
+    feature_names = shap_data['feature_names']
+    
+    print(f"Loaded SHAP results from {shap_results_path}")
+    print(f"Configuration: {config}")
+    print(f"Number of folds in SHAP results: {len(all_shap_results)}")
+    print(f"Number of features: {len(feature_names)}")
+
+    # Create aggregated SHAP plots
+    print("Creating aggregated SHAP plots...")
+    create_aggregated_shap_plots(config, all_shap_results, feature_names)
+
+
     
 def calculate_shap_for_aggregated_results(config, all_test_data): 
     

@@ -8,7 +8,7 @@ Create a DataSet object that holds the full dataset, and then
 CVSplit objects that hold the encounter IDs for the splits
 and methods to access the data in the DataSet object.
 """
-
+import os
 import argparse
 import pandas as pd
 import numpy as np
@@ -17,7 +17,8 @@ import wandb
 
 from ...config_manager import ConfigManager  # Import the config manager
 from ...supervised_learning.dataset import Dataset
-from ...supervised_learning.training import outer_training_loop, aggregate_results_across_outer_folds
+from ...supervised_learning.training import outer_training_loop, \
+    aggregate_results_across_outer_folds, plot_saved_shap_results
 from ...utils.logging_utilities import wandb_init  # Add this import
 
 def parse_arguments():
@@ -43,7 +44,7 @@ def parse_arguments():
                         help='type of predictoin to make (default: mortality_all)') 
 
     parser.add_argument('--mode', type=str, default='single_fold',
-                        choices=['single_fold', 'aggregate'],
+                        choices=['single_fold', 'aggregate', 'plot_shap'],
                         help='Mode of training: single_fold or aggregate (default: single_fold)')
     
     # mode-specific arguments    
@@ -155,11 +156,18 @@ def main():
             wandb.finish()
 
     elif args.mode == "aggregate":
-        config_manager.model_type
-
         # aggregate results from all folds
         results = aggregate_results_across_outer_folds(config_manager)
 
+    
+    elif args.mode == "plot_shap":
+        # shap_result_path = config_manager.get_experiments_dir + 
+        # config_manager.experiment_folder + "/shap_analysis/"
+        shap_results_path = os.path.join(config_manager.get_experiments_dir,
+            config_manager.experiment_folder, "shap_analysis.pkl")
+        plot_saved_shap_results(shap_results_path)
+    
+    
     elif args.mode == "combine_aggregates":
 
         results = aggregate_results_across_outer_folds(config_manager)

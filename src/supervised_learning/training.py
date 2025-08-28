@@ -433,6 +433,14 @@ def aggregate_results_across_outer_folds(config):
     else:
         pass
 
+    # save all_predictions_df to a parquet file
+    all_predictions_df.to_parquet(config.experiment_dir / "all_predictions.parquet", 
+                                  engine='pyarrow', index=False)
+    
+    # also save config 
+    with open(config.experiment_dir / "config.pkl", "wb") as f:
+        pickle.dump(config, f)
+
     # calculate overall metrics
     overall_metrics = calculate_metrics(all_true_labels, \
             all_pred_proba, config.model_type, y_pred = all_predictions, y_pred_proba_raw=y_pred_proba_raw)
@@ -443,36 +451,8 @@ def aggregate_results_across_outer_folds(config):
                             for k, v in overall_metrics.items()}
         json.dump(serializable_metrics, f, indent=2)
 
-    # make plots
-    n_classes = len(np.unique(all_true_labels))
-    is_classification = config.model_type == "xgbclassifier"
-
-    # Pass y_pred_proba_raw for multiclass
-    ############################# TEMPORARILY DISABLED PLOTS #############################
-    # if is_classification and n_classes > 2:
-    #     # You'll need to reconstruct the full probability matrix from your saved data
-    #     # This depends on how you saved the individual class probabilities
-        
-    #     create_all_plots(
-    #         all_true_labels, 
-    #         all_predictions, 
-    #         all_pred_proba, 
-    #         config.experiment_dir,
-    #         is_classification=is_classification,
-    #         y_pred_proba_raw=y_pred_proba_raw
-    #     )
-    # else:
-    #     create_all_plots(
-    #         all_true_labels, 
-    #         all_predictions, 
-    #         all_pred_proba, 
-    #         config.experiment_dir,
-    #         is_classification=is_classification
-    #     )
-
-    # save all_predictions_df to a parquet file
-    all_predictions_df.to_parquet(config.experiment_dir / "all_predictions.parquet", 
-                                  engine='pyarrow', index=False)
+    # plot model results
+    plot_model_results(all_predictions_df, config)
     
     # SHAP calculation
     if config.calculate_shap:
@@ -484,6 +464,46 @@ def aggregate_results_across_outer_folds(config):
         with open(shap_save_path, 'wb') as f:
             pickle.dump(shap_results, f)
         print(f"✓ SHAP results saved to {shap_save_path}") 
+
+
+def plot_model_results(all_predictions_df, config):
+
+    all_true_labels = all_predictions_df["true_label"].values
+    all_predictions = all_predictions_df["predicted_label"].values
+    all_pred_proba = all_predictions_df["predicted_proba"].values  
+
+    if config.prediction_type == "discharge_mortality":
+        # For multiclass, we need to reconstruct the full probability matrix
+        y_pred_proba_raw = all_predictions_df.filter(like='predicted_proba_class_').values
+        if y_pred_proba_raw.size == 0:
+            y_pred_proba_raw = None
+    else:
+        y_pred_proba_raw = None
+    
+    n_classes = len(np.unique(all_true_labels))
+    is_classification = config.model_type == "xgbclassifier"
+    
+    if is_classification and n_classes > 2:
+        # You'll need to reconstruct the full probability matrix from your saved data
+        # This depends on how you saved the individual class probabilities
+        
+        create_all_plots(
+            all_true_labels, 
+            all_predictions, 
+            all_pred_proba, 
+            config.experiment_dir,
+            is_classification=is_classification,
+            y_pred_proba_raw=y_pred_proba_raw
+        )
+    else:
+        create_all_plots(
+            all_true_labels, 
+            all_predictions, 
+            all_pred_proba, 
+            config.experiment_dir,
+            is_classification=is_classification
+        )
+
 
 
 def plot_saved_shap_results(shap_results_path):

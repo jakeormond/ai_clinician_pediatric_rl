@@ -44,6 +44,7 @@ def plot_multiclass_roc_curve(y_true, y_pred_proba_raw, experiment_dir):
     
     n_classes = y_pred_proba_raw.shape[1]
     classes = np.unique(y_true)
+    class_labels = {0.0: "non-survival", 1.0: "admission", 2.0: "discharge"}
     
     # Binarize the output
     y_true_bin = label_binarize(y_true, classes=classes)
@@ -64,13 +65,19 @@ def plot_multiclass_roc_curve(y_true, y_pred_proba_raw, experiment_dir):
     roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
     
     # Plot ROC curves
-    plt.figure(figsize=(10, 8))
+    # plt.figure(figsize=(10, 8))
+
+    # Target one screen = 1920x1080 px - for data observatory
+    dpi = 100
+    plt.figure(figsize=(1920/dpi, 1080/dpi), dpi=dpi)
     
     # Plot individual class ROC curves
     colors = cycle(['aqua', 'darkorange', 'cornflowerblue', 'red', 'green'])
     for i, color in zip(range(n_classes), colors):
-        plt.plot(fpr[i], tpr[i], color=color, lw=2,
-                label=f'Class {classes[i]} (AUC = {roc_auc[i]:.2f})')
+        class_val = classes[i]
+        class_name = class_labels.get(float(class_val), f'{class_val}')
+        plt.plot(fpr[i], tpr[i], color=color, lw=4,
+                label=f'{class_name} (AUC = {roc_auc[i]:.2f})')
     
     # Plot micro-average ROC curve
     plt.plot(fpr["micro"], tpr["micro"],
@@ -78,14 +85,21 @@ def plot_multiclass_roc_curve(y_true, y_pred_proba_raw, experiment_dir):
             color='deeppink', linestyle=':', linewidth=4)
     
     # Plot random classifier line
-    plt.plot([0, 1], [0, 1], 'k--', lw=2, label='Random Classifier')
+    plt.plot([0, 1], [0, 1], 'k--', lw=4, label='Random Classifier')
     
     plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('Multiclass ROC Curves (One-vs-Rest)')
-    plt.legend(loc="lower right")
+    plt.ylim([0.0, 1.0])
+    plt.xlabel('False Positive Rate', fontsize=20, fontweight='bold')
+    plt.ylabel('True Positive Rate', fontsize=20, fontweight='bold')
+    plt.title('Multiclass ROC Curves (One-vs-Rest)', fontsize=24, fontweight='bold', pad=20)
+    plt.legend(loc="lower right", fontsize=16)
+    plt.xticks(fontsize=16)
+    plt.yticks(fontsize=16)
+    
+    plt.gca().set_aspect('equal', adjustable='box')  # Force square axes
+
+    plt.tight_layout()    
+    
     plt.savefig(os.path.join(experiment_dir, 'multiclass_roc_curve.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
@@ -95,7 +109,8 @@ def plot_multiclass_precision_recall_curve(y_true, y_pred_proba_raw, experiment_
     
     n_classes = y_pred_proba_raw.shape[1]
     classes = np.unique(y_true)
-    
+    class_labels = {0.0: "non-survival", 1.0: "admission", 2.0: "discharge"}
+
     # Binarize the output
     y_true_bin = label_binarize(y_true, classes=classes)
     if n_classes == 2:
@@ -106,22 +121,36 @@ def plot_multiclass_precision_recall_curve(y_true, y_pred_proba_raw, experiment_
     recall = {}
     avg_precision = {}
     
-    plt.figure(figsize=(10, 8))
+    # plt.figure(figsize=(10, 8))
+    # Target one screen = 1920x1080 px - for data observatory
+    dpi = 100
+    plt.figure(figsize=(1920/dpi, 1080/dpi), dpi=dpi)
+
     colors = cycle(['aqua', 'darkorange', 'cornflowerblue', 'red', 'green'])
     
     for i, color in zip(range(n_classes), colors):
+        class_val = classes[i]
+        class_name = class_labels.get(float(class_val), f'{class_val}')
+
         precision[i], recall[i], _ = precision_recall_curve(y_true_bin[:, i], y_pred_proba_raw[:, i])
         avg_precision[i] = auc(recall[i], precision[i])
         
-        plt.plot(recall[i], precision[i], color=color, lw=2,
-                label=f'Class {classes[i]} (AP = {avg_precision[i]:.2f})')
+        plt.plot(recall[i], precision[i], color=color, lw=4,
+                label=f'{class_name} (AP = {avg_precision[i]:.2f})')
     
     plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.title('Multiclass Precision-Recall Curves')
-    plt.legend(loc="lower left")
+    plt.ylim([0.0, 1.0])
+    plt.xlabel('Recall', fontsize=20, fontweight='bold')
+    plt.ylabel('Precision', fontsize=20, fontweight='bold')
+    plt.title('Multiclass Precision-Recall Curves', fontsize=24, fontweight='bold', pad=20)
+    plt.legend(loc="lower left", fontsize=16)
+    plt.xticks(fontsize=16)
+    plt.yticks(fontsize=16)
+
+    plt.gca().set_aspect('equal', adjustable='box')  # Force square axes
+
+    plt.tight_layout() 
+    
     plt.savefig(os.path.join(experiment_dir, 'multiclass_precision_recall_curve.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
@@ -131,14 +160,29 @@ def plot_multiclass_confusion_matrix(y_true, y_pred, experiment_dir):
     
     classes = np.unique(y_true)
     cm = confusion_matrix(y_true, y_pred)
+
+    class_labels = {0.: "non-survival", 1.: "admission", 2.: "discharge"}
     
-    plt.figure(figsize=(8, 6))
+    # plt.figure(figsize=(8, 6))
+    
+    # Target one screen = 1920x1080 px - for data observatory
+    dpi = 100
+    plt.figure(figsize=(1400/dpi, 1080/dpi), dpi=dpi)
+
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                xticklabels=[f'Class {c}' for c in classes], 
-                yticklabels=[f'Class {c}' for c in classes])
-    plt.xlabel('Predicted')
-    plt.ylabel('Actual')
-    plt.title('Multiclass Confusion Matrix')
+                xticklabels=[f'{class_labels[c]}' for c in classes], 
+                yticklabels=[f'{class_labels[c]}' for c in classes],
+                annot_kws={'size': 16},
+                square=True)
+    
+    plt.xlabel('Predicted', fontsize=18, fontweight='bold')
+    plt.ylabel('Actual',  fontsize=18, fontweight='bold')
+
+    plt.xticks(fontsize=16, rotation=45)  # X-axis tick labels
+    plt.yticks(fontsize=16, rotation=0) 
+
+    plt.title('Multiclass Confusion Matrix', fontsize=22, fontweight='bold', pad=20)
+    
     plt.savefig(os.path.join(experiment_dir, 'multiclass_confusion_matrix.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
@@ -297,17 +341,36 @@ def _create_multiclass_shap_plots(config, all_shap_results, feature_names, max_d
 
     # ✅ CREATE COMBINED MULTICLASS IMPORTANCE PLOT (3-color bar chart)
     print("  Creating combined multiclass SHAP importance plot...")
-    plt.figure(figsize=(14, 10))
-    
+    # plt.figure(figsize=(14, 10))
+    dpi = 100
+    # plt.figure(figsize=(1920/dpi, 1080/dpi), dpi=dpi)
+    figsize = (1920/dpi, 1080/dpi)
+
     # Use the 3D array directly with SHAP - it will automatically create multi-colored bars
+    class_names = ["non-survival", "admission", "discharge"]
+
     shap.summary_plot(combined_shap_3d, combined_test_data,
                     feature_names=feature_names, plot_type="bar", 
-                    max_display=max_display, show=False)
+                    max_display=max_display, show=False,
+                    class_names=class_names)
+    
+    plt.gca().title.set_fontsize(22)
+    plt.gca().title.set_fontweight('bold')
+    plt.gca().tick_params(axis='both', labelsize=16)
+    ax = plt.gca()
+    ax.tick_params(axis='x', labelsize=16)
+    ax.tick_params(axis='y', labelsize=16)
+    for label in ax.get_xticklabels():
+        label.set_fontsize(16)
+    for label in ax.get_yticklabels():
+        label.set_fontsize(16)
+
+    plt.gcf().set_size_inches(figsize)
     plt.title(f'SHAP Feature Importance - All Classes Combined (All Folds)', 
              fontsize=16, pad=20)
     plt.tight_layout()
     plt.savefig(os.path.join(config.experiment_dir, 'shap_importance_all_classes.png'), 
-               dpi=300, bbox_inches='tight')
+               dpi=dpi, bbox_inches='tight')
     plt.close()
         
     print("    ✓ Combined multiclass plots saved")
@@ -316,30 +379,63 @@ def _create_multiclass_shap_plots(config, all_shap_results, feature_names, max_d
     
     for class_idx in range(n_classes):
         combined_shap_class = np.vstack(combined_shap_by_class[class_idx])
+        class_name = class_names[class_idx]
         
         print(f"  Creating plots for Class {class_idx} ({len(combined_shap_class)} samples)")
         
-        # ✅ Summary plot (beeswarm) - use larger figure for multiclass
-        plt.figure(figsize=(16, 12))  # Much larger for multiclass
+        # ✅ Summary plot (beeswarm) - use larger figure for multiclass        
+        # plt.figure(figsize=(16, 12))  # Much larger for multiclass
+        dpi = 100
+        # plt.figure(figsize=(1920/dpi, 1080/dpi), dpi=dpi)
+        figsize = (1920/dpi, 1080/dpi)
         shap.summary_plot(combined_shap_class, combined_test_data,
-                        feature_names=feature_names, max_display=max_display, show=False)
-        plt.title(f'SHAP Summary - Class {class_idx} (All Folds, n={len(combined_shap_class)})',
+                        feature_names=feature_names, max_display=max_display, 
+                        show=False)
+
+        plt.gca().title.set_fontsize(22)
+        plt.gca().title.set_fontweight('bold')
+        plt.gca().tick_params(axis='both', labelsize=16)
+        ax = plt.gca()
+        ax.tick_params(axis='x', labelsize=16)
+        ax.tick_params(axis='y', labelsize=16)
+        for label in ax.get_xticklabels():
+            label.set_fontsize(16)
+        for label in ax.get_yticklabels():
+            label.set_fontsize(16)
+
+        plt.gcf().set_size_inches(figsize)
+        plt.title(f'SHAP Summary - {class_name} (All Folds, n={len(combined_shap_class)})',
                  fontsize=16, pad=20)
         plt.tight_layout()
-        plt.savefig(os.path.join(config.experiment_dir, f'shap_summary_class_{class_idx}.png'), 
-                   dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(config.experiment_dir, f'shap_summary_{class_name}.png'), 
+                   dpi=100, bbox_inches='tight')
         plt.close()
         
         # ✅ Feature importance bar plot - use taller figure
-        plt.figure(figsize=(14, 10))
+        # plt.figure(figsize=(14, 10))
+        dpi = 100
+        # plt.figure(figsize=(1920/dpi, 1080/dpi), dpi=dpi)
+        figsize = (1920/dpi, 1080/dpi)
         shap.summary_plot(combined_shap_class, combined_test_data,
                         feature_names=feature_names, plot_type="bar", 
                         max_display=max_display, show=False)
-        plt.title(f'SHAP Feature Importance - Class {class_idx} (All Folds)',
+        
+        plt.gca().title.set_fontsize(22)
+        plt.gca().title.set_fontweight('bold')
+        ax = plt.gca()
+        ax.tick_params(axis='x', labelsize=16)
+        ax.tick_params(axis='y', labelsize=16)
+        for label in ax.get_xticklabels():
+            label.set_fontsize(16)
+        for label in ax.get_yticklabels():
+            label.set_fontsize(16)
+
+        plt.gcf().set_size_inches(figsize)
+        plt.title(f'SHAP Feature Importance - {class_name} (All Folds)',
                  fontsize=16, pad=20)
         plt.tight_layout()
-        plt.savefig(os.path.join(config.experiment_dir, f'shap_importance_class_{class_idx}.png'), 
-                   dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(config.experiment_dir, f'shap_importance_{class_name}.png'), 
+                   dpi=100, bbox_inches='tight')
         plt.close()
         
         print(f"    ✓ Class {class_idx} plots saved")
@@ -383,7 +479,7 @@ def _create_binary_regression_shap_plots(config, all_shap_results, feature_names
                     max_display=max_display, show=False)
     plt.title(f'SHAP Feature Importance (All Folds)')
     plt.tight_layout()
-    plt.savefig(os.path.join(config.experiment_dir, 'shap_importance.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(config.experiment_dir, 'shap_importance.png'), bbox_inches='tight')
     plt.close()
     
     print("    ✓ Summary plots saved")
@@ -406,17 +502,20 @@ def _create_sample_waterfall_plots(config, all_shap_results, combined_shap,
     if is_multiclass:
         # ✅ For 3D array multiclass (n_samples, n_features, n_classes)
         n_classes = sample_shap.shape[2]
+        class_names = ["non-survival", "admission", "discharge"]
         print(f"    Creating waterfall plots for {n_classes} classes")
         
         for class_idx in range(n_classes):
             for i in range(n_sample_explanations):
                 try:
-                    plt.figure(figsize=(10, 6))
-                    
+                    # plt.figure(figsize=(10, 6))
+                    dpi = 100
+                    # plt.figure(figsize=(1920/dpi, 1080/dpi), dpi=dpi)
+                    figsize = (1920/dpi, 1080/dpi)
                     # ✅ Extract SHAP values for this class and sample from 3D array
                     sample_shap_values = combined_shap[i, :, class_idx]  # Shape: (n_features,)
                     
-                    print(f"    Sample {i}, Class {class_idx}: shap_values.shape = {sample_shap_values.shape}")
+                    print(f"    Sample {i}, {class_names[class_idx]}: shap_values.shape = {sample_shap_values.shape}")
                     
                     # ✅ Create SHAP Explanation object for multiclass
                     shap_explanation = shap.Explanation(
@@ -428,15 +527,28 @@ def _create_sample_waterfall_plots(config, all_shap_results, combined_shap,
                     
                     # ✅ Use the Explanation object with waterfall_plot
                     shap.waterfall_plot(shap_explanation, show=False)
+                    plt.gca().title.set_fontsize(22)
+                    plt.gca().title.set_fontweight('bold')
+                    ax = plt.gca()
+                    ax.tick_params(axis='x', labelsize=20)
+                    ax.tick_params(axis='y', labelsize=20)
+                    for label in ax.get_xticklabels():
+                        label.set_fontsize(20)
+                    for label in ax.get_yticklabels():
+                        label.set_fontsize(20)
+                    for text in ax.texts:
+                        text.set_fontsize(36) 
+
+                    plt.gcf().set_size_inches(figsize)
                     
-                    plt.title(f'Sample {i} - Class {class_idx} Prediction Explanation')
+                    plt.title(f'Sample {i} - {class_names[class_idx]} Prediction Explanation')
                     plt.tight_layout()
-                    plt.savefig(os.path.join(config.experiment_dir, f'shap_waterfall_sample_{i}_class_{class_idx}.png'), 
-                               dpi=300, bbox_inches='tight')
+                    plt.savefig(os.path.join(config.experiment_dir, f'shap_waterfall_sample_{i}_{class_names[class_idx]}.png'), 
+                               dpi=100, bbox_inches='tight')
                     plt.close()
                     
                 except Exception as e:
-                    print(f"    ⚠️  Could not create waterfall plot for sample {i}, class {class_idx}: {e}")
+                    print(f"    ⚠️  Could not create waterfall plot for sample {i}, class {class_names[class_idx]}: {e}")
         
         print(f"    ✓ {n_sample_explanations * n_classes} waterfall plots saved")
         

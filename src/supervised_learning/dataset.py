@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import copy
 
@@ -5,19 +6,34 @@ import copy
 # access the data they need using the encounter IDs
 # and the methods in this class
 class Dataset:
-    def __init__(self, config):
+    def __init__(self, config, drop_actions=True, transform_target=True): # note that actions get dropped only for supervised learning, not RL
         
         # Dataset should store all the key value pairs from the config
         for key, value in config.items():
             setattr(self, key, value)
         
-        self._load_dataset()
+        self._load_dataset(drop_actions)
         
-        if "target_col" in config: # this is generally used for supervised learning, so gets
+        if "target_col" in config and transform_target: # this is generally used for supervised learning, so gets
             self._transform_target() # accept dataframe as input
 
 
-    def _load_dataset(self):
+    def save_dataframe(self, config):
+
+        loaded_df_path = config.data_config['dataframe_path']
+        load_df_filename = os.path.basename(loaded_df_path)
+        # strip .parquet from filename
+        load_df_filename = load_df_filename.replace(".parquet", "")
+
+        proportion_w_data = config.data_config['proportion_w_data']
+
+        filename = f"{load_df_filename}_prop_{proportion_w_data}.parquet"
+        path = config.get_experiments_dir + "/" + filename
+        self.dataframe.to_parquet(path, index=False)
+        print(f"DataFrame saved to {path}")
+
+
+    def _load_dataset(self, drop_actions):
         self.dataframe = pd.read_parquet(self.dataframe_path) # here I will have to add code to load the df with the reward
         self.features_to_use = pd.read_csv(self.features_to_use_path)
 
@@ -26,7 +42,7 @@ class Dataset:
 
         # if this is supervised learning, we need to drop the action features,
         # but if this is reinforcement learning, we need to keep them
-        if self.model_type == "supervised_learning":
+        if self.model_type == "supervised_learning" and drop_actions:
             # get rid of actions
             self.features_to_use = self.features_to_use[self.features_to_use['state_or_action'] != 'action']
         

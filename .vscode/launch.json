@@ -6,6 +6,21 @@
     "configurations": [
 
         {
+            "name": "save_dataframe",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "supervised_learning",
+                "--mode", "save_dataframe"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+        
+        {
             "name": "Prediction",
             "type": "debugpy",
             "request": "launch",

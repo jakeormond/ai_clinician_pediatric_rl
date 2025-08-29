@@ -30,22 +30,22 @@ def parse_arguments():
                         help='Hospital dataset to use (default: choc)')
     
     parser.add_argument('--experiment_type', 
-                        default='supervised_learning', 
+                        default=None, 
                         choices=['supervised_learning', 'reinforcement_learning'], 
                         help='Type of experiment to run (default: supervised_learning)')
     
     parser.add_argument('--model_type', 
-                        default='xgbclassifier', 
+                        default=None, 
                         choices=['xgbclassifier', 'xgbregressor'], 
                         help='Model type to train (default: xgbclassifier)') 
     
     parser.add_argument('--prediction_type', 
-                        default='mortality_all', 
+                        default=None, 
                         choices=['mortality_all', 'mortality_24', 'discharge_mortality'], 
                         help='type of predictoin to make (default: mortality_all)') 
 
     parser.add_argument('--mode', type=str, default='single_fold',
-                        choices=['single_fold', 'aggregate', 'plot_shap', 'plot_model_results'],
+                        choices=['save_dataframe', 'single_fold', 'aggregate', 'plot_shap', 'plot_model_results'],
                         help='Mode of training: single_fold or aggregate (default: single_fold)')
     
     # mode-specific arguments    
@@ -119,7 +119,11 @@ def main():
     # Initialize config manager, it holds paths and environment info
     config_manager = ConfigManager(args)
 
-    if args.mode == "single_fold":        
+    if args.mode == 'save_dataframe': # this is for post-hoc analysis
+        dataset = Dataset(config_manager.data_config, drop_actions=False, transform_target=False)
+        dataframe_path = dataset.save_dataframe(config_manager)
+     
+    elif args.mode == "single_fold":        
         # set base experiment name and make directory, if it doesn't exist (it will 
         # already if another folder was run)
         # config_manager.set_experiment_name()

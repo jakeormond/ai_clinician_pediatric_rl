@@ -137,18 +137,18 @@ class BC:
         # Compute actor loss
         pi = self.actor(state)
 
-        # ✅ Split predictions and targets
+        # Split predictions and targets
         dose_predictions = pi[:, :self.dose_actions]      # First 2 actions (doses)
         binary_predictions = pi[:, self.dose_actions:]   # Last 2 actions (binary)
 
         dose_targets = action[:, :self.dose_actions]
         binary_targets = action[:, self.dose_actions:]
 
-        # ✅ Different loss functions for different action types
+        # Different loss functions for different action types
         dose_loss = F.mse_loss(dose_predictions, dose_targets)
         binary_loss = F.binary_cross_entropy(binary_predictions, binary_targets)
 
-        # ✅ Combine losses (you can weight them differently)
+        # Combine losses (you can weight them differently)
         dose_weight = 1.0
         binary_weight = 1.0
         actor_loss = dose_weight * dose_loss + binary_weight * binary_loss

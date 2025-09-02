@@ -56,10 +56,14 @@ class Dataset:
         # make list of features
         features = self.features_to_use['feature'].tolist()
 
-
         # append reward col, self.reward, to features if reinforcement learning
         if self.model_type == "reinforcement_learning":
-            features.append(self.reward)
+            if self.reward:
+                features.append(self.reward)
+
+            if self.terminal_reward:
+                if self.terminal_reward_col not in features:
+                    features.append(self.terminal_reward_col)
 
         # add to these the encounter_col, time_col,
         features_to_keep = [self.encounter_col, self.time_col] + features

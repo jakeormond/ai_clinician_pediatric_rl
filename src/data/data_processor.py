@@ -50,7 +50,8 @@ class DataProcessor:
                                if col not in dataset.actions and 
                                col != self.reward and 
                                col != self.encounter_col and 
-                               col != self.time_col]
+                               col != self.time_col and 
+                               col != self.terminal_reward_col]
         
         for f in self.input_features:
             print(f"Input feature: {f}")
@@ -117,16 +118,27 @@ class DataProcessor:
 
         ##### SHOULD ADD SOME KIND OF UNIT TEST HERE TO CONFIRM EVERYTHING IS WORKING AS EXPECTED #####
 
-        rewards = dataset.dataframe[self.reward].copy()    
-        # process the rewards
-        if self.flip_reward:
-            rewards = -rewards
+        if self.reward:
+            rewards = dataset.dataframe[self.reward].copy()    
+            # process the rewards
+            if self.flip_reward:
+                rewards = -rewards
+            if self.shift_reward:
+                rewards = rewards + self.reward_shift_amount
+            if self.reward_scale:
+                rewards = rewards * self.reward_scale
 
-        # now compute hourly change in reward
-        rewards = rewards.diff().fillna(0)
-        first_indices = dataset.dataframe.groupby(self.encounter_col).head(1).index
-        rewards.loc[first_indices] = 0        
+            # now compute hourly change in reward
+            rewards = rewards.diff().fillna(0)
+            first_indices = dataset.dataframe.groupby(self.encounter_col).head(1).index
+            rewards.loc[first_indices] = 0      
+
+        else:
+            rewards = pd.Series(0., index=dataset.dataframe.index)
+
+        # Note that terminal rewards must be caculated after we calculate "terminated"
         
+        # get the actions and observations
         actions = dataset.dataframe[self.actions].copy()
         observations = dataset.dataframe[self.input_features].copy()
 
@@ -138,6 +150,26 @@ class DataProcessor:
         # drop the terminated column from the dataframe
         dataset.dataframe = dataset.dataframe.drop(columns=['terminated'])
 
+        # process the terminal rewards
+        if self.terminal_reward:
+            terminal_rewards = dataset.dataframe[self.terminal_reward_col].copy()
+            if self.flip_terminal_reward:
+                terminal_rewards = -terminal_rewards
+            # make terminal rewards = 1 anywhere terminal_rewards == 0 and 
+            # terminated == 1 (i.e. the patient survived)
+            terminal_rewards[(terminal_rewards == 0) & (terminated == 1)] = 1
+            # offset
+            if self.offset_terminal_reward:
+                terminal_rewards = terminal_rewards + self.offset_terminal_reward
+            # scale
+            if self.scale_terminal_reward:
+                terminal_rewards = terminal_rewards * self.scale_terminal_reward
+        else:
+            terminal_rewards = pd.Series(0, index=dataset.dataframe.index)
+
+        # add the terminal rewards to the rewards
+        rewards = rewards + terminal_rewards
+        
         # get the next observations
         next_observations = observations.copy()
 

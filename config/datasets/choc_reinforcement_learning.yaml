@@ -19,12 +19,18 @@ normalize_actions: True
 normalize_obs: True
 
 
-reward: "phoenix_sepsis_score"
+# reward: "phoenix_sepsis_score"
+reward: False
 flip_reward: True
+offset_reward: 0.0
+scale_reward: 1.0
 
 terminal_reward_col: "mortality"
-terminal_reward: False
+terminal_reward: True
+flip_terminal_reward: True
+offset_terminal_reward: 0.0
+scale_terminal_reward: 1.0
 
-features_to_drop: ["mortality"]
-
+# features_to_drop: ["mortality"]
+features_to_drop: []
 

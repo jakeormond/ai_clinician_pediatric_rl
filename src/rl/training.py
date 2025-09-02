@@ -73,6 +73,49 @@ def keep_best_trajectories(dataprocessor):
     return
 
 
+def keep_positive_trajectories(dataprocessor):
+    """
+    This is for the behavioural cloning using terminal rewards only. In
+    this case, it's simply a matter of keeping only survival trajectories;
+    non-survival trajectories are discarded.
+    """
+   
+    ids_by_trajectories = []
+    returns = []
+    cur_ids = []
+    cur_return = 0
+    reward_scale = 1.0
+
+    for i, (reward, done) in enumerate(zip(dataprocessor.rl_dataset["rewards"], 
+                                           dataprocessor.rl_dataset["terminated"])):
+        cur_return += reward_scale * reward
+        cur_ids.append(i)
+        reward_scale *= dataprocessor.discount     
+        
+        if done == 1.0:
+            if reward < 0:
+                cur_ids = []
+                continue
+            
+            elif reward > 0:
+                if len(cur_ids) <= dataprocessor.max_traj_len:
+                    # don't use trajectories that are too long
+                    ids_by_trajectories.append(list(cur_ids))
+                returns.append(cur_return)
+            
+            cur_ids = []
+            
+    order = [item for sublist in ids_by_trajectories for item in sublist]    
+    
+    dataprocessor.rl_dataset["observations"] = dataprocessor.rl_dataset["observations"][order]
+    dataprocessor.rl_dataset["actions"] = dataprocessor.rl_dataset["actions"][order]
+    dataprocessor.rl_dataset["next_observations"] = dataprocessor.rl_dataset["next_observations"][order]
+    dataprocessor.rl_dataset["rewards"] = dataprocessor.rl_dataset["rewards"][order]
+    dataprocessor.rl_dataset["terminated"] = dataprocessor.rl_dataset["terminated"][order]
+
+    return
+
+
 def outer_training_loop_V1(dataset, config_manager): 
 
     # Get CV configuration from config
@@ -279,7 +322,13 @@ def outer_training_loop(dataset, config_manager):
         train_processor = DataProcessor(train_dataset, config_manager.training_config, 
                                         normalize_obs = False, normalize_actions=False,
                                         transform_actions = False, create_binary_actions = False)
-        keep_best_trajectories(train_processor)
+        
+        # Keep only best trajectories if a fraction to keep is specified
+        if train_processor.frac != 0.:
+            keep_best_trajectories(train_processor)
+        else:
+
+        
         train_processor.normalize()     
         norm_params = train_processor.get_normalization_params() 
 

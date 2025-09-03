@@ -1,6 +1,9 @@
 """
 Loads the ICU datasets (currently either MIMIC IV or choc) and stores it in a replay buffer.
 
+Originally, I made my own ReplayBuffer (ReplayBuffer class below) but lab members suggested I 
+use pytorch, so I will now build my ReplayBuffer using Dataset and Dataloader.
+
 """
 import os
 from typing import Dict, List
@@ -8,13 +11,33 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 import torch
-
-
+from torch.utils.data import Dataset
 
 TensorBatch = List[torch.Tensor]
 
 ai_clinician_dir = "/home/jake/Documents/AI_Clinician/"
 
+
+class RLDataset(Dataset):
+    def __init__(self, rl_dataset: Dict[str, np.ndarray]):
+        self.states = torch.tensor(rl_dataset["observations"], dtype=torch.float32)
+        self.actions = torch.tensor(rl_dataset["actions"], dtype=torch.float32)
+        self.rewards = torch.tensor(rl_dataset["rewards"], dtype=torch.float32)
+        self.next_states = torch.tensor(rl_dataset["next_observations"], dtype=torch.float32)
+        self.dones = torch.tensor(rl_dataset["terminated"], dtype=torch.float32)
+
+    def __len__(self) -> int:
+        return len(self.states)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        return [
+            self.states[idx],
+            self.actions[idx],
+            self.rewards[idx],
+            self.next_states[idx],
+            self.dones[idx],
+        ]
+    
 
 class ReplayBuffer:
     def __init__(

@@ -7,7 +7,7 @@
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
     discount: 0.999  # Discount factor
     frac: 0.  # Best data fraction to use
-    max_traj_len: 2000  # Max trajectory length
+    max_traj_len: 2000  # Max trajectory length - probably need to change this
     device: "cuda"  # Device (cuda or cpu)
     learning_rate: [1e-3, 1e-4, 1e-5]  # Learning rates to try
     batch_size: [256, 512, 1024]  # Batch size for all networks

@@ -19,13 +19,14 @@ from sklearn.model_selection import KFold, GridSearchCV, GroupKFold, RandomizedS
 from scipy.stats import uniform, randint, loguniform
 import xgboost as xgb
 import torch
+from torch.utils.data import DataLoader
 import torch.nn.functional as F
 # from .evaluation import calculate_metrics
 # from .plotting import create_all_plots, create_aggregated_shap_plots
 from ..utils.logging_utilities import wandb_init
 from ..data.data_processor import DataProcessor
 # from .dataset import Dataset
-from .replay_buffer import ReplayBuffer
+from .replay_buffer import ReplayBuffer, RLDataset
 from .models.behavioural_cloning import Actor, MixedActionActor, BC
 from ..utils.utilities import set_seed
 
@@ -324,11 +325,11 @@ def outer_training_loop(dataset, config_manager):
                                         transform_actions = False, create_binary_actions = False)
         
         # Keep only best trajectories if a fraction to keep is specified
-        if train_processor.frac != 0.:
+        if config_manager.training_config['frac'] != 0.:
             keep_best_trajectories(train_processor)
         else:
-
-        
+            keep_positive_trajectories(train_processor)
+                
         train_processor.normalize()     
         norm_params = train_processor.get_normalization_params() 
 
@@ -407,9 +408,13 @@ def optimize_hyperparameters(train_dataset, config_manager,
             inner_val_processor = DataProcessor(inner_val_dataset, config_manager.training_config, 
                                                norm_params=norm_params)
             
-            keep_best_trajectories(inner_train_processor)
-            keep_best_trajectories(inner_val_processor)
-            
+            if config_manager.training_config['frac'] != 0.:
+                keep_best_trajectories(inner_train_processor)
+                keep_best_trajectories(inner_val_processor)
+            else:
+                keep_positive_trajectories(inner_train_processor)
+                keep_positive_trajectories(inner_val_processor)
+           
             # Train with current hyperparameters
             val_score = train_with_hyperparameters(
                 inner_train_processor, inner_val_processor, config_manager, current_params
@@ -440,10 +445,25 @@ def optimize_hyperparameters(train_dataset, config_manager,
 
 def train_with_hyperparameters(train_processor, val_processor, config_manager, hyperparams):
     """Train model with specific hyperparameters and return validation score."""
+    
+    batch_size = hyperparams['batch_size']
 
     # Create replay buffers
-    training_buffer = ReplayBuffer(train_processor.rl_dataset)
-    val_replay_buffer = ReplayBuffer(val_processor.rl_dataset)
+    # training_buffer = ReplayBuffer(train_processor.rl_dataset)
+    # val_buffer = ReplayBuffer(val_processor.rl_dataset)
+    train_dataset = RLDataset(train_processor.rl_dataset)
+    training_buffer = DataLoader(
+        train_dataset, 
+        batch_size=batch_size, 
+        shuffle=True
+        )
+
+    val_dataset = RLDataset(val_processor.rl_dataset)
+    val_buffer = DataLoader(
+        val_dataset, 
+        batch_size=batch_size, 
+        shuffle=False
+        )
     
     # Create model with hyperparameters
     state_dim = train_processor.rl_dataset["observations"].shape[1]
@@ -490,13 +510,20 @@ def train_with_hyperparameters(train_processor, val_processor, config_manager, h
     
     # Training loop with early stopping for this hyperparameter combination
     for epoch in range(n_epochs):
-        batch = training_buffer.sample(batch_size)
-        train_metrics = trainer.train(batch)
+
+        epoch_losses = []
+
+        for batch_idx, batch in enumerate(training_buffer):
+            batch_losses = trainer.train(batch)
+            epoch_losses.append(batch_losses['actor_loss'])
+
+        # Calculate average loss for this epoch
+        avg_epoch_loss = np.mean(epoch_losses)
 
         # Evaluate periodically
         if epoch % config_manager.training_config['eval_freq'] == 0 \
                                                     or epoch == n_epochs - 1:
-            val_metrics = trainer.evaluate(val_replay_buffer, batch_size=512)
+            val_metrics = trainer.evaluate(val_buffer, batch_size=batch_size)
             current_val_loss = val_metrics['eval/total_loss']
 
             # Check for improvement
@@ -506,13 +533,14 @@ def train_with_hyperparameters(train_processor, val_processor, config_manager, h
                 patience_counter = 0
                 # Save best model state for this hyperparameter combination
                 best_model_state = trainer.actor.state_dict().copy()
-                print(f"      Epoch {epoch}: New best val_loss = {best_val_loss:.4f}")
+                print(f"Epoch {epoch}: Train={avg_epoch_loss:.4f}, Val={best_val_loss:.4f} (NEW BEST)")
             else:
-                patience_counter += 1
-                print(f"      Epoch {epoch}: No improvement ({patience_counter}/{patience})")
-            
+                patience_counter += 1                
+                print(f"Epoch {epoch}: Train={avg_epoch_loss:.4f}, Val={current_val_loss:.4f} ({patience_counter}/{patience} - NO IMPROVEMENT)")
+                
             #  Early stopping - stop training THIS hyperparameter combination
             if patience_counter >= patience:
+                
                 print(f" Early stopping this hyperparameter combination at epoch {epoch}/{n_epochs}")
                 print(f" Best validation loss: {best_val_loss:.4f}")
                 break

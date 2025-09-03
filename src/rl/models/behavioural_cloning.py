@@ -133,6 +133,9 @@ class BC:
         self.total_it += 1
 
         state, action, _, _, _ = batch
+        
+        state = state.to(self.device)
+        action = action.to(self.device)
 
         # Compute actor loss
         pi = self.actor(state)

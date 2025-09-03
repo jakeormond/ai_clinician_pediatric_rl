@@ -8,9 +8,6 @@ normalization).
 to do: check the vis scores, i think there are some outliers that are far too high. 
 
 """
-
-
-
 import yaml
 import copy
 import pandas as pd
@@ -19,6 +16,9 @@ import time
 import pyarrow
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import PowerTransformer
+
+import torch
+from torch.utils.data import Dataset, DataLoader
 
 class DataProcessor:
     def __init__(self, dataset, training_config, norm_params=None, 

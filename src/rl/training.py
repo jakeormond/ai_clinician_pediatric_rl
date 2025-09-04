@@ -346,8 +346,11 @@ def outer_training_loop(dataset, config_manager):
         
         test_processor = DataProcessor(test_dataset, config_manager.training_config, 
                                        norm_params=norm_params)
-        keep_best_trajectories(test_processor)
-       
+        if config_manager.training_config['frac'] != 0.:
+            keep_best_trajectories(test_processor)
+        else:
+            keep_positive_trajectories(test_processor)
+              
         final_results = train_final_model(
             train_processor, test_processor, config_manager, best_hyperparameters
         )
@@ -553,26 +556,28 @@ def train_with_hyperparameters(train_processor, val_processor, config_manager, h
     return best_val_loss
 
 
-def train_final_model(train_dataset, test_dataset, config_manager, best_hyperparams):
+def train_final_model(train_processor, test_processor, config_manager, best_hyperparams):
     """Train final model with best hyperparameters on full outer train set."""
     
     print("Training final model with best hyperparameters...")
+
+    batch_size = best_hyperparams['batch_size']
     
-    # Create processors for final training
-    train_processor = DataProcessor(train_dataset, config_manager.training_config, 
-                                    normalize_obs=False, normalize_actions=False,
-                                    transform_actions=False, create_binary_actions=False)
-    keep_best_trajectories(train_processor)
-    train_processor.normalize()
+    train_dataset = RLDataset(train_processor.rl_dataset)
+    training_buffer = DataLoader(
+        train_dataset, 
+        batch_size=batch_size, 
+        shuffle=True
+        )
     
-    test_processor = DataProcessor(test_dataset, config_manager.training_config, 
-                                   norm_params=train_processor.get_normalization_params())
-    keep_best_trajectories(test_processor)
+    test_dataset = RLDataset(test_processor.rl_dataset)
+    test_buffer = DataLoader(
+        test_dataset, 
+        batch_size=batch_size, 
+        shuffle=False
+        )
     
-    # Create replay buffers
-    training_buffer = ReplayBuffer(train_processor.rl_dataset)
-    test_buffer = ReplayBuffer(test_processor.rl_dataset)
-    
+
     # Create final model with best hyperparameters
     state_dim = train_processor.rl_dataset["observations"].shape[1]
     action_dim = train_processor.rl_dataset["actions"].shape[1]

@@ -170,7 +170,7 @@ class BC:
         return log_dict
     
 
-    def evaluate(self, replay_buffer, batch_size: int = 1024) -> Dict[str, float]:
+    def evaluate(self, data_loader, batch_size: int = 1024) -> Dict[str, float]:
         """
         Evaluate model with appropriate metrics for each action type.
         
@@ -184,7 +184,10 @@ class BC:
         self.actor.eval()  # Set to evaluation mode
         
         # Sample evaluation batch
-        batch = replay_buffer.sample(batch_size)
+        # batch = replay_buffer.sample(batch_size)
+        batch = next(iter(data_loader))
+        batch = [tensor.to(self.device) for tensor in batch]
+
         state, action, _, _, _ = batch
         
         with torch.no_grad():

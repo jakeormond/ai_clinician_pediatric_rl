@@ -127,19 +127,18 @@ class BC:
         self.total_it = 0
         self.device = device
 
-    def train(self, batch: TensorBatch) -> Dict[str, float]:
-        
-        log_dict = {}
-        self.total_it += 1
-
+    
+    def _get_state_and_action(self, batch: TensorBatch) -> Tuple[torch.Tensor, torch.Tensor]:
         state, action, _, _, _ = batch
         
         state = state.to(self.device)
         action = action.to(self.device)
+        
+        return state, action
+    
 
-        # Compute actor loss
-        pi = self.actor(state)
-
+    def _compute_actor_loss(self, pi: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+      
         # Split predictions and targets
         dose_predictions = pi[:, :self.dose_actions]      # First 2 actions (doses)
         binary_predictions = pi[:, self.dose_actions:]   # Last 2 actions (binary)
@@ -149,13 +148,29 @@ class BC:
 
         # Different loss functions for different action types
         dose_loss = F.mse_loss(dose_predictions, dose_targets)
+
         binary_loss = F.binary_cross_entropy(binary_predictions, binary_targets)
 
         # Combine losses (you can weight them differently)
         dose_weight = 1.0
         binary_weight = 1.0
         actor_loss = dose_weight * dose_loss + binary_weight * binary_loss
-        # actor_loss = F.mse_loss(pi, action)
+
+        return actor_loss, dose_loss, binary_loss
+
+    
+    def train(self, batch: TensorBatch) -> Dict[str, float]:
+        
+        log_dict = {}
+        self.total_it += 1
+
+        state, action = self._get_state_and_action(batch)
+
+        # generate actions
+        pi = self.actor(state)
+
+        # Compute actor loss
+        actor_loss, dose_loss, binary_loss = self._compute_actor_loss(pi, action)
         
         # Log individual losses for monitoring
         log_dict["actor_loss"] = actor_loss.item()
@@ -170,7 +185,7 @@ class BC:
         return log_dict
     
 
-    def evaluate(self, data_loader, batch_size: int = 1024) -> Dict[str, float]:
+    def evaluate(self, batch: TensorBatch) -> Dict[str, float]:
         """
         Evaluate model with appropriate metrics for each action type.
         
@@ -183,16 +198,18 @@ class BC:
         """
         self.actor.eval()  # Set to evaluation mode
         
-        # Sample evaluation batch
-        # batch = replay_buffer.sample(batch_size)
-        batch = next(iter(data_loader))
-        batch = [tensor.to(self.device) for tensor in batch]
-
-        state, action, _, _, _ = batch
+        state, action = self._get_state_and_action(batch)  
         
+
         with torch.no_grad():
             # Get predictions
             pi = self.actor(state)
+            # check if pi contains NaNs or Infs
+            if torch.isnan(pi).any() or torch.isinf(pi).any():
+                raise ValueError("Actor network output contains NaNs or Infs.")
+
+            # Compute actor loss
+            actor_loss, dose_loss, binary_loss = self._compute_actor_loss(pi, action)
             
             # Split predictions and targets
             dose_pred = pi[:, :self.dose_actions]
@@ -200,46 +217,40 @@ class BC:
             dose_target = action[:, :self.dose_actions]
             binary_target = action[:, self.dose_actions:]
             
-            # ✅ Dose action metrics (continuous regression)
-            dose_mse = F.mse_loss(dose_pred, dose_target).item()
-            dose_mae = F.l1_loss(dose_pred, dose_target).item()
+            # Dose action metrics (continuous regression)
+            dose_mae = F.l1_loss(dose_pred, dose_target)
             
             # ✅ Binary action metrics (binary classification)
             # Clamp to avoid numerical issues with BCE
-            binary_pred_clamped = torch.clamp(binary_pred, 1e-7, 1-1e-7)
-            binary_bce = F.binary_cross_entropy(binary_pred_clamped, binary_target).item()
+            # binary_pred_clamped = torch.clamp(binary_pred, 1e-7, 1-1e-7)
+            # binary_bce = F.binary_cross_entropy(binary_pred_clamped, binary_target).item()
             
             # Binary accuracy (threshold at 0.5)
             binary_pred_classes = (binary_pred > 0.5).float()
-            binary_accuracy = (binary_pred_classes == binary_target).float().mean().item()
+            binary_accuracy = (binary_pred_classes == binary_target).float().mean()
             
             # Per-action accuracy for binary actions
             binary_acc_per_action = []
             for i in range(self.binary_actions):
-                acc = (binary_pred_classes[:, i] == binary_target[:, i]).float().mean().item()
-                binary_acc_per_action.append(acc)
-            
-            # Overall combined loss (same as training)
-            dose_loss = F.mse_loss(dose_pred, dose_target)
-            binary_loss = F.binary_cross_entropy(binary_pred_clamped, binary_target)
-            total_loss = dose_loss + binary_loss
-            
+                acc = (binary_pred_classes[:, i] == binary_target[:, i]).float().mean()
+                binary_acc_per_action.append(acc)   
+                        
         self.actor.train()  # Set back to training mode
         
         return {
             # Overall metrics
-            "eval/total_loss": total_loss.item(),
+            "eval/total_loss": actor_loss.item(),
             
             # Dose action metrics
-            "eval/dose_mse": dose_mse,
-            "eval/dose_mae": dose_mae,
-            "eval/dose_rmse": dose_mse ** 0.5,
+            "eval/dose_mse": dose_loss.item(),
+            "eval/dose_mae": dose_mae.item(),
+            "eval/dose_rmse": dose_loss.item() ** 0.5,
             
             # Binary action metrics
-            "eval/binary_bce": binary_bce,
-            "eval/binary_accuracy": binary_accuracy,
-            "eval/binary_acc_action_0": binary_acc_per_action[0],
-            "eval/binary_acc_action_1": binary_acc_per_action[1],
+            "eval/binary_bce": binary_loss.item(),
+            "eval/binary_accuracy": binary_accuracy.item(),
+            "eval/binary_acc_action_0": binary_acc_per_action[0].item(),
+            "eval/binary_acc_action_1": binary_acc_per_action[1].item(),
         }
 
 

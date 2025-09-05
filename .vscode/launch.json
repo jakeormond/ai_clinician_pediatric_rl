@@ -54,7 +54,8 @@
                 "--fold", "0",
                 "--experiment_variant", "quick_test",
                 "--search_variant", "random_search",
-                "--n_search_iterations", "2"
+                "--n_search_iterations", "2",
+                "--testing", "true"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

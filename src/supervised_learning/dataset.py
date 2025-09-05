@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import copy
+import numpy as np
 
 # this class holds the complete dataset, the folds can 
 # access the data they need using the encounter IDs
@@ -206,3 +207,16 @@ class Dataset:
         subset = copy.deepcopy(self)
         subset.dataframe = subset.dataframe[self.dataframe[self.encounter_col].isin(encounter_ids)].copy()
         return subset
+    
+    def subsample_dataset(self, fraction):
+        """
+        Subsamples the dataset to the specified fraction of encounter IDs.
+        """
+        encounter_ids = self.encounter_ids()
+        n_to_sample = int(len(encounter_ids) * fraction)
+        
+        # sample the encounter IDs without replacement and with a fixed random seed
+        random_seed = self.seed
+        sampled_encounter_ids = np.random.default_rng(seed=random_seed).choice(encounter_ids, size=n_to_sample, replace=False)
+        self = self.create_subset(sampled_encounter_ids)
+        return self

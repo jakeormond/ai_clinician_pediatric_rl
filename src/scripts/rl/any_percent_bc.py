@@ -70,6 +70,9 @@ def parse_arguments():
     parser.add_argument('--start_time', type=str, default = None,                  
                     help='Start time for this experiment run')
     
+    parser.add_argument('--testing', type=bool, default = False,                  
+                    help='if true, we pare down the data for quick testing')
+    
     args = parser.parse_args()
 
     # If start_time is not provided, generate a timestamp
@@ -79,144 +82,12 @@ def parse_arguments():
     return args 
 
 
-
 def validate_arguments(args):
     if args.mode == "single_fold" and args.fold is None:
         raise ValueError("--fold is required when mode is 'single_fold'")
     if args.mode == "aggregate" and args.experiment_folder is None:
         raise ValueError("--experiment_folder is required when mode is 'aggregate'")
     
-
-def log_fold_results_to_wandb(results):
-    """Log fold results to W&B."""
-    if wandb.run is None:  # Check if W&B is active
-        return
-    
-    fold = results['fold']
-    
-    # Use global wandb state
-    wandb.log({
-        f"fold_{fold}/best_cv_score": results['best_cv_score'],
-        **{f"fold_{fold}/{k}": v for k, v in results['test_metrics'].items()}
-    }, step=fold)
-
-
-
-# def train(dataset, config):
-#     # set the seed for reproducibility
-#     set_seed(config.seed, deterministic_torch=True) # this is the same seed used in the data processing for making splits
-
-#     # get the best trajectories
-#     best_trajectories = keep_best_trajectories(dataset.train_data, config.frac, config.discount)
-
-#     # corl provides an option to normalize here, but I prenormalized in the data_processor. Further, 
-#     # I'm not sure there are any reasons not to normalize the data, so I don't require this option. 
-
-#     replay_buffer = ReplayBuffer(best_trajectories)
-#     val_replay_buffer = ReplayBuffer(dataset.val_data)
-
-#     # corl provides an option to set a checkpoint path here
-#     # the checkpoint path should be set by the TrainConfig dataclass
-#     # with a unique identifier for the run
-#     # We can implement this later 
-
-#     # get the max action from the dataset
-#     max_action = np.max(np.abs(dataset.train_data["actions"]))
-
-#     # set seeds
-#     seed = config.seed
-#     set_seed(seed)
-
-#     # create the actor
-#     state_dim = dataset.train_data["observations"].shape[1]
-#     action_dim = dataset.train_data["actions"].shape[1]
-#     actor = Actor(state_dim, action_dim, max_action).to(config.device)
-#     actor_optimizer = torch.optim.Adam(actor.parameters(), lr=3e-4)
-
-#     # the training class requires a dictionary of keyword arguments
-#     kwargs = {
-#         "max_action": max_action,
-#         "actor": actor,
-#         "actor_optimizer": actor_optimizer,
-#         "discount": config.discount,
-#         "device": config.device,
-#     }
-
-#     print("---------------------------------------")
-#     print(f"Training BC, Hosp: {config.hospital}, Seed: {seed}")
-#     print("---------------------------------------")
-
-#     trainer = BC(**kwargs)
-
-#     # corl code has option to load a checkpoint here
-#     if config.load_model is not None:
-#         policy_file = Path(config.load_model)
-#         trainer.load_state_dict(torch.load(policy_file))
-#         actor = trainer.actor
-
-#     wandb_init(asdict(config))
-
-#     # create the directory for checkpoints if it doesn't exist
-#     os.makedirs(config.checkpoints_path, exist_ok=True)
-
-#     best_val_loss = float("inf")
-#     patience = 5  # Number of iterations to wait before stopping
-#     patience_counter = 0
-
-#     num_batches = len(replay_buffer) // config.batch_size
-
-#     for e in range(config.n_epochs): # previously max_timesteps
-#         for batch_idx in range(num_batches):
-#             if batch_idx % 100 == 0:
-#                 print(f"Epoch {e}, Batch {batch_idx}/{num_batches}")
-        
-#             batch = replay_buffer.sample(config.batch_size)
-#             # batch = [b.to(config.device) for b in batch] # this line is not needed since the replay buffer returns tensors on the correct device
-
-#             log_dict = trainer.train(batch)
-#             wandb.log(log_dict, step=trainer.total_it)
-
-#         if e % config.eval_freq == 0:
-#             val_batch = val_replay_buffer.sample(config.batch_size)
-#             with torch.no_grad():
-#                 val_loss = F.mse_loss(trainer.actor(val_batch[0]), val_batch[1]).item()
-#             wandb.log({"val_loss": val_loss}, step=trainer.total_it)
-#             print(f"Epoch {e}, Validation Loss: {val_loss:.4f}")
-
-#             # Early stopping logic
-#             if val_loss < best_val_loss:
-#                 best_val_loss = val_loss
-#                 patience_counter = 0
-#                 # Optionally save the best model
-#                 save_path = Path(config.checkpoints_path) / "best_model.pt"
-#                 torch.save(trainer.state_dict(), save_path)
-
-#             else:
-#                 patience_counter += 1
-#                 if patience_counter >= patience:
-#                     print(f"Early stopping at epoch {e} due to no improvement in validation loss.")
-#                     break
-            
-#             if config.checkpoints_path is not None:
-#                 torch.save(
-#                     trainer.state_dict(),
-#                     os.path.join(config.checkpoints_path, f"checkpoint_{e}.pt"),
-#                 )
-
-#     # Final evaluation on the test set
-#     test_replay_buffer = ReplayBuffer(dataset.test_data)
-#     test_batch = test_replay_buffer.sample(config.batch_size)
-#     with torch.no_grad():
-#         test_loss = F.mse_loss(trainer.actor(test_batch[0]), test_batch[1]).item()
-#     print(f"Final Test Loss: {test_loss:.4f}")
-#     wandb.log({"test_loss": test_loss})
-
-#     # Save the final model
-#     final_save_path = Path(config.checkpoints_path) / "final_model.pt"
-#     torch.save(trainer.state_dict(), final_save_path)
-#     print(f"Final model saved to {final_save_path}")
-
-
 
 # we can use pyrallis to parse command line arguments and load configurations when
 # we're further along in the project
@@ -235,6 +106,10 @@ def main():
         # load data
         dataset = Dataset(config_manager.data_config)
         print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
+
+        if config_manager.testing:
+            dataset = dataset.subsample_dataset(0.1)
+            print(f"Subsampled dataset to {len(dataset.dataframe)} rows for testing")            
 
         # Initialize W&B - will implement later
         # log_fold_results_to_wandb(results)

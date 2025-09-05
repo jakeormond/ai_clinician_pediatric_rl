@@ -268,12 +268,27 @@ class DataProcessor:
                 self.rl_dataset['observations'][:, i] = \
                     np.nan_to_num(self.rl_dataset['observations'][:, i], nan=0.0)
                 
+                # it is possible to get very large values that are less than inf, set them to zero
+                self.rl_dataset['observations'][:, i] = \
+                    np.where(np.abs(self.rl_dataset['observations'][:, i]) > 1e6, 0.0, self.rl_dataset['observations'][:, i])                
+                
+                # also possible to get Infs if max == min but numerator is non-zero, so we set those to 0 as well
+                self.rl_dataset['observations'][:, i] = \
+                    np.where(np.isinf(self.rl_dataset['observations'][:, i]), 0.0, self.rl_dataset['observations'][:, i])
+                
                 # also normalize the next_observations
                 self.rl_dataset['next_observations'][:, i] = (self.rl_dataset['next_observations'][:, i] - 
                     self.obs_norm_dict[feature]['min']) / (self.obs_norm_dict[feature]['max'] 
-                                                           - self.obs_norm_dict[feature]['min'])     
+                                                           - self.obs_norm_dict[feature]['min'])    
+
                 self.rl_dataset['next_observations'][:, i] = \
-                    np.nan_to_num(self.rl_dataset['next_observations'][:, i], nan=0.0)     
+                    np.where(np.abs(self.rl_dataset['next_observations'][:, i]) > 1e6, 0.0, self.rl_dataset['next_observations'][:, i])
+
+                self.rl_dataset['next_observations'][:, i] = \
+                    np.nan_to_num(self.rl_dataset['next_observations'][:, i], nan=0.0)   
+
+                self.rl_dataset['next_observations'][:, i] = \
+                    np.where(np.isinf(self.rl_dataset['next_observations'][:, i]), 0.0, self.rl_dataset['next_observations'][:, i])  
 
             elif data_type == 'binary':
                 # binary features are already normalized, so we just store the normalization type
@@ -296,6 +311,11 @@ class DataProcessor:
             if np.isnan(self.rl_dataset['observations'][:, i]).any() or \
                np.isnan(self.rl_dataset['next_observations'][:, i]).any():
                 raise ValueError(f"NaNs found in normalized feature {feature}")
+
+            # check for Infs in the normalized feature
+            if np.isinf(self.rl_dataset['observations'][:, i]).any() or \
+               np.isinf(self.rl_dataset['next_observations'][:, i]).any():
+                raise ValueError(f"Infs found in normalized feature {feature}") 
 
             print(f"Normalized feature {feature} with {normalization_type} normalization. "
                 f"Min: {self.obs_norm_dict[feature]['min']}, \

@@ -29,6 +29,7 @@ from ..data.data_processor import DataProcessor
 from .replay_buffer import ReplayBuffer, RLDataset
 from .models.behavioural_cloning import Actor, MixedActionActor, BC
 from ..utils.utilities import set_seed
+from .plotting import plot_losses
 
 
 
@@ -178,14 +179,17 @@ def outer_training_loop(dataset, config_manager):
                 final_model=True
             )
         
+        # PLOT THE TRAINING AND VALIDATION LOSSES
+        plot_losses(training_losses, val_losses, outer_fold, config_manager)
+        
         # Save results for this outer fold
-        results_path = Path(config_manager.training_config['checkpoints_path']) / f"fold_{outer_fold}_results.json"
+        results_path = Path(config_manager.experiment_dir) / f"fold_{outer_fold}_results.json"
         with open(results_path, 'w') as f:
             json.dump({
                 'outer_fold': outer_fold,
                 'best_hyperparameters': best_hyperparameters,
                 'final_metrics': test_metrics,
-                'config': asdict(config_manager.training_config)
+                'config': config_manager.training_config
             }, f, indent=2)
         
         print(f"✓ Outer fold {outer_fold} complete. Results saved to {results_path}")
@@ -374,7 +378,7 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
                 val_metrics = trainer.evaluate(batch)
                 current_val_loss.append(val_metrics['eval/total_loss'])
 
-            val_losses[epoch] = np.mean(current_val_loss)
+            val_losses[epoch] = float(np.mean(current_val_loss))
 
             # Check for improvement
             improvement = best_val_loss - val_losses[epoch]
@@ -413,7 +417,7 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
         print(f"Final test metrics: {test_metrics}")
 
         # Save final model if this is the final training
-        model_path = Path(config_manager.training_config['checkpoints_path']) / "final_model.pt"
+        model_path = Path(config_manager.fold_dir /  "final_model.pt")
         torch.save(trainer.state_dict(), model_path)
         print(f" Final model saved to {model_path}")
    

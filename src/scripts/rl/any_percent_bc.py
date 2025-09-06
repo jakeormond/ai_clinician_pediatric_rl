@@ -133,7 +133,7 @@ def main():
         # log_fold_results_to_wandb(results)
 
         print(f"Fold {args.fold} completed successfully")
-        print(f"Test metrics: {results['test_metrics']}")
+        print(f"Test metrics: {results}")
         
         if wandb.run is not None:
             wandb.finish()

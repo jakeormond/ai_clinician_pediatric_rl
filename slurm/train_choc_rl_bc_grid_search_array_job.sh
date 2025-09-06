@@ -4,14 +4,14 @@
 #SBATCH --job-name=choc_rl_bc
 #SBATCH --output=slurm/logs/%x_%j.out
 #SBATCH --error=slurm/logs/%x_%j.err
-#SBATCH --array=0-4
+#SBATCH --array=1-4
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=64G
 #SBATCH --time=08:00:00
-#SBATCH --partition=GPU
-#SBATCH --gres=gpu:h100:1     
+#SBATCH --partition=normal
+#SBATCH --gres=gpu:l40:1     
 #SBATCH --mail-type=END,FAIL        # Email notifications
 #SBATCH --mail-user=j.ormond@imperial.ac.uk
 

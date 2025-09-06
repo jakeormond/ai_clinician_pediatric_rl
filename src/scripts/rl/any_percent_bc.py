@@ -73,6 +73,12 @@ def parse_arguments():
     parser.add_argument('--testing', type=bool, default = False,                  
                     help='if true, we pare down the data for quick testing')
     
+    parser.add_argument('--n_epochs', type=int, default = 10,                  
+                    help='Number of epochs to train for - should be 1000, but for testing we set to 10')
+    
+    parser.add_argument('--frac', type=float, default = 0.,                  
+                    help='Fraction of data to use for behaviour cloning - 0. means use all data')
+    
     args = parser.parse_args()
 
     # If start_time is not provided, generate a timestamp

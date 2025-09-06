@@ -2,13 +2,13 @@
     "group": "reinforcement_learning"
     name: "any_percent_bc"
     n_episodes: 100  # How many episodes run during evaluation
-    n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10
+    # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
     discount: 0.999  # Discount factor
-    frac: 0.  # Best data fraction to use
+    # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
     max_traj_len: 2000  # Max trajectory length - probably need to change this
     device: "cuda"  # Device (cuda or cpu)
-    learning_rate: [1e-3] # [1e-3, 1e-4, 1e-5]  # Learning rates to try
+    learning_rate: [1e-3, 1e-4, 1e-5]  # Learning rates to try
     batch_size: [256]  # [256, 512, 1024]  # Batch size for all networks
     hidden_dim: [[256, 256], [512, 256], [128, 256, 512]]  # Hidden dimension for all networks
 

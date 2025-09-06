@@ -1,5 +1,5 @@
 #!/bin/bash
-# slurm/train_choc_supervised_learning_grid_search_array_job.sh
+# slurm/train_choc_rl_bc_grid_search_array_job.sh
 
 #SBATCH --job-name=choc_rl_bc
 #SBATCH --output=slurm/logs/%x_%j.out
@@ -7,10 +7,11 @@
 #SBATCH --array=0-4
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=1
 #SBATCH --mem=64G
 #SBATCH --time=08:00:00
-#SBATCH --partition=normal
+#SBATCH --partition=GPU
+#SBATCH --gres=gpu:1     
 #SBATCH --mail-type=END,FAIL        # Email notifications
 #SBATCH --mail-user=j.ormond@imperial.ac.uk
 
@@ -59,16 +60,16 @@ echo "========================================="
 # Run the training script for this specific fold
 echo "Starting training for fold $SLURM_ARRAY_TASK_ID..."
 
-python -m src.scripts.supervised.supervised_learning \
+python -m src.scripts.rl.any_percent_bc \
     --hospital choc \
-    --experiment_type supervised_learning \
-    --model_type xgbregressor \
-    --prediction_type discharge_mortality \
+    --experiment_type reinforcement_learning \
+    --model_type any_percent_bc \
     --mode single_fold \
     --fold $SLURM_ARRAY_TASK_ID \
     --experiment_variant standard \
     --search_variant random_search \
-    --n_search_iterations 20 \
+    --n_search_iterations 9 \
+    --testing false \
     --start_time $START_TIME 
 
 exit_code=$?

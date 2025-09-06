@@ -164,7 +164,7 @@ def outer_training_loop(dataset, config_manager):
                                             norm_params=norm_params)
 
         # Keep only best trajectories if a fraction to keep is specified
-        if config_manager.training_config['frac'] != 0.:
+        if config_manager.frac != 0.:
             keep_best_trajectories(train_processor)
             keep_best_trajectories(test_processor)
         else:
@@ -238,7 +238,7 @@ def optimize_hyperparameters(train_dataset, config_manager,
             inner_val_processor = DataProcessor(inner_val_dataset, config_manager.training_config, 
                                                norm_params=norm_params)
             
-            if config_manager.training_config['frac'] != 0.:
+            if config_manager.frac != 0.:
                 keep_best_trajectories(inner_train_processor)
                 keep_best_trajectories(inner_val_processor)
             else:
@@ -342,7 +342,7 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
     )
     
     # Early stopping configuration for THIS hyperparameter combination
-    n_epochs = config_manager.training_config['n_epochs']
+    n_epochs = config_manager.n_epochs
     patience = config_manager.training_config['patience']  # How many evaluations to wait
     eval_freq = config_manager.training_config['eval_freq']  # Evaluate every N epochs
     min_delta = config_manager.training_config['min_delta']  # Minimum improvement

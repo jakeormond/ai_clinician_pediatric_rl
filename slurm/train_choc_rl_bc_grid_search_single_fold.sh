@@ -9,7 +9,9 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=64G
 #SBATCH --time=08:00:00
-#SBATCH --partition=GPU
+# #SBATCH --partition=GPU
+#SBATCH --partition=normal
+# #SBATCH --gres=gpu:l40:1     
 #SBATCH --gres=gpu:h100:1     
 #SBATCH --mail-type=END,FAIL        # Email notifications
 #SBATCH --mail-user=j.ormond@imperial.ac.uk

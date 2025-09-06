@@ -59,7 +59,7 @@ echo "========================================="
 
 
 # Run the training script for this specific fold
-echo "Starting training for fold $SLURM_ARRAY_TASK_ID..."
+echo "Starting training for fold $FOLD..."
 
 python -m src.scripts.rl.any_percent_bc \
     --hospital choc \
@@ -80,9 +80,9 @@ exit_code=$?
 echo "========================================="
 echo "End time: $(date)"
 if [ $exit_code -eq 0 ]; then
-    echo "Fold $SLURM_ARRAY_TASK_ID completed successfully!"
+    echo "Fold $FOLD completed successfully!"
 else
-    echo "Fold $SLURM_ARRAY_TASK_ID failed with exit code $exit_code"
+    echo "Fold $FOLD failed with exit code $exit_code"
     exit $exit_code
 fi
 echo "========================================="

@@ -56,7 +56,7 @@ def parse_arguments():
 
     parser.add_argument('--experiment_variant', 
                         default='quick_test', 
-                        choices=['quick_test', 'full_test'], 
+                        choices=['quick_test', 'standard'], 
                         help='Variant of the experiment to run (default: quick_test)')
 
     parser.add_argument('--search_variant', 

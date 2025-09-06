@@ -69,6 +69,8 @@ python -m src.scripts.rl.any_percent_bc \
     --experiment_variant standard \
     --search_variant random_search \
     --n_search_iterations 9 \
+    --n_epochs 1000 \
+    --frac 0. \
     --testing false \
     --start_time $START_TIME 
 

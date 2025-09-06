@@ -1,5 +1,5 @@
 #!/bin/bash
-# slurm/train_choc_rl_bc_grid_search_array_job.sh
+# slurm/train_choc_rl_bc_grid_search_single_fold.sh
 
 #SBATCH --job-name=choc_rl_bc
 #SBATCH --output=slurm/logs/%x_%j.out
@@ -9,13 +9,15 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=64G
 #SBATCH --time=08:00:00
-#SBATCH --partition=GPU
+#SBATCH --partition=gpu
 #SBATCH --gres=gpu:h100:1     
 #SBATCH --mail-type=END,FAIL        # Email notifications
 #SBATCH --mail-user=j.ormond@imperial.ac.uk
 
 # Exit on any error
 set -e
+
+FOLD=0
 
 # Generate a unique start time for this entire job array
 START_TIME=$(date +"%Y%m%d_%H%M%S")
@@ -44,7 +46,7 @@ conda activate rl_env
 echo "========================================="
 echo "Job Information:"
 echo "Job ID: $SLURM_JOB_ID"
-echo "Array Task ID: $SLURM_ARRAY_TASK_ID"  # This is your fold number!
+echo "Fold: $FOLD"  # This is your fold number!
 echo "Job Name: $SLURM_JOB_NAME"
 echo "Node: $SLURM_NODELIST"
 echo "CPUs per task: $SLURM_CPUS_PER_TASK"

@@ -4,7 +4,7 @@
 #SBATCH --job-name=choc_rl_bc
 #SBATCH --output=slurm/logs/%x_%j.out
 #SBATCH --error=slurm/logs/%x_%j.err
-#SBATCH --array=1-4
+#SBATCH --array=0-4
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1

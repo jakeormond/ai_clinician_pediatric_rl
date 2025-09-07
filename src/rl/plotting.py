@@ -15,6 +15,6 @@ def plot_losses(training_losses, val_losses, outer_fold, config_manager):
     plt.grid(True)
     
     # Save the plot
-    plots_path = Path(config_manager.fold_dir) / f"fold_{outer_fold}_loss_plot.png"
+    plots_path = Path(config_manager.experiment_dir) / f"fold_{outer_fold}_loss_plot.png"
     plt.savefig(plots_path)
     plt.close()

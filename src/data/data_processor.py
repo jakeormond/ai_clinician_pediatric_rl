@@ -48,7 +48,7 @@ class DataProcessor:
         # these are the columns minus the reward, the actions and the encounter and time columns
         self.input_features = [col for col in dataset.dataframe.columns
                                if col not in dataset.actions and 
-                               col != self.reward and 
+                               col != self.reward_col and 
                                col != self.encounter_col and 
                                col != self.time_col and 
                                col != self.terminal_reward_col]
@@ -118,15 +118,15 @@ class DataProcessor:
 
         ##### SHOULD ADD SOME KIND OF UNIT TEST HERE TO CONFIRM EVERYTHING IS WORKING AS EXPECTED #####
 
-        if self.reward:
-            rewards = dataset.dataframe[self.reward].copy()    
+        if self.use_reward:
+            rewards = dataset.dataframe[self.reward_col].copy()    
             # process the rewards
             if self.flip_reward:
                 rewards = -rewards
-            if self.shift_reward:
-                rewards = rewards + self.reward_shift_amount
-            if self.reward_scale:
-                rewards = rewards * self.reward_scale
+            if self.offset_reward != 0.0:
+                rewards = rewards + self.offset_reward
+            if self.scale_reward != 1.0:
+                rewards = rewards * self.scale_reward
 
             # now compute hourly change in reward
             rewards = rewards.diff().fillna(0)
@@ -151,10 +151,10 @@ class DataProcessor:
         dataset.dataframe = dataset.dataframe.drop(columns=['terminated'])
 
         # process the terminal rewards
-        if self.terminal_reward:
+        if self.use_terminal_reward:
             terminal_rewards = dataset.dataframe[self.terminal_reward_col].copy()
             if self.flip_terminal_reward:
-                terminal_rewards = -terminal_rewards
+                terminal_rewards = -terminal_rewards # make mortality = -1
             # make terminal rewards = 1 anywhere terminal_rewards == 0 and 
             # terminated == 1 (i.e. the patient survived)
             terminal_rewards[(terminal_rewards == 0) & (terminated == 1)] = 1

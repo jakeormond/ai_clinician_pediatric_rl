@@ -18,16 +18,17 @@ normalize_actions: True
 
 normalize_obs: True
 
-
-# reward: "phoenix_sepsis_score"
-reward: False
-flip_reward: True
+# reward is stored in the experiments dir, and the path is specified in config/rewards/reward_paths.yaml
+use_reward: True
+reward_type: "xgbclassifier_discharge_mortality" # if no reward, set to "none"
+reward_col: "health_score" # this is the name of the column in the reward file that has the reward values
+flip_reward: False
 offset_reward: 0.0
-scale_reward: 1.0
+scale_reward: 10.0
 
-terminal_reward_col: "mortality"
-terminal_reward: True
-flip_terminal_reward: True
+use_terminal_reward: False
+terminal_reward_col: "mortality" # other wise make False
+flip_terminal_reward: True # mortality needs to be flipped so that death = -1
 offset_terminal_reward: 0.0
 scale_terminal_reward: 1.0
 

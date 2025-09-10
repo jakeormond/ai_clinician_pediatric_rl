@@ -220,7 +220,7 @@ class BC:
             # Dose action metrics (continuous regression)
             dose_mae = F.l1_loss(dose_pred, dose_target)
             
-            # ✅ Binary action metrics (binary classification)
+            # Binary action metrics (binary classification)
             # Clamp to avoid numerical issues with BCE
             # binary_pred_clamped = torch.clamp(binary_pred, 1e-7, 1-1e-7)
             # binary_bce = F.binary_cross_entropy(binary_pred_clamped, binary_target).item()
@@ -236,9 +236,8 @@ class BC:
                 binary_acc_per_action.append(acc)   
                         
         self.actor.train()  # Set back to training mode
-        
-        return {
-            # Overall metrics
+
+        overall_metrics = {# Overall metrics
             "eval/total_loss": actor_loss.item(),
             
             # Dose action metrics
@@ -250,10 +249,17 @@ class BC:
             "eval/binary_bce": binary_loss.item(),
             "eval/binary_accuracy": binary_accuracy.item(),
             "eval/binary_acc_action_0": binary_acc_per_action[0].item(),
-            "eval/binary_acc_action_1": binary_acc_per_action[1].item(),
+            "eval/binary_acc_action_1": binary_acc_per_action[1].item()
         }
 
-
+        preds_and_targets = {
+            "dose_pred": dose_pred.cpu().numpy(),
+            "dose_target": dose_target.cpu().numpy(),
+            "binary_pred": binary_pred.cpu().numpy(),
+            "binary_target": binary_target.cpu().numpy()
+        }
+        
+        return overall_metrics, action.cpu().numpy(), pi.cpu().numpy()
 
     def state_dict(self) -> Dict[str, Any]:
         return {

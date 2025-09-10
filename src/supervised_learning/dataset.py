@@ -6,6 +6,8 @@ import numpy as np
 # this class holds the complete dataset, the folds can 
 # access the data they need using the encounter IDs
 # and the methods in this class
+# Note that rewards are loaded here, but processed in data_processor.py
+
 class Dataset:
     def __init__(self, config, drop_actions=True, transform_target=True): # note that actions get dropped only for supervised learning, not RL
         
@@ -15,8 +17,11 @@ class Dataset:
         
         self._load_dataset(drop_actions)
         
-        if "target_col" in config and transform_target: # this is generally used for supervised learning, so gets
-            self._transform_target() # accept dataframe as input
+        if config['model_type'] == 'supervised_learning' and transform_target: # this is generally used for supervised learning, so gets
+            self._transform_target() 
+
+        if self.use_reward:
+            self._load_reward()
 
 
     def save_dataframe(self, config):
@@ -36,6 +41,15 @@ class Dataset:
 
     def _load_dataset(self, drop_actions):
         self.dataframe = pd.read_parquet(self.dataframe_path) # here I will have to add code to load the df with the reward
+        
+        # rename the encounter and time columns to standard names
+        self.dataframe = self.dataframe.rename(columns={
+            self.encounter_col: "encounter_id",
+            self.time_col: "time"
+        })
+        self.encounter_col = "encounter_id"
+        self.time_col = "time"
+        
         self.features_to_use = pd.read_csv(self.features_to_use_path)
 
          # drop any rows where "do not use" is 1
@@ -57,12 +71,9 @@ class Dataset:
         # make list of features
         features = self.features_to_use['feature'].tolist()
 
-        # append reward col, self.reward, to features if reinforcement learning
+        # append terminal reward column if needed, the main reward is handled separately, but within this file
         if self.model_type == "reinforcement_learning":
-            if self.reward:
-                features.append(self.reward)
-
-            if self.terminal_reward:
+            if self.use_terminal_reward:
                 if self.terminal_reward_col not in features:
                     features.append(self.terminal_reward_col)
 
@@ -87,6 +98,32 @@ class Dataset:
 
         return self
     
+
+    def _load_reward(self):
+        # load parquet file with rewards, path is self.reward_path
+        reward_df = pd.read_parquet(self.reward_path)
+
+        # confirm that reward_df and self.dataframe have the length
+        if reward_df.shape[0] != self.dataframe.shape[0]:
+            raise ValueError(f"Reward dataframe has {reward_df.shape[0]} rows, but main dataframe has {self.dataframe.shape[0]} rows.")
+        
+        # save the length of the dataframe before merging
+        n_rows_before = self.dataframe.shape[0]
+
+        # confirm that reward_df a "health_score" column
+        if 'health_score' not in reward_df.columns:
+            raise ValueError("Reward dataframe does not have a 'health_score' column.")
+        
+        # merge reward_df with self.dataframe on encounter_col and time_col
+        self.dataframe = pd.merge(self.dataframe, reward_df[[self.encounter_col, self.time_col, 'health_score']],
+                                  on=[self.encounter_col, self.time_col], how='inner')
+        
+        # confirm that the length of the dataframe is unchanged
+        n_rows_after = self.dataframe.shape[0]
+        if n_rows_before != n_rows_after:
+            raise ValueError(f"After merging reward, dataframe has {n_rows_after} rows, but before merging had {n_rows_before} rows.")
+
+
 
     def _transform_target(self):
         """ depending on the type of prediction, we may need to alter

@@ -95,6 +95,12 @@ def validate_arguments(args):
         raise ValueError("--experiment_folder is required when mode is 'aggregate'")
     
 
+def check_for_reward_config(config_manager):
+    if (not config_manager.data_config['use_reward'] and
+        not config_manager.data_config['use_terminal_reward']):
+        
+        raise ValueError("For RL experiments, an hourly reward or terminal reward (or both) must be specified in the dataset config file.") 
+
 # we can use pyrallis to parse command line arguments and load configurations when
 # we're further along in the project
 def main():
@@ -106,6 +112,9 @@ def main():
     config_manager = ConfigManager(args)
 
     if args.mode == "single_fold":
+        # check that reward is included
+        check_for_reward_config(config_manager)
+
         # create the name and directory for this fold
         config_manager.set_fold_name() # check code, we now now want a parent dir, with inner date dir
 

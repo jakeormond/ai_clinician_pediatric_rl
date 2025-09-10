@@ -33,8 +33,12 @@ from .plotting import plot_losses
 
 
 
-def keep_best_trajectories(dataprocessor):
+def keep_best_trajectories(dataprocessor, fraction_to_keep=0.2):
    
+    # check that the rewards are not terminal only, i.e. only -1, 0, +1
+    if set(np.unique(dataprocessor.rl_dataset["rewards"])).issubset({-1, 0, 1}):
+        raise ValueError("Rewards appear to be terminal only (-1, 0, +1). Use keep_positive_trajectories instead.")
+    
     ids_by_trajectories = []
     returns = []
     cur_ids = []
@@ -58,7 +62,7 @@ def keep_best_trajectories(dataprocessor):
             reward_scale = 1.0
 
     sort_ord = np.argsort(returns, axis=0)[::-1].reshape(-1)
-    top_trajs = sort_ord[: max(1, int(dataprocessor.frac * len(sort_ord)))]
+    top_trajs = sort_ord[: max(1, int(fraction_to_keep * len(sort_ord)))]
     top_returns = np.array(returns)[top_trajs]
     print(f"mean top returns: {np.mean(top_returns)}")
 
@@ -165,8 +169,8 @@ def outer_training_loop(dataset, config_manager):
 
         # Keep only best trajectories if a fraction to keep is specified
         if config_manager.frac != 0.:
-            keep_best_trajectories(train_processor)
-            keep_best_trajectories(test_processor)
+            keep_best_trajectories(train_processor, fraction_to_keep = config_manager.frac)
+            keep_best_trajectories(test_processor, fraction_to_keep = config_manager.frac)
         else:
             keep_positive_trajectories(train_processor)
             keep_positive_trajectories(test_processor)
@@ -239,8 +243,8 @@ def optimize_hyperparameters(train_dataset, config_manager,
                                                norm_params=norm_params)
             
             if config_manager.frac != 0.:
-                keep_best_trajectories(inner_train_processor)
-                keep_best_trajectories(inner_val_processor)
+                keep_best_trajectories(inner_train_processor, fraction_to_keep = config_manager.frac)
+                keep_best_trajectories(inner_val_processor, fraction_to_keep =config_manager.frac)
             else:
                 keep_positive_trajectories(inner_train_processor)
                 keep_positive_trajectories(inner_val_processor)
@@ -375,7 +379,7 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
             for batch_idx, batch in enumerate(val_test_buffer):
                 if batch_idx * batch_size >= 5000:  # Limit validation to 5000 samples for speed
                     break
-                val_metrics = trainer.evaluate(batch)
+                val_metrics, _, _ = trainer.evaluate(batch)
                 current_val_loss.append(val_metrics['eval/total_loss'])
 
             val_losses[epoch] = float(np.mean(current_val_loss))
@@ -407,10 +411,16 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
     
     if final_model:
         epoch_losses = []
+        all_targets = []
+        all_predictions = []
 
         # Final evaluation on test set
         for batch_idx, batch in enumerate(val_test_buffer):
-            batch_metrics = trainer.evaluate(batch)
+            batch_metrics, targets, predictions = trainer.evaluate(batch)
+
+            all_targets.append(targets)
+            all_predictions.append(predictions)
+            
             epoch_losses.append(batch_metrics)
         
         test_metrics = average_dicts(epoch_losses)       
@@ -420,71 +430,33 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
         model_path = Path(config_manager.fold_dir /  "final_model.pt")
         torch.save(trainer.state_dict(), model_path)
         print(f" Final model saved to {model_path}")
-   
+
+        ##### make a dataframe of targets and predictions ####
+        # columns are config_manager.data_config['action_cols']
+        action_cols = config_manager.data_config['actions']
+
+        if config_manager.data_config['create_binary_actions']:
+            binary_cols = [col + "_binary" for col in action_cols]
+            action_cols = action_cols + binary_cols
+
+        pred_cols = [col + "_pred" for col in action_cols]
+
+        # create dataframe using all_targets and all_predictions
+        all_targets = np.vstack(all_targets)
+        all_predictions = np.vstack(all_predictions)
+
+        results_df = pd.DataFrame(
+            data=np.hstack([all_targets, all_predictions]),
+            columns=action_cols + pred_cols
+        )
+
+        results_path = Path(config_manager.fold_dir / "test_predictions.parquet")
+        results_df.to_parquet(results_path)
+        print(f" Test predictions saved to {results_path}")       
+
+
         return best_val_loss, training_losses, val_losses, test_metrics
     
     else:
         return best_val_loss, training_losses, val_losses
 
-
-# def train_final_model(train_processor, test_processor, config_manager, best_hyperparams):
-#     """Train final model with best hyperparameters on full outer train set."""
-    
-#     print("Training final model with best hyperparameters...")
-
-#     batch_size = best_hyperparams['batch_size']
-    
-#     train_dataset = RLDataset(train_processor.rl_dataset)
-#     training_buffer = DataLoader(
-#         train_dataset, 
-#         batch_size=batch_size, 
-#         shuffle=True
-#         )
-    
-#     test_dataset = RLDataset(test_processor.rl_dataset)
-#     test_buffer = DataLoader(
-#         test_dataset, 
-#         batch_size=batch_size, 
-#         shuffle=False
-#         )
-    
-
-#     # Create final model with best hyperparameters
-#     state_dim = train_processor.rl_dataset["observations"].shape[1]
-#     action_dim = train_processor.rl_dataset["actions"].shape[1]
-#     max_action = np.max(np.abs(train_processor.rl_dataset["actions"]))
-#     learning_rate = float(best_hyperparams['learning_rate'])
-    
-    
-#     ################# FIX TO MULTI ACTOR #################
-#     actor = Actor(state_dim, action_dim, max_action).to(config_manager.training_config['device'])
-#     actor_optimizer = torch.optim.Adam(actor.parameters(), lr=learning_rate)
-    
-#     final_trainer = BC(
-#         max_action=max_action,
-#         actor=actor,
-#         actor_optimizer=actor_optimizer,
-#         discount=config_manager.training_config['discount'],
-#         device=config_manager.training_config['device'],
-#     )
-    
-#     # Train final model
-#     n_epochs = best_hyperparams['n_epochs']
-#     batch_size = best_hyperparams['batch_size']
-    
-#     for epoch in range(n_epochs):
-#         batch = training_buffer.sample(batch_size)
-#         train_metrics = final_trainer.train(batch)
-        
-#         if epoch % 10 == 0:
-#             print(f"Final training epoch {epoch}: loss = {train_metrics['actor_loss']:.4f}")
-    
-#     # Final evaluation on test set
-#     test_metrics = final_trainer.evaluate(test_buffer, batch_size=1024)
-#     print(f"Final test metrics: {test_metrics}")
-    
-#     # Save final model
-#     model_path = Path(config_manager.training_config['checkpoints_path']) / "final_model.pt"
-#     torch.save(final_trainer.state_dict(), model_path)
-    
-#     return test_metrics

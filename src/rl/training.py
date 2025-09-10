@@ -186,6 +186,14 @@ def outer_training_loop(dataset, config_manager):
         # PLOT THE TRAINING AND VALIDATION LOSSES
         plot_losses(training_losses, val_losses, outer_fold, config_manager)
         
+        # save the configuration_manager
+        with open(config_manager.fold_dir / "config_manager.pkl", "wb") as f:
+            pickle.dump(config_manager, f)  
+
+        # save the normalization parameters as a pkl file
+        with open(config_manager.fold_dir / "norm_params.pkl", "wb") as f:
+            pickle.dump(norm_params, f)        
+            
         # Save results for this outer fold
         results_path = Path(config_manager.experiment_dir) / f"fold_{outer_fold}_results.json"
         with open(results_path, 'w') as f:
@@ -453,12 +461,6 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
         results_path = Path(config_manager.fold_dir / "test_predictions.parquet")
         results_df.to_parquet(results_path)
         print(f" Test predictions saved to {results_path}")       
-
-
-        # we need to save an output configuration with everything needed to reproduce
-        # the experiment, seed, dataset used, actions used, normalization params
-        
-
 
         return best_val_loss, training_losses, val_losses, test_metrics
     

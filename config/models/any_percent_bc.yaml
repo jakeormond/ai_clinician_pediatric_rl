@@ -8,9 +8,9 @@
     # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
     max_traj_len: 2000  # Max trajectory length - probably need to change this
     device: "cuda"  # Device (cuda or cpu)
-    learning_rate: [1e-6]  # Learning rates to try
+    learning_rate: [1e-6, 1e-5, 1e-4]  # Learning rates to try
     batch_size: [128, 256]  # [256, 512, 1024]  # Batch size for all networks
-    hidden_dim: [[64, 128], [128, 128]]  # Hidden dimension for all networks
+    hidden_dim: [[64, 128], [128, 128], [128, 256, 256]]  # Hidden dimension for all networks
 
     # Early stopping parameters (fixed for all combinations)
     patience: 15        # Stop if no improvement for 15 evaluations

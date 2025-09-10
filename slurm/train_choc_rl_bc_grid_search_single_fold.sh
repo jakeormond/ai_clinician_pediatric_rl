@@ -73,7 +73,7 @@ python -m src.scripts.rl.any_percent_bc \
     --search_variant random_search \
     --n_search_iterations 9 \
     --n_epochs 1000 \
-    --frac 0. \
+    --frac 0.2 \
     --testing false \
     --start_time $START_TIME 
 

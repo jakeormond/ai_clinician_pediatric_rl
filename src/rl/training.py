@@ -455,6 +455,11 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
         print(f" Test predictions saved to {results_path}")       
 
 
+        # we need to save an output configuration with everything needed to reproduce
+        # the experiment, seed, dataset used, actions used, normalization params
+        
+
+
         return best_val_loss, training_losses, val_losses, test_metrics
     
     else:

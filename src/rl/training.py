@@ -130,7 +130,7 @@ def outer_training_loop(dataset, config_manager):
     n_inner_folds = config_manager.cv_config["n_inner_folds"]
     target_fold = config_manager.cv_config['fold']  # This comes from job array index when running on HPC
     
-    if target_fold is None:training_config
+    if target_fold is None:
         raise ValueError("target_fold must be specified")
     
     print(f"Processing outer fold {target_fold}/{n_outer_folds}")

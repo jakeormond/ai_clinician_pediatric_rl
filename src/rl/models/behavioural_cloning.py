@@ -27,6 +27,95 @@ from ...utils.logging_utilities import wandb_init  # Add this import
 TensorBatch = List[torch.Tensor]
 
 
+def keep_best_trajectories(dataprocessor, fraction_to_keep=0.2):
+   
+    # check that the rewards are not terminal only, i.e. only -1, 0, +1
+    if set(np.unique(dataprocessor.rl_dataset["rewards"])).issubset({-1, 0, 1}):
+        raise ValueError("Rewards appear to be terminal only (-1, 0, +1). Use keep_positive_trajectories instead.")
+    
+    ids_by_trajectories = []
+    returns = []
+    cur_ids = []
+    cur_return = 0
+    reward_scale = 1.0
+
+    for i, (reward, done) in enumerate(zip(dataprocessor.rl_dataset["rewards"], 
+                                           dataprocessor.rl_dataset["terminated"])):
+        cur_return += reward_scale * reward
+        cur_ids.append(i)
+        reward_scale *= dataprocessor.discount     
+        
+        if done == 1.0:
+            if len(cur_ids) <= dataprocessor.max_traj_len:
+                # don't use trajectories that are too long
+                ids_by_trajectories.append(list(cur_ids))
+                returns.append(cur_return)
+            
+            cur_ids = []
+            cur_return = 0
+            reward_scale = 1.0
+
+    sort_ord = np.argsort(returns, axis=0)[::-1].reshape(-1)
+    top_trajs = sort_ord[: max(1, int(fraction_to_keep * len(sort_ord)))]
+    top_returns = np.array(returns)[top_trajs]
+    print(f"mean top returns: {np.mean(top_returns)}")
+
+    order = []
+    for i in top_trajs:
+        order += ids_by_trajectories[i]
+    order = np.array(order)
+    dataprocessor.rl_dataset["observations"] = dataprocessor.rl_dataset["observations"][order]
+    dataprocessor.rl_dataset["actions"] = dataprocessor.rl_dataset["actions"][order]
+    dataprocessor.rl_dataset["next_observations"] = dataprocessor.rl_dataset["next_observations"][order]
+    dataprocessor.rl_dataset["rewards"] = dataprocessor.rl_dataset["rewards"][order]
+    dataprocessor.rl_dataset["terminated"] = dataprocessor.rl_dataset["terminated"][order]
+
+    return
+
+
+def keep_positive_trajectories(dataprocessor):
+    """
+    This is for the behavioural cloning using terminal rewards only. In
+    this case, it's simply a matter of keeping only survival trajectories;
+    non-survival trajectories are discarded.
+    """
+   
+    ids_by_trajectories = []
+    returns = []
+    cur_ids = []
+    cur_return = 0
+    reward_scale = 1.0
+
+    for i, (reward, done) in enumerate(zip(dataprocessor.rl_dataset["rewards"], 
+                                           dataprocessor.rl_dataset["terminated"])):
+        cur_return += reward_scale * reward
+        cur_ids.append(i)
+        reward_scale *= dataprocessor.discount     
+        
+        if done == 1.0:
+            if reward < 0:
+                cur_ids = []
+                continue
+            
+            elif reward > 0:
+                if len(cur_ids) <= dataprocessor.max_traj_len:
+                    # don't use trajectories that are too long
+                    ids_by_trajectories.append(list(cur_ids))
+                returns.append(cur_return)
+            
+            cur_ids = []
+            
+    order = [item for sublist in ids_by_trajectories for item in sublist]    
+    
+    dataprocessor.rl_dataset["observations"] = dataprocessor.rl_dataset["observations"][order]
+    dataprocessor.rl_dataset["actions"] = dataprocessor.rl_dataset["actions"][order]
+    dataprocessor.rl_dataset["next_observations"] = dataprocessor.rl_dataset["next_observations"][order]
+    dataprocessor.rl_dataset["rewards"] = dataprocessor.rl_dataset["rewards"][order]
+    dataprocessor.rl_dataset["terminated"] = dataprocessor.rl_dataset["terminated"][order]
+
+    return
+
+
 class Actor(nn.Module):
     def __init__(self, state_dim: int, action_dim: int, hidden_dim: List[int], max_action: float):
         super(Actor, self).__init__()
@@ -272,3 +361,33 @@ class BC:
         self.actor.load_state_dict(state_dict["actor"])
         self.actor_optimizer.load_state_dict(state_dict["actor_optimizer"])
         self.total_it = state_dict["total_it"]
+
+
+def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
+
+    learning_rate = float(hyperparams['learning_rate'])
+
+    actor = MixedActionActor(
+        state_dim=state_dim, 
+        dose_actions=action_dim//2, 
+        binary_actions=action_dim//2, 
+        hidden_dim=hyperparams['hidden_dim'], 
+        max_action = max_action
+        ).to(config_manager.training_config['device'])
+    
+    actor_optimizer = torch.optim.Adam(
+        actor.parameters(), 
+        lr=learning_rate
+        )
+    
+    trainer = BC(
+        max_action=max_action,
+        actor=actor,
+        actor_optimizer=actor_optimizer,
+        discount=config_manager.training_config['discount'],
+        device=config_manager.training_config['device'],
+        dose_actions=action_dim//2,
+        binary_actions=action_dim//2
+    )
+
+    return trainer

@@ -30,7 +30,7 @@ TensorBatch = List[torch.Tensor]
 
 
 def parse_arguments():
-    parser = argparse.ArgumentParser(description='Train mortality prediction model')
+    parser = argparse.ArgumentParser(description='Train RL model')
     parser.add_argument('--hospital', 
                         default='choc', 
                         choices=['choc', 'mimic'], 

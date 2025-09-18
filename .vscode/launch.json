@@ -42,10 +42,10 @@
         },
 
         {
-            "name": "reinforcement_learning",
+            "name": "any_percent_bc",
             "type": "debugpy",
             "request": "launch",
-            "module": "src.scripts.rl.any_percent_bc",
+            "module": "src.scripts.rl.reinforcement_learning",
             "args": [
                 "--hospital", "choc", 
                 "--experiment_type", "reinforcement_learning",
@@ -58,6 +58,29 @@
                 "--testing", "true",
                 "--n_epochs", "10",
                 "--frac", "0.2"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
+            "name": "td3_bc",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.rl.reinforcement_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "reinforcement_learning",
+                "--model_type", "td3_bc", 
+                "--mode", "single_fold", 
+                "--fold", "0",
+                "--experiment_variant", "quick_test",
+                "--search_variant", "random_search",
+                "--n_search_iterations", "2",
+                "--testing", "true",
+                "--n_epochs", "10",
+                "--frac", "0."
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

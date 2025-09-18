@@ -130,7 +130,7 @@ def outer_training_loop(dataset, config_manager):
     n_inner_folds = config_manager.cv_config["n_inner_folds"]
     target_fold = config_manager.cv_config['fold']  # This comes from job array index when running on HPC
     
-    if target_fold is None:
+    if target_fold is None:training_config
         raise ValueError("target_fold must be specified")
     
     print(f"Processing outer fold {target_fold}/{n_outer_folds}")
@@ -227,6 +227,8 @@ def optimize_hyperparameters(train_dataset, config_manager,
     # grid search over hyperparameters 
     param_combinations = list(itertools.product(*hyperparameter_space.values()))
     param_names = list(hyperparameter_space.keys())
+
+    # need to implement random search without replacement if too many combinations
         
     for i, param_values in enumerate(param_combinations):
         current_params = dict(zip(param_names, param_values))

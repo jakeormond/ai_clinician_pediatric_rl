@@ -8,7 +8,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=64G
-#SBATCH --time=01:00:00
+#SBATCH --time=04:00:00
 #SBATCH --partition=GPU
 # #SBATCH --partition=normal
 # #SBATCH --gres=gpu:l40:1     
@@ -19,7 +19,7 @@
 # Exit on any error
 set -e
 
-FOLD=1
+FOLD=0
 
 # Generate a unique start time for this entire job array
 START_TIME=$(date +"%Y%m%d_%H%M%S")
@@ -68,10 +68,10 @@ python -m src.scripts.rl.any_percent_bc \
     --experiment_type reinforcement_learning \
     --model_type any_percent_bc \
     --mode single_fold \
-    --fold 0 \
+    --fold 3 \
     --experiment_variant standard \
     --search_variant random_search \
-    --n_search_iterations 9 \
+    --n_search_iterations 4 \
     --n_epochs 1000 \
     --frac 0.2 \
     --testing false \

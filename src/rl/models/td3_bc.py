@@ -27,6 +27,11 @@ class Actor(nn.Module):
 		return self.max_action * torch.tanh(self.l3(a))
 
 
+
+
+
+
+
 class Critic(nn.Module):
 	def __init__(self, state_dim, action_dim):
 		super(Critic, self).__init__()

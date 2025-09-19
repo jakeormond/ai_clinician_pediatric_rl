@@ -367,6 +367,8 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 
     learning_rate = float(hyperparams['learning_rate'])
 
+    action_mode = config_manager.action_mode
+
     actor = MixedActionActor(
         state_dim=state_dim, 
         dose_actions=action_dim//2, 

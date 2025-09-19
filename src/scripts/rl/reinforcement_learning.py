@@ -117,7 +117,8 @@ def main():
         # create the name and directory for this fold
         config_manager.set_fold_name() # check code, we now now want a parent dir, with inner date dir
 
-        # load data
+        # load data. Note that features, actions, and rewards can be used immediately for xgboost,
+        # but require further processing for RL. 
         dataset = Dataset(config_manager.data_config)
         print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
 

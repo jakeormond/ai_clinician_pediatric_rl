@@ -57,7 +57,8 @@
                 "--n_search_iterations", "2",
                 "--testing", "true",
                 "--n_epochs", "10",
-                "--frac", "0.2"
+                "--frac", "0.2",
+                "--action_mode", "binary_only"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

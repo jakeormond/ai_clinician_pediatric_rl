@@ -167,14 +167,14 @@ def optimize_hyperparameters(train_dataset, config_manager,
             inner_val_dataset = train_dataset.create_subset(train_dataset.encounter_ids()[inner_val_id])
             
             # Create processors with shared normalization
-            inner_train_processor = DataProcessor(inner_train_dataset, config_manager.training_config)
+            inner_train_processor = DataProcessor(inner_train_dataset, config_manager)
             norm_params = inner_train_processor.get_normalization_params()
-            inner_val_processor = DataProcessor(inner_val_dataset, config_manager.training_config, 
+            inner_val_processor = DataProcessor(inner_val_dataset, config_manager, 
                                                norm_params=norm_params)
             
             if config_manager.frac != 0.:
-                keep_best_trajectories(inner_train_processor, fraction_to_keep = config_manager.frac)
-                keep_best_trajectories(inner_val_processor, fraction_to_keep =config_manager.frac)
+                keep_best_trajectories(inner_train_processor, config_manager)
+                keep_best_trajectories(inner_val_processor, config_manager)
             else:
                 keep_positive_trajectories(inner_train_processor)
                 keep_positive_trajectories(inner_val_processor)

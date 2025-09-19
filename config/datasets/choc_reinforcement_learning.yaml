@@ -11,10 +11,13 @@ encounter_col: "MASKED_ENCNTR_ID"
 
 action_feature_sets: ["vasoactive_inotropic_infusion", "input_output"]
 actions: ["intake", "vis"]
-create_binary_actions: True # because rewards are sparse, AI suggested supplementing with binary actions
+# create_binary_actions: True # because rewards are sparse, AI suggested supplementing with binary actions
+# binary now handled at command line
 transform_actions: True
 action_transforms: ["yeo-johnson", "yeo-johnson"]
-normalize_actions: True
+normalize_actions: True # NOTE: we are not currently set up to use 
+                        # raw actions since the models use sigmoid
+                        # activations to bound actions between 0 and 1
 
 normalize_obs: True
 

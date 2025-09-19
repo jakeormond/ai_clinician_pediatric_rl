@@ -21,9 +21,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 class DataProcessor:
-    def __init__(self, dataset, training_config, norm_params=None, 
-                 normalize_obs = True, normalize_actions = True,
-                 transform_actions = True, create_binary_actions = True):
+    def __init__(self, dataset, config_manager, norm_params=None):
                 
         # self should inherit all the key value pairs from the dataset except the dataframe
         for key, value in vars(dataset).items():
@@ -34,10 +32,19 @@ class DataProcessor:
                 else:
                     # Shallow copy is fine for immutable objects (str, int, float, etc.)
                     setattr(self, key, value)
+             
+        if config_manager.action_mode == 'binary_only' or config_manager.action_mode == 'mixed':
+            create_binary_actions = True
 
-        # self should also inherit all the key value pairs from the training_config
-        for key, value in training_config.items():
-            setattr(self, key, value)
+        if config_manager.action_mode == 'binary_only':
+            self.normalize_actions = False
+            self.transform_actions = False           
+
+        ########### I THINK THERE IS NO REASON TO COPY THE TRAINING CONFIG INTO SELF ####################
+        ############# ONCE THIS IS CONFIRMED, DELETE THE COMMENTED OUT CODE ##############################
+        # # self should also inherit all the key value pairs from the training_config
+        # for key, value in training_config.items():
+        #     setattr(self, key, value)
               
         # drop any features in self.features_to_drop
         for feature in self.features_to_drop:
@@ -60,15 +67,15 @@ class DataProcessor:
         self.rl_dataset = self._split_into_rl_dataset(dataset)           
             
         self.norm_params = norm_params
-        self.normalize_obs = normalize_obs
-        self.normalize_actions = normalize_actions
-        self.transform_actions = transform_actions
+        # self.normalize_obs = normalize_obs
+        # self.normalize_actions = normalize_actions
+        # self.transform_actions = transform_actions
 
         if self.normalize_obs or self.normalize_actions or self.transform_actions:
             self.normalize()
 
         if create_binary_actions: # note that this requires zeros to have remained zeros after transformation and normalization
-            self._create_binary_actions()
+            self._create_binary_actions(config_manager)
 
 
     def normalize(self, norm_params=None, normalize_obs=True,
@@ -204,7 +211,7 @@ class DataProcessor:
         }
     
 
-    def _create_binary_actions(self):
+    def _create_binary_actions(self, config_manager):
                 
         # loop through the columns in self.rl_dataset['actions'] and create a
         # binary action for each action, where 1 means the action was given
@@ -214,17 +221,24 @@ class DataProcessor:
         
         # Vectorized binary creation for all columns at once
         binary_actions = (actions_array > 0).astype(int)
+        binary_names = [f"{name}_binary" for name in self.actions]
+        original_names = self.actions.copy()
         
-        # Concatenate original and binary actions
-        self.rl_dataset['actions'] = np.concatenate([actions_array, binary_actions], axis=1)
-        
-        # Update action names
-        original_names = self.actions.copy()  # Preserve original names
-        binary_names = [f"{name}_binary" for name in original_names]
-        self.actions.extend(binary_names)
+        if config_manager.action_mode == 'mixed':
+            # Concatenate original and binary actions
+            self.rl_dataset['actions'] = np.concatenate([actions_array, binary_actions], axis=1)
+            # update action names            
+            self.actions = self.actions + binary_names
+
+        elif config_manager.action_mode == 'binary_only':
+            self.rl_dataset['actions'] = binary_actions
+            # update action names
+            self.actions = binary_names
+
+        else:
+            raise ValueError(f"Invalid action_mode: {config_manager.action_mode}")
         
         print(f"Created {binary_actions.shape[1]} binary actions")
-        print(f"Original actions: {original_names}")
         print(f"Binary actions: {binary_names}")
         print(f"New action array shape: {self.rl_dataset['actions'].shape}")
 

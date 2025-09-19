@@ -22,7 +22,7 @@ from ...utils.logging_utilities import wandb_init  # Add this import
 # from src.data.data_processor import DataProcessor
 # from src.rl.replay_buffer import ReplayBuffer
 
-from ...rl.training_v2 import outer_training_loop
+from ...rl.training import outer_training_loop
 
 
 TensorBatch = List[torch.Tensor]
@@ -75,6 +75,12 @@ def parse_arguments():
     parser.add_argument('--n_epochs', type=int, default = 10,                  
                     help='Number of epochs to train for - should be 1000, but for testing we set to 10')
     
+    parser.add_argument('--action_mode', 
+                        type=str, 
+                        default = "continuous_only",   
+                        choices=['continuous_only', 'binary_only', 'mixed'],               
+                        help='Type of action space to use - continuous_only, binary_only, or mixed')
+
     parser.add_argument('--frac', type=float, default = 0.,                  
                     help='Fraction of data to use for behaviour cloning - 0. means use all data')
     

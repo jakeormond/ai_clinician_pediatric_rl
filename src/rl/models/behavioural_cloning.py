@@ -27,7 +27,10 @@ from ...utils.logging_utilities import wandb_init  # Add this import
 TensorBatch = List[torch.Tensor]
 
 
-def keep_best_trajectories(dataprocessor, fraction_to_keep=0.2):
+def keep_best_trajectories(dataprocessor, config_manager):
+
+    fraction_to_keep = config_manager.frac
+    discount = config_manager.training_config['discount']
    
     # check that the rewards are not terminal only, i.e. only -1, 0, +1
     if set(np.unique(dataprocessor.rl_dataset["rewards"])).issubset({-1, 0, 1}):
@@ -43,10 +46,10 @@ def keep_best_trajectories(dataprocessor, fraction_to_keep=0.2):
                                            dataprocessor.rl_dataset["terminated"])):
         cur_return += reward_scale * reward
         cur_ids.append(i)
-        reward_scale *= dataprocessor.discount     
+        reward_scale *= discount     
         
         if done == 1.0:
-            if len(cur_ids) <= dataprocessor.max_traj_len:
+            if len(cur_ids) <= config_manager.training_config['max_traj_len']:
                 # don't use trajectories that are too long
                 ids_by_trajectories.append(list(cur_ids))
                 returns.append(cur_return)
@@ -73,13 +76,14 @@ def keep_best_trajectories(dataprocessor, fraction_to_keep=0.2):
     return
 
 
-def keep_positive_trajectories(dataprocessor):
+def keep_positive_trajectories(dataprocessor, config_manager):
     """
     This is for the behavioural cloning using terminal rewards only. In
     this case, it's simply a matter of keeping only survival trajectories;
     non-survival trajectories are discarded.
     """
-   
+    max_traj_len = config_manager.training_config['max_traj_len']
+
     ids_by_trajectories = []
     returns = []
     cur_ids = []
@@ -98,7 +102,7 @@ def keep_positive_trajectories(dataprocessor):
                 continue
             
             elif reward > 0:
-                if len(cur_ids) <= dataprocessor.max_traj_len:
+                if len(cur_ids) <= max_traj_len:
                     # don't use trajectories that are too long
                     ids_by_trajectories.append(list(cur_ids))
                 returns.append(cur_return)
@@ -117,7 +121,15 @@ def keep_positive_trajectories(dataprocessor):
 
 
 class Actor(nn.Module):
-    def __init__(self, state_dim: int, action_dim: int, hidden_dim: List[int], max_action: float):
+    def __init__(
+            self, 
+            state_dim: int, 
+            action_dim: int, 
+            hidden_dim: List[int], 
+            max_action: float,
+            action_mode: str
+            ):
+        
         super(Actor, self).__init__()
 
         # Build network dynamically from hidden_dim list
@@ -140,9 +152,13 @@ class Actor(nn.Module):
 
         self.net = nn.Sequential(*layers)
         self.max_action = max_action
+        self.action_mode = action_mode
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
-        return self.max_action * self.net(state)
+        if self.action_mode == 'binary_only':
+            return self.net(state)  # Outputs in [0,1] range for binary actions
+        elif self.action_mode == 'continuous_only':
+            return self.max_action * self.net(state)
 
     @torch.no_grad()
     def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
@@ -151,8 +167,14 @@ class Actor(nn.Module):
     
 
 class MixedActionActor(nn.Module):
-    def __init__(self, state_dim: int, dose_actions: int, 
-                binary_actions: int, hidden_dim: List[int], max_action: float):
+    def __init__(
+            self, 
+            state_dim: int, 
+            dose_actions: int, 
+            binary_actions: int, 
+            hidden_dim: List[int], 
+            max_action: float):
+        
         super().__init__()
         
         # Build network dynamically from hidden_dim list
@@ -194,7 +216,14 @@ class MixedActionActor(nn.Module):
         
         # Concatenate outputs
         return torch.cat([dose_outputs, binary_outputs], dim=1)
-
+    
+    @torch.no_grad()
+    def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
+        features = torch.tensor(state.reshape(1, -1), device=device, dtype=torch.float32)
+        dose_outputs = self.dose_head(self.shared_net(features)) * self.max_action
+        binary_outputs = self.binary_head(self.shared_net(features))
+        return torch.cat([dose_outputs, binary_outputs], dim=1).cpu().data.numpy().flatten()
+    
 class BC:
     def __init__(
         self,
@@ -202,7 +231,8 @@ class BC:
         actor: nn.Module,
         actor_optimizer: torch.optim.Optimizer,
         discount: float = 0.99,
-        device: str = "cpu",
+        device: str = "CUDA" if torch.cuda.is_available() else "CPU",
+        action_mode: str = "mixed",
         dose_actions: int = 2,  #  Number of dose actions
         binary_actions: int = 2
     ):
@@ -210,6 +240,7 @@ class BC:
         self.actor_optimizer = actor_optimizer
         self.max_action = max_action
         self.discount = discount
+        self.action_mode = action_mode
         self.dose_actions = dose_actions
         self.binary_actions = binary_actions
 
@@ -228,24 +259,38 @@ class BC:
 
     def _compute_actor_loss(self, pi: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
       
-        # Split predictions and targets
-        dose_predictions = pi[:, :self.dose_actions]      # First 2 actions (doses)
-        binary_predictions = pi[:, self.dose_actions:]   # Last 2 actions (binary)
+        if self.action_mode == "binary_only":
+            binary_loss = self._compute_binary_loss(pi, action)
+            return binary_loss
 
-        dose_targets = action[:, :self.dose_actions]
-        binary_targets = action[:, self.dose_actions:]
+        elif self.action_mode == "continuous_only":
+            dose_loss = self._compute_dose_loss(pi, action)
+            return dose_loss
+    
+        elif self.action_mode == "mixed":
+            dose_predictions = pi[:, :self.dose_actions]      # First 2 actions (doses)
+            binary_predictions = pi[:, self.dose_actions:] 
 
-        # Different loss functions for different action types
-        dose_loss = F.mse_loss(dose_predictions, dose_targets)
+            dose_targets = action[:, :self.dose_actions]
+            binary_targets = action[:, self.dose_actions:]
 
+            dose_loss = self._compute_dose_loss(dose_predictions, dose_targets)
+            binary_loss = self._compute_binary_loss(binary_predictions, binary_targets)
+
+            # Combine losses (you can weight them differently)
+            dose_weight = 1.0
+            binary_weight = 1.0
+            actor_loss = dose_weight * dose_loss + binary_weight * binary_loss
+
+            return actor_loss, dose_loss, binary_loss
+            
+    def _compute_binary_loss(self, binary_predictions: torch.Tensor, binary_targets: torch.Tensor):
         binary_loss = F.binary_cross_entropy(binary_predictions, binary_targets)
+        return binary_loss
 
-        # Combine losses (you can weight them differently)
-        dose_weight = 1.0
-        binary_weight = 1.0
-        actor_loss = dose_weight * dose_loss + binary_weight * binary_loss
-
-        return actor_loss, dose_loss, binary_loss
+    def _compute_dose_loss(self, dose_predictions: torch.Tensor, dose_targets: torch.Tensor):
+        dose_loss = F.mse_loss(dose_predictions, dose_targets)
+        return dose_loss
 
     
     def train(self, batch: TensorBatch) -> Dict[str, float]:
@@ -259,12 +304,16 @@ class BC:
         pi = self.actor(state)
 
         # Compute actor loss
-        actor_loss, dose_loss, binary_loss = self._compute_actor_loss(pi, action)
-        
-        # Log individual losses for monitoring
-        log_dict["actor_loss"] = actor_loss.item()
-        log_dict["dose_loss"] = dose_loss.item() 
-        log_dict["binary_loss"] = binary_loss.item()
+        if self.action_mode in ["binary_only", "continuous_only"]:
+            actor_loss = self._compute_actor_loss(pi, action)
+            log_dict["actor_loss"] = actor_loss.item()
+
+        elif self.action_mode == "mixed":
+            actor_loss, dose_loss, binary_loss = self._compute_actor_loss(pi, action)        
+            # Log individual losses for monitoring
+            log_dict["actor_loss"] = actor_loss.item()
+            log_dict["dose_loss"] = dose_loss.item() 
+            log_dict["binary_loss"] = binary_loss.item()
         
         # Optimize the actor
         self.actor_optimizer.zero_grad()
@@ -289,67 +338,79 @@ class BC:
         
         state, action = self._get_state_and_action(batch)  
         
-
         with torch.no_grad():
             # Get predictions
             pi = self.actor(state)
             # check if pi contains NaNs or Infs
             if torch.isnan(pi).any() or torch.isinf(pi).any():
                 raise ValueError("Actor network output contains NaNs or Infs.")
+            
+            if self.action_mode == "binary_only":
+                overall_metrics = self._evaluate_binary(pi, action)
+            
+            elif self.action_mode == "continuous_only":
+                overall_metrics = self._evaluate_continuous(pi, action)
 
-            # Compute actor loss
-            actor_loss, dose_loss, binary_loss = self._compute_actor_loss(pi, action)
+            elif self.action_mode == "mixed":            
             
-            # Split predictions and targets
-            dose_pred = pi[:, :self.dose_actions]
-            binary_pred = pi[:, self.dose_actions:]
-            dose_target = action[:, :self.dose_actions]
-            binary_target = action[:, self.dose_actions:]
-            
-            # Dose action metrics (continuous regression)
-            dose_mae = F.l1_loss(dose_pred, dose_target)
-            
-            # Binary action metrics (binary classification)
-            # Clamp to avoid numerical issues with BCE
-            # binary_pred_clamped = torch.clamp(binary_pred, 1e-7, 1-1e-7)
-            # binary_bce = F.binary_cross_entropy(binary_pred_clamped, binary_target).item()
-            
-            # Binary accuracy (threshold at 0.5)
-            binary_pred_classes = (binary_pred > 0.5).float()
-            binary_accuracy = (binary_pred_classes == binary_target).float().mean()
-            
-            # Per-action accuracy for binary actions
-            binary_acc_per_action = []
-            for i in range(self.binary_actions):
-                acc = (binary_pred_classes[:, i] == binary_target[:, i]).float().mean()
-                binary_acc_per_action.append(acc)   
-                        
-        self.actor.train()  # Set back to training mode
+                # Split predictions and targets
+                dose_pred = pi[:, :self.dose_actions]
+                binary_pred = pi[:, self.dose_actions:]
+                dose_target = action[:, :self.dose_actions]
+                binary_target = action[:, self.dose_actions:]
 
-        overall_metrics = {# Overall metrics
-            "eval/total_loss": actor_loss.item(),
+                binary_metrics = self._evaluate_binary(binary_pred, binary_target)
+                continuous_metrics = self._evaluate_continuous(dose_pred, dose_target)
+
+                # Combine metrics
+                actor_loss = (binary_metrics["eval/binary_bce(loss)"] + 
+                            continuous_metrics["eval/dose_mse(loss)"])
+                
+                overall_metrics = {actor_loss: actor_loss, **binary_metrics, **continuous_metrics}
             
-            # Dose action metrics
-            "eval/dose_mse": dose_loss.item(),
-            "eval/dose_mae": dose_mae.item(),
-            "eval/dose_rmse": dose_loss.item() ** 0.5,
-            
+            return overall_metrics, action.cpu().numpy(), pi.cpu().numpy()
+
+    
+    def _evaluate_binary(self, predictions: torch.Tensor, targets: torch.Tensor) -> dict:
+        binary_loss = self._compute_binary_loss(predictions, targets)
+
+        # Binary accuracy (threshold at 0.5)
+        binary_pred_classes = (predictions > 0.5).float()
+        binary_accuracy = (binary_pred_classes == targets).float().mean()
+        
+        # Per-action accuracy for binary actions
+        binary_acc_per_action = []
+        for i in range(self.binary_actions):
+            acc = (binary_pred_classes[:, i] == targets[:, i]).float().mean()
+            binary_acc_per_action.append(acc) 
+
+        binary_metrics = {# Overall metrics               
             # Binary action metrics
-            "eval/binary_bce": binary_loss.item(),
+            "eval/binary_bce(loss)": binary_loss.item(),
             "eval/binary_accuracy": binary_accuracy.item(),
             "eval/binary_acc_action_0": binary_acc_per_action[0].item(),
             "eval/binary_acc_action_1": binary_acc_per_action[1].item()
         }
 
-        preds_and_targets = {
-            "dose_pred": dose_pred.cpu().numpy(),
-            "dose_target": dose_target.cpu().numpy(),
-            "binary_pred": binary_pred.cpu().numpy(),
-            "binary_target": binary_target.cpu().numpy()
-        }
-        
-        return overall_metrics, action.cpu().numpy(), pi.cpu().numpy()
+        return binary_metrics
 
+
+    def _evaluate_continuous(self, predictions: torch.Tensor, targets: torch.Tensor) -> dict:
+        dose_loss = self._compute_dose_loss(predictions, targets)
+       
+        # Dose action metrics (continuous regression)
+        dose_mae = F.l1_loss(predictions, targets)
+
+        dose_metrics = {# Overall metrics           
+            # Dose action metrics
+            "eval/dose_mse(loss)": dose_loss.item(),
+            "eval/dose_mae": dose_mae.item(),
+            "eval/dose_rmse": dose_loss.item() ** 0.5,        
+        }
+
+        return dose_metrics    
+    
+    
     def state_dict(self) -> Dict[str, Any]:
         return {
             "actor": self.actor.state_dict(),
@@ -369,18 +430,39 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 
     action_mode = config_manager.action_mode
 
-    actor = MixedActionActor(
-        state_dim=state_dim, 
-        dose_actions=action_dim//2, 
-        binary_actions=action_dim//2, 
-        hidden_dim=hyperparams['hidden_dim'], 
-        max_action = max_action
-        ).to(config_manager.training_config['device'])
+    if action_mode == 'binary_only' or action_mode == 'continuous_only':
+        actor = Actor(
+            state_dim=state_dim, 
+            action_dim=action_dim, 
+            hidden_dim=hyperparams['hidden_dim'], 
+            max_action = 1.0,
+            action_mode = action_mode  # max_action is 1.0 for binary
+            ).to(config_manager.training_config['device'])
+        
+    elif action_mode == 'mixed':
+        actor = MixedActionActor(
+            state_dim=state_dim, 
+            dose_actions=action_dim//2, 
+            binary_actions=action_dim//2, 
+            hidden_dim=hyperparams['hidden_dim'], 
+            max_action = max_action
+            ).to(config_manager.training_config['device'])
     
     actor_optimizer = torch.optim.Adam(
         actor.parameters(), 
         lr=learning_rate
         )
+    
+    if action_mode == 'binary_only':
+        dose_actions = 0
+        binary_actions = action_dim
+    elif action_mode == 'continuous_only':
+        dose_actions = action_dim
+        binary_actions = 0
+    elif action_mode == 'mixed':
+        dose_actions = action_dim // 2
+        binary_actions = action_dim // 2
+    
     
     trainer = BC(
         max_action=max_action,
@@ -388,8 +470,9 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
         actor_optimizer=actor_optimizer,
         discount=config_manager.training_config['discount'],
         device=config_manager.training_config['device'],
-        dose_actions=action_dim//2,
-        binary_actions=action_dim//2
+        action_mode = action_mode,
+        dose_actions=dose_actions,
+        binary_actions=binary_actions
     )
 
     return trainer

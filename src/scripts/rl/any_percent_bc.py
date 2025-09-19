@@ -22,7 +22,7 @@ from ...utils.logging_utilities import wandb_init  # Add this import
 # from src.data.data_processor import DataProcessor
 # from src.rl.replay_buffer import ReplayBuffer
 
-from ...rl.training import outer_training_loop
+from ...rl.training_v1 import outer_training_loop
 from ...data.data_processor import DataProcessor
 
 

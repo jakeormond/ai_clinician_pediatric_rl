@@ -378,8 +378,13 @@ class DataProcessor:
                 
                 if target not in self.action_transformers:
                     # fit the transformer on the training data
-                    pt = PowerTransformer(method='yeo-johnson')    
+                    pt = PowerTransformer(method='yeo-johnson', standardize=False)    
                     pt.fit(self.rl_dataset['actions'][:, i].reshape(-1, 1))  # Reshape to 2D array
+                    
+                    # fit only on the non-zero values to avoid changing the meaning of zero
+                    non_zero_indices = self.rl_dataset['actions'][:, i] != 0
+                    pt.fit(self.rl_dataset['actions'][non_zero_indices, i].reshape(-1, 1))
+                    
                     self.action_transformers[target] = pt  
 
                 else:
@@ -388,6 +393,13 @@ class DataProcessor:
                 # transform the training data
                 self.rl_dataset['actions'][:, i] = pt.transform(
                     self.rl_dataset['actions'][:, i].reshape(-1, 1)).flatten()
+                
+
+                # transform just the non-zero values to avoid changing the meaning of zero
+                # (i.e. no drug given)
+                non_zero_indices = self.rl_dataset['actions'][:, i] != 0
+                self.rl_dataset['actions'][non_zero_indices, i] = pt.transform(
+                    self.rl_dataset['actions'][non_zero_indices, i].reshape(-1, 1)).flatten()
                                    
                 print(f"Transformed target {target} with Yeo-Johnson transform.")
 

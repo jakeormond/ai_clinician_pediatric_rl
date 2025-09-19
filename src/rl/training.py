@@ -80,17 +80,17 @@ def outer_training_loop(dataset, config_manager):
         
         # even though the train dataset will be further split for hyperparameter tuning,
         # we need to create a processor now to get normalization stats
-        train_processor = DataProcessor(train_dataset, config_manager.training_config)
+        train_processor = DataProcessor(train_dataset, config_manager)
         norm_params = train_processor.get_normalization_params()
-        test_processor = DataProcessor(test_dataset, config_manager.training_config, 
+        test_processor = DataProcessor(test_dataset, config_manager, 
                                             norm_params=norm_params)
 
         # Keep only best trajectories if a fraction to keep is specified
         if config_manager.frac is None:
             pass # keep all trajectories
         elif config_manager.frac != 0.:
-            keep_best_trajectories(train_processor, fraction_to_keep = config_manager.frac)
-            keep_best_trajectories(test_processor, fraction_to_keep = config_manager.frac)
+            keep_best_trajectories(train_processor, config_manager)
+            keep_best_trajectories(test_processor, config_manager)
         else:
             keep_positive_trajectories(train_processor)
             keep_positive_trajectories(test_processor)
@@ -297,7 +297,12 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
                 if batch_idx * batch_size >= 5000:  # Limit validation to 5000 samples for speed
                     break
                 val_metrics, _, _ = trainer.evaluate(batch)
-                current_val_loss.append(val_metrics['eval/total_loss'])
+                if config_manager.action_mode == "binary_only":
+                    current_val_loss.append(val_metrics['eval/binary_bce(loss)'])
+                elif config_manager.action_mode == "continuous_only":
+                    current_val_loss.append(val_metrics['eval/dose_mse(loss)'])
+                elif config_manager.action_mode == "mixed":                
+                    current_val_loss.append(val_metrics['eval/total_loss'])
 
             val_losses[epoch] = float(np.mean(current_val_loss))
 
@@ -350,11 +355,7 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
 
         ##### make a dataframe of targets and predictions ####
         # columns are config_manager.data_config['action_cols']
-        action_cols = config_manager.data_config['actions']
-
-        if config_manager.data_config['create_binary_actions']:
-            binary_cols = [col + "_binary" for col in action_cols]
-            action_cols = action_cols + binary_cols
+        action_cols = train_processor.actions
 
         pred_cols = [col + "_pred" for col in action_cols]
 

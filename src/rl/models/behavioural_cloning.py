@@ -127,7 +127,8 @@ class Actor(nn.Module):
             action_dim: int, 
             hidden_dim: List[int], 
             max_action: float,
-            action_mode: str
+            action_mode: str,
+            dropout: float = 0.0  # Add dropout argument
             ):
         
         super(Actor, self).__init__()
@@ -141,6 +142,7 @@ class Actor(nn.Module):
             layers.extend([
                 nn.Linear(input_dim, h_dim),
                 nn.ReLU()
+                if dropout == 0.0 else nn.Dropout(dropout)  # Add dropout layer if dropout > 0
             ])
             input_dim = h_dim
 
@@ -173,7 +175,9 @@ class MixedActionActor(nn.Module):
             dose_actions: int, 
             binary_actions: int, 
             hidden_dim: List[int], 
-            max_action: float):
+            max_action: float,
+            dropout: float = 0.0  # Add dropout argument
+            ):
         
         super().__init__()
         
@@ -186,6 +190,7 @@ class MixedActionActor(nn.Module):
             layers.extend([
                 nn.Linear(input_dim, h_dim),
                 nn.ReLU()
+                if dropout == 0.0 else nn.Dropout(dropout)  # Add dropout layer if dropout > 0
             ])
             input_dim = h_dim
 
@@ -435,6 +440,7 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
             state_dim=state_dim, 
             action_dim=action_dim, 
             hidden_dim=hyperparams['hidden_dim'], 
+            dropout=hyperparams['dropout'],
             max_action = 1.0,
             action_mode = action_mode  # max_action is 1.0 for binary
             ).to(config_manager.training_config['device'])
@@ -445,6 +451,7 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
             dose_actions=action_dim//2, 
             binary_actions=action_dim//2, 
             hidden_dim=hyperparams['hidden_dim'], 
+            dropout=hyperparams['dropout'],
             max_action = max_action
             ).to(config_manager.training_config['device'])
     

@@ -68,12 +68,13 @@ python -m src.scripts.rl.any_percent_bc \
     --experiment_type reinforcement_learning \
     --model_type any_percent_bc \
     --mode single_fold \
-    --fold 3 \
+    --fold 0 \
     --experiment_variant standard \
     --search_variant random_search \
-    --n_search_iterations 4 \
+    --n_search_iterations 10 \
     --n_epochs 1000 \
     --frac 0.2 \
+    --action_mode binary_only \
     --testing false \
     --start_time $START_TIME 
 

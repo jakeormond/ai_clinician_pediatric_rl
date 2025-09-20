@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from dataclasses import asdict
 from pathlib import Path
 import json
+import random
 import itertools
 import joblib
 import glob
@@ -38,6 +39,18 @@ MODEL_MODULES = {
     "any_percent_bc": "src.rl.models.behavioural_cloning",
     "td3_bc": "src.rl.models.behavioural_cloning"
 }
+
+DISTRIBUTIONS = {
+    "loguniform": loguniform,
+    "uniform": uniform,
+}
+
+def parse_distribution(dist_str):
+    # Example: "loguniform(1e-5, 1e-2)"
+    name, args = dist_str.split("(", 1)
+    args = args.rstrip(")")
+    args = [float(x) for x in args.split(",")]
+    return DISTRIBUTIONS[name](*args)
 
    
 def outer_training_loop(dataset, config_manager): 
@@ -141,18 +154,32 @@ def optimize_hyperparameters(train_dataset, config_manager,
     if not hyperparameter_space:
         raise ValueError("No hyperparameters to optimize. Ensure that config_manager.training_config contains lists of values to search over.")
     
+    # and also continuoius distributions specified as strings
+    for k, v in config_manager.training_config.items():
+        if isinstance(v, str) and '(' in v and ')' in v:
+            hyperparameter_space[k] = parse_distribution(v)
+
     best_hyperparams = None
     best_val_score = float('inf')
     
     # grid search over hyperparameters 
-    param_combinations = list(itertools.product(*hyperparameter_space.values()))
-    param_names = list(hyperparameter_space.keys())
+    # param_combinations = list(itertools.product(*hyperparameter_space.values()))
+    # param_names = list(hyperparameter_space.keys())
 
     # need to implement random search without replacement if too many combinations
         
-    for i, param_values in enumerate(param_combinations):
-        current_params = dict(zip(param_names, param_values))
-        print(f"Testing hyperparameters {i+1}/{len(param_combinations)}: {current_params}")
+    # for i, param_values in enumerate(param_combinations):
+    for i in range(config_manager.n_search_iterations):
+        
+        current_params = {}
+        for k, v in hyperparameter_space.items():
+            if isinstance(v, list):
+                current_params[k] = random.choice(v)
+            else:  # assume it's a scipy.stats distribution
+                current_params[k] = round(v.rvs(), 6)
+                
+        # current_params = dict(zip(param_names, param_values))
+        # print(f"Testing hyperparameters {i+1}/{len(param_combinations)}: {current_params}")
         
         # Inner CV evaluation for these hyperparameters
         val_scores = []

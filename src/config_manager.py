@@ -241,7 +241,7 @@ class ConfigManager:
 
     def set_experiment_name(self):
         self.experiment_name = \
-            f"{self.hospital}_{self.prediction_type}_{self.model_type}_{self.search_variant}_{self.experiment_variant}_{self.start_time}"
+            f"{self.hospital}_{self.model_type}_{self.action_mode}_{self.search_variant}_{self.experiment_variant}_{self.start_time}"
         # make directory if it doesn't exist
         self._create_experiment_dir()
 

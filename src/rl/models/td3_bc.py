@@ -1,86 +1,85 @@
 import typing
-from typing import Dict, List
+from typing import Dict, List, Tuple
 import copy
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from shared_components import Actor, MixedActionActor, TrainerUtils
+
 
 TensorBatch = List[torch.Tensor]
 
 
-class Actor(nn.Module):
-	"""
-	This is the implementation from CORL
-	"""
-	def __init__(self, state_dim, action_dim, max_action):
-		super(Actor, self).__init__()
+# class Actor(nn.Module):
+# 	"""
+# 	This is the implementation from CORL
+# 	"""
+# 	def __init__(self, state_dim, action_dim, max_action):
+# 		super(Actor, self).__init__()
 
-		self.l1 = nn.Linear(state_dim, 256)
-		self.l2 = nn.Linear(256, 256)
-		self.l3 = nn.Linear(256, action_dim)
+# 		self.l1 = nn.Linear(state_dim, 256)
+# 		self.l2 = nn.Linear(256, 256)
+# 		self.l3 = nn.Linear(256, action_dim)
 		
-		self.max_action = max_action
+# 		self.max_action = max_action
 		
 
-	def forward(self, state):
-		a = F.relu(self.l1(state))
-		a = F.relu(self.l2(a))
-		return self.max_action * torch.tanh(self.l3(a))
+# 	def forward(self, state):
+# 		a = F.relu(self.l1(state))
+# 		a = F.relu(self.l2(a))
+# 		return self.max_action * torch.tanh(self.l3(a))
 
 
-class MixedActionActor(nn.Module):
-	"""
-	This is the same actor from behavioural_cloning.py. I've copied it here
-	as changes will likely be made specific to TD3+BC training.
-	"""
-	def __init__(self, state_dim: int, dose_actions: int, 
-			binary_actions: int, hidden_dim: List[int], max_action: float):
-		super().__init__()
+# class MixedActionActor(nn.Module):
+# 	"""
+# 	This is the same actor from behavioural_cloning.py. I've copied it here
+# 	as changes will likely be made specific to TD3+BC training.
+# 	"""
+# 	def __init__(self, state_dim: int, dose_actions: int, 
+# 			binary_actions: int, hidden_dim: List[int], max_action: float):
+# 		super().__init__()
 
-		# Build network dynamically from hidden_dim list
-		layers = []
-		input_dim = state_dim
+# 		# Build network dynamically from hidden_dim list
+# 		layers = []
+# 		input_dim = state_dim
 
-		# Add hidden layers
-		for h_dim in hidden_dim:
-			layers.extend([
-				nn.Linear(input_dim, h_dim),
-				nn.ReLU()
-			])
-			input_dim = h_dim
+# 		# Add hidden layers
+# 		for h_dim in hidden_dim:
+# 			layers.extend([
+# 				nn.Linear(input_dim, h_dim),
+# 				nn.ReLU()
+# 			])
+# 			input_dim = h_dim
 
-		# Create the shared network (this was missing!)
-		self.shared_net = nn.Sequential(*layers)
+# 		# Create the shared network (this was missing!)
+# 		self.shared_net = nn.Sequential(*layers)
 
-		# Separate heads for different action types
-		self.dose_head = nn.Sequential(
-			nn.Linear(input_dim, dose_actions),
-			nn.Sigmoid()  # Outputs in [0,1] range for doses
-		)
+# 		# Separate heads for different action types
+# 		self.dose_head = nn.Sequential(
+# 			nn.Linear(input_dim, dose_actions),
+# 			nn.Sigmoid()  # Outputs in [0,1] range for doses
+# 		)
 
-		self.binary_head = nn.Sequential(
-			nn.Linear(input_dim, binary_actions), 
-			nn.Sigmoid()  # Outputs probabilities for binary actions
-		)
+# 		self.binary_head = nn.Sequential(
+# 			nn.Linear(input_dim, binary_actions), 
+# 			nn.Sigmoid()  # Outputs probabilities for binary actions
+# 		)
 
-		self.max_action = max_action
-		self.dose_actions = dose_actions
+# 		self.max_action = max_action
+# 		self.dose_actions = dose_actions
 
-	def forward(self, state: torch.Tensor) -> torch.Tensor:
-		# Shared features
-		features = self.shared_net(state)
+# 	def forward(self, state: torch.Tensor) -> torch.Tensor:
+# 		# Shared features
+# 		features = self.shared_net(state)
 
-		# Different processing for different action types
-		dose_outputs = self.dose_head(features) * self.max_action  # Scale doses
-		binary_outputs = self.binary_head(features)  # Keep as probabilities
+# 		# Different processing for different action types
+# 		dose_outputs = self.dose_head(features) * self.max_action  # Scale doses
+# 		binary_outputs = self.binary_head(features)  # Keep as probabilities
 
-		# Concatenate outputs
-		return torch.cat([dose_outputs, binary_outputs], dim=1)
-
-
-
+# 		# Concatenate outputs
+# 		return torch.cat([dose_outputs, binary_outputs], dim=1)
 
 class Critic(nn.Module):
 	def __init__(self, state_dim, action_dim):
@@ -131,6 +130,8 @@ class TD3_BC(object):
 		noise_clip=0.5,
 		policy_freq=2,
 		alpha=2.5,
+		device="CUDA" if torch.cuda.is_available() else "cpu",
+		action_mode: str = "mixed"
 	):
 
 		self.actor = Actor(state_dim, action_dim, max_action).to(device)
@@ -148,12 +149,15 @@ class TD3_BC(object):
 		self.noise_clip = noise_clip
 		self.policy_freq = policy_freq
 		self.alpha = alpha
+		self.device = device
 
 		self.total_it = 0
 
+		self.utils = TrainerUtils()
+
 
 	def select_action(self, state):
-		state = torch.FloatTensor(state.reshape(1, -1)).to(device)
+		state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
 		return self.actor(state).cpu().data.numpy().flatten()
 
 
@@ -161,7 +165,7 @@ class TD3_BC(object):
 		self.total_it += 1
 
 		# Sample replay buffer 
-		state, action, next_state, reward, not_done = replay_buffer.sample(batch_size)
+		state, action, next_state, reward, not_done = TrainerUtils._unpack_batch(batch)
 
 		with torch.no_grad():
 			# Select action according to policy and add clipped noise

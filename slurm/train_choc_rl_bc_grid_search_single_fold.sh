@@ -74,7 +74,7 @@ python -m src.scripts.rl.reinforcement_learning \
     --n_search_iterations 10 \
     --n_epochs 1000 \
     --frac 0.2 \
-    --action_mode binary_only \
+    --action_mode mixed \
     --testing false \
     --start_time $START_TIME 
 

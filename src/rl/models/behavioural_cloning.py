@@ -366,7 +366,7 @@ class BC:
                 actor_loss = (binary_metrics["eval/binary_bce(loss)"] + 
                             continuous_metrics["eval/dose_mse(loss)"])
                 
-                overall_metrics = {actor_loss: actor_loss, **binary_metrics, **continuous_metrics}
+                overall_metrics = {"eval/total_loss": actor_loss, **binary_metrics, **continuous_metrics}
             
             return overall_metrics, action.cpu().numpy(), pi.cpu().numpy()
 

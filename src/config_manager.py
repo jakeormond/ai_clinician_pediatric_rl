@@ -17,7 +17,7 @@ class ConfigManager:
         for key, value in vars(args).items():
             setattr(self, key, value)
 
-        if self.experiment_type == "reinforcement_learning":
+        if self.experiment_type != "supervised_learning":
             self.prediction_type = None  # prediction type is for supervised learning only
  
         self.paths, self.environment = load_paths()
@@ -31,6 +31,9 @@ class ConfigManager:
             self._build_wandb_config()
             self.add_fold(self.fold)
 
+        elif self.mode == "analyse_features":
+            self.set_experiment_name()
+            self._create_experiment_dir()    
 
         elif self.mode == "aggregate":
             

@@ -293,7 +293,7 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
         if epoch % config_manager.training_config['eval_freq'] == 0 \
                                                    or epoch == n_epochs - 1:
             current_val_loss = []
-            for batch_idx, batch in enumerate(val_test_buffer):
+            for batch_idx, batch in enumerate(val_test_buffer):      
                 if batch_idx * batch_size >= 5000:  # Limit validation to 5000 samples for speed
                     break
                 val_metrics, _, _ = trainer.evaluate(batch)

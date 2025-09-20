@@ -14,7 +14,8 @@ actions: ["intake", "vis"]
 # create_binary_actions: True # because rewards are sparse, AI suggested supplementing with binary actions
 # binary now handled at command line
 transform_actions: True
-action_transforms: ["yeo-johnson", "yeo-johnson"]
+# action_transforms: ["yeo-johnson", "yeo-johnson"] yeo johnson doesn't work well with vis, collapses to binary
+action_transforms: ["log1p", "log1p"]
 normalize_actions: True # NOTE: we are not currently set up to use 
                         # raw actions since the models use sigmoid
                         # activations to bound actions between 0 and 1

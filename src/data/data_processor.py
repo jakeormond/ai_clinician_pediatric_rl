@@ -35,6 +35,8 @@ class DataProcessor:
              
         if config_manager.action_mode == 'binary_only' or config_manager.action_mode == 'mixed':
             create_binary_actions = True
+        else:
+            create_binary_actions = False            
 
         if config_manager.action_mode == 'binary_only':
             self.normalize_actions = False
@@ -393,15 +395,15 @@ class DataProcessor:
                 # transform the training data
                 self.rl_dataset['actions'][:, i] = pt.transform(
                     self.rl_dataset['actions'][:, i].reshape(-1, 1)).flatten()
-                
-
-                # transform just the non-zero values to avoid changing the meaning of zero
-                # (i.e. no drug given)
-                non_zero_indices = self.rl_dataset['actions'][:, i] != 0
-                self.rl_dataset['actions'][non_zero_indices, i] = pt.transform(
-                    self.rl_dataset['actions'][non_zero_indices, i].reshape(-1, 1)).flatten()
-                                   
+                                     
                 print(f"Transformed target {target} with Yeo-Johnson transform.")
+
+            elif target_transform == "log1p":
+                # apply log1p transform, which is log(1 + x)
+                # this will leave zeros as zeros, and compress the higher values
+                self.rl_dataset['actions'][:, i] = np.log1p(self.rl_dataset['actions'][:, i])
+                
+                print(f"Transformed target {target} with log1p transform.")
 
     
     def get_normalization_params(self):

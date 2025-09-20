@@ -19,6 +19,19 @@
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env"
         },
+
+        {
+            "name": "analyse target features",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.analyse_input_features.analyse_target_features",
+            "args": [
+                "--hospital", "choc", 
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
         
         {
             "name": "Prediction",
@@ -57,7 +70,7 @@
                 "--n_search_iterations", "2",
                 "--testing", "true",
                 "--n_epochs", "10",
-                "--action_mode", "mixed",
+                "--action_mode", "continuous_only",
                 "--frac", "0.2"                
             ],
             "console": "integratedTerminal",

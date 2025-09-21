@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from shared_components import Actor, MixedActionActor, TrainerUtils
+from .shared_components import Actor, MixedActionActor, TrainerUtils
 
 
 TensorBatch = List[torch.Tensor]

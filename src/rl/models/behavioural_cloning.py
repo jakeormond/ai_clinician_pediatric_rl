@@ -19,7 +19,7 @@ import wandb
 from ...config_manager import ConfigManager  # Import the config manager
 from ...supervised_learning.dataset import Dataset
 from ...utils.logging_utilities import wandb_init  # Add this import
-from shared_components import Actor, MixedActionActor, TrainerUtils
+from .shared_components import Actor, MixedActionActor, TrainerUtils
 
 # from src.data.data_processor import DataProcessor
 # from src.rl.replay_buffer import ReplayBuffer

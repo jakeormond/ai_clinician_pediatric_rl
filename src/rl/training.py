@@ -29,7 +29,7 @@ from ..utils.logging_utilities import wandb_init
 from ..data.data_processor import DataProcessor
 # from .dataset import Dataset
 from .replay_buffer import ReplayBuffer, RLDataset
-from .models.behavioural_cloning import Actor, MixedActionActor, BC, keep_best_trajectories, keep_positive_trajectories
+from .models.behavioural_cloning import keep_best_trajectories, keep_positive_trajectories
 from .models.td3_bc import TD3_BC
 from ..utils.utilities import set_seed
 from .plotting import plot_losses
@@ -37,7 +37,7 @@ from .plotting import plot_losses
 
 MODEL_MODULES = {
     "any_percent_bc": "src.rl.models.behavioural_cloning",
-    "td3_bc": "src.rl.models.behavioural_cloning"
+    "td3_bc": "src.rl.models.td3_bc"
 }
 
 DISTRIBUTIONS = {
@@ -99,14 +99,13 @@ def outer_training_loop(dataset, config_manager):
                                             norm_params=norm_params)
 
         # Keep only best trajectories if a fraction to keep is specified
-        if config_manager.frac is None:
-            pass # keep all trajectories
-        elif config_manager.frac != 0.:
-            keep_best_trajectories(train_processor, config_manager)
-            keep_best_trajectories(test_processor, config_manager)
-        else:
-            keep_positive_trajectories(train_processor)
-            keep_positive_trajectories(test_processor)
+        if config_manager.model_type == "any_percent_bc":
+            if config_manager.frac != 0.:
+                keep_best_trajectories(train_processor, config_manager)
+                keep_best_trajectories(test_processor, config_manager)
+            else:
+                keep_positive_trajectories(train_processor)
+                keep_positive_trajectories(test_processor)
                          
         best_val_loss, training_losses, val_losses, test_metrics = train_with_hyperparameters(
                 train_processor, 
@@ -199,12 +198,13 @@ def optimize_hyperparameters(train_dataset, config_manager,
             inner_val_processor = DataProcessor(inner_val_dataset, config_manager, 
                                                norm_params=norm_params)
             
-            if config_manager.frac != 0.:
-                keep_best_trajectories(inner_train_processor, config_manager)
-                keep_best_trajectories(inner_val_processor, config_manager)
-            else:
-                keep_positive_trajectories(inner_train_processor)
-                keep_positive_trajectories(inner_val_processor)
+            if config_manager.model_type == "any_percent_bc":
+                if config_manager.frac != 0.:
+                    keep_best_trajectories(inner_train_processor, config_manager)
+                    keep_best_trajectories(inner_val_processor, config_manager)
+                else:
+                    keep_positive_trajectories(inner_train_processor)
+                    keep_positive_trajectories(inner_val_processor)
            
             # Train with current hyperparameters
             best_val_loss, training_losses, val_losses = train_with_hyperparameters(

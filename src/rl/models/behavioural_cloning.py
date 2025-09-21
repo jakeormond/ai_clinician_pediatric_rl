@@ -298,19 +298,8 @@ class BC:
     #     return dose_loss
 
     
-    def train(self, batch: TensorBatch) -> Dict[str, float]:
-        
+    def compute_actor_loss(self, pi: torch.Tensor, action: torch.Tensor) -> Dict[str, float]:
         log_dict = {}
-        self.total_it += 1
-
-        state, action = self._get_state_and_action(batch)
-
-        # generate actions
-        pi = self.actor(state)
-
-        # Compute actor loss
-        
-
         if self.action_mode in ["binary_only", "continuous_only"]:
             
             # actor_loss = self._compute_actor_loss(pi, action)
@@ -335,6 +324,22 @@ class BC:
             log_dict["actor_loss"] = actor_loss.item()
             log_dict["dose_loss"] = dose_loss.item() 
             log_dict["binary_loss"] = binary_loss.item()
+
+        return log_dict
+    
+    
+    def train(self, batch: TensorBatch) -> Dict[str, float]:
+        
+        self.total_it += 1
+
+        state, action = self._get_state_and_action(batch)
+
+        # generate actions
+        pi = self.actor(state)
+
+        # Compute actor loss
+        log_dict = self.compute_actor_loss(pi, action, log_dict)
+        actor_loss = log_dict["actor_loss"]
         
         # Optimize the actor
         self.actor_optimizer.zero_grad()

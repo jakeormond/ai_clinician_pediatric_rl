@@ -161,6 +161,36 @@ class TD3_BC(object):
 		return self.actor(state).cpu().data.numpy().flatten()
 
 
+	def compute_actor_loss(self, pi: torch.Tensor, action: torch.Tensor) -> Dict[str, float]:
+		log_dict = {}
+		if self.action_mode in ["binary_only", "continuous_only"]:
+			
+			# actor_loss = self._compute_actor_loss(pi, action)
+			actor_loss = TrainerUtils._compute_actor_loss(
+				pi=pi, 
+				action=action, 
+				action_mode=self.actor.action_mode,
+				dose_actions=self.dose_actions if hasattr(self, 'dose_actions') else None
+			)
+
+			log_dict["actor_loss"] = actor_loss.item()
+
+		elif self.action_mode == "mixed":
+			actor_loss, dose_loss, binary_loss = TrainerUtils._compute_actor_loss(
+				pi=pi, 
+				action=action, 
+				action_mode=self.actor.action_mode,
+				dose_actions=self.dose_actions if hasattr(self, 'dose_actions') else None
+			)     
+			
+			# Log individual losses for monitoring
+			log_dict["actor_loss"] = actor_loss.item()
+			log_dict["dose_loss"] = dose_loss.item() 
+			log_dict["binary_loss"] = binary_loss.item()
+
+		return log_dict
+
+
 	def train(self, batch: TensorBatch) -> Dict[str, float]:
 		self.total_it += 1
 
@@ -201,7 +231,10 @@ class TD3_BC(object):
 			Q = self.critic.Q1(state, pi)
 			lmbda = self.alpha/Q.abs().mean().detach()
 
-			actor_loss = -lmbda * Q.mean() + F.mse_loss(pi, action) 
+			# compute actor loss using TrainerUtils function
+			log_dict = self.compute_actor_loss(pi, action, log_dict)
+			actor_loss_prelim = log_dict["actor_loss"]
+			actor_loss = -lmbda * Q.mean() + actor_loss_prelim 
 			
 			# Optimize the actor 
 			self.actor_optimizer.zero_grad()
@@ -236,29 +269,43 @@ class TD3_BC(object):
 
 def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 
-    learning_rate = float(hyperparams['learning_rate'])
+	learning_rate = float(hyperparams['learning_rate'])
 
-    actor = MixedActionActor(
-        state_dim=state_dim, 
-        dose_actions=action_dim//2, 
-        binary_actions=action_dim//2, 
-        hidden_dim=hyperparams['hidden_dim'], 
-        max_action = max_action
-        ).to(config_manager.training_config['device'])
-    
-    actor_optimizer = torch.optim.Adam(
-        actor.parameters(), 
-        lr=learning_rate
-        )
-    
-    trainer = TD3_BC(
-        max_action=max_action,
-        actor=actor,
-        actor_optimizer=actor_optimizer,
-        discount=config_manager.training_config['discount'],
-        device=config_manager.training_config['device'],
-        dose_actions=action_dim//2,
-        binary_actions=action_dim//2
-    )
+	action_mode = config_manager.action_mode
 
-    return trainer
+	if action_mode == 'binary_only' or action_mode == 'continuous_only':
+		actor = Actor(
+			state_dim=state_dim, 
+			action_dim=action_dim, 
+			hidden_dim=hyperparams['hidden_dim'], 
+			dropout=hyperparams['dropout'],
+			max_action = 1.0,
+			action_mode = action_mode  # max_action is 1.0 for binary
+			).to(config_manager.training_config['device'])
+		
+	elif action_mode == 'mixed':
+		actor = MixedActionActor(
+			state_dim=state_dim, 
+			dose_actions=action_dim//2, 
+			binary_actions=action_dim//2, 
+			hidden_dim=hyperparams['hidden_dim'], 
+			dropout=hyperparams['dropout'],
+			max_action = max_action
+			).to(config_manager.training_config['device'])
+    
+	actor_optimizer = torch.optim.Adam(
+		actor.parameters(), 
+		lr=learning_rate
+		)
+    
+	trainer = TD3_BC(
+		max_action=max_action,
+		actor=actor,
+		actor_optimizer=actor_optimizer,
+		discount=config_manager.training_config['discount'],
+		device=config_manager.training_config['device'],
+		dose_actions=action_dim//2,
+		binary_actions=action_dim//2
+	)
+
+	return trainer

@@ -120,19 +120,34 @@ class Critic(nn.Module):
 
 class TD3_BC(object):
 	def __init__(
-		self,
-		state_dim,
-		action_dim,
-		max_action,
-		discount=0.99,
-		tau=0.005,
-		policy_noise=0.2,
-		noise_clip=0.5,
-		policy_freq=2,
-		alpha=2.5,
-		device="CUDA" if torch.cuda.is_available() else "cpu",
-		action_mode: str = "mixed"
-	):
+		 self,
+        max_action: np.ndarray,
+        actor: nn.Module,
+        actor_optimizer: torch.optim.Optimizer,
+        discount: float = 0.99,
+        device: str = "CUDA" if torch.cuda.is_available() else "CPU",
+        action_mode: str = "mixed",
+        dose_actions: int = 2,  #  Number of dose actions
+        binary_actions: int = 2
+    ):
+		self.actor = actor
+		self.actor_optimizer = actor_optimizer
+		self.max_action = max_action
+		self.discount = discount
+		self.action_mode = action_mode
+		self.dose_actions = dose_actions
+		self.binary_actions = binary_actions
+
+		self.total_it = 0
+		self.device = device
+
+		self.utils = TrainerUtils()
+
+
+
+
+
+
 
 		self.actor = Actor(state_dim, action_dim, max_action).to(device)
 		self.actor_target = copy.deepcopy(self.actor)
@@ -292,20 +307,28 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 			dropout=hyperparams['dropout'],
 			max_action = max_action
 			).to(config_manager.training_config['device'])
-    
+		
+	
 	actor_optimizer = torch.optim.Adam(
 		actor.parameters(), 
 		lr=learning_rate
 		)
-    
+	
+	critic = Critic(state_dim, action_dim).to(config_manager.training_config['device'])
+
+	critic_optimizer = torch.optim.Adam(
+		critic.parameters(),
+		lr=learning_rate
+	)
+
 	trainer = TD3_BC(
 		max_action=max_action,
-		actor=actor,
-		actor_optimizer=actor_optimizer,
-		discount=config_manager.training_config['discount'],
-		device=config_manager.training_config['device'],
-		dose_actions=action_dim//2,
-		binary_actions=action_dim//2
-	)
+			actor=actor,
+			actor_optimizer=actor_optimizer,
+			discount=config_manager.training_config['discount'],
+			device=config_manager.training_config['device'],
+			dose_actions=action_dim//2,
+			binary_actions=action_dim//2
+		)
 
 	return trainer

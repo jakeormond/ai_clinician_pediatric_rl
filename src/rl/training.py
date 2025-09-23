@@ -2,6 +2,7 @@ import os
 import yaml
 import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union
+from collections import defaultdict
 from dataclasses import asdict
 from pathlib import Path
 import json
@@ -300,50 +301,65 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
     best_model_state = None
 
     print(f"Training with early stopping (patience={patience}, eval_freq={eval_freq})")
-    training_losses = []
-    val_losses = {}
+    
+    # Use defaultdict to automatically create new keys
+    training_losses = defaultdict(list)
+    val_losses = defaultdict(list)
     
     # Training loop with early stopping for this hyperparameter combination
     for epoch in range(n_epochs):
-
-        epoch_losses = []
+        epoch_training_losses = defaultdict(list)
 
         for batch_idx, batch in enumerate(training_buffer):
             batch_losses = trainer.train(batch)
-            epoch_losses.append(batch_losses['actor_loss'])
+
+            # Automatically append all metrics - creates new keys if needed
+            for key, value in batch_losses.items():
+                epoch_training_losses[key].append(value)
 
         # Calculate average loss for this epoch
-        avg_epoch_loss = np.mean(epoch_losses)
-        training_losses.append(avg_epoch_loss)
+        epoch_avg_losses = {key: np.mean(values) for key, values in epoch_training_losses.items()}
 
+        # Append epoch averages to training_losses
+        for key, value in epoch_avg_losses.items():
+            training_losses[key].append(value)        
+    
         # Evaluate periodically
         if epoch % config_manager.training_config['eval_freq'] == 0 \
                                                    or epoch == n_epochs - 1:
-            current_val_loss = []
+            epoch_val_losses = defaultdict(list)
+
             for batch_idx, batch in enumerate(val_test_buffer):      
                 if batch_idx * batch_size >= 5000:  # Limit validation to 5000 samples for speed
                     break
-                val_metrics, _, _ = trainer.evaluate(batch)
-                if config_manager.action_mode == "binary_only":
-                    current_val_loss.append(val_metrics['eval/binary_bce(loss)'])
-                elif config_manager.action_mode == "continuous_only":
-                    current_val_loss.append(val_metrics['eval/dose_mse(loss)'])
-                elif config_manager.action_mode == "mixed":                
-                    current_val_loss.append(val_metrics['eval/total_loss'])
+               
+                batch_losses = trainer.evaluate(batch)
+                
+                # Automatically append all validation metrics
+                for key, value in batch_losses.items():
+                    epoch_val_losses[key].append(value)
+                
+            # Calculate average validation losses for this epoch
+            epoch_val_avg = {key: np.mean(values) for key, values in epoch_val_losses.items()}
+        
+            # Append to val_losses with epoch as key
+            for key, value in epoch_val_avg.items():
+                val_losses[key].append(value)    
 
-            val_losses[epoch] = float(np.mean(current_val_loss))
-
+            # Determine validation loss for early stopping
+            current_val_loss = epoch_val_avg['actor_loss']
+            
             # Check for improvement
-            improvement = best_val_loss - val_losses[epoch]
+            improvement = best_val_loss - current_val_loss
             if improvement > min_delta:
-                best_val_loss = val_losses[epoch]
+                best_val_loss = current_val_loss
                 patience_counter = 0
                 # Save best model state for this hyperparameter combination
                 best_model_state = trainer.actor.state_dict().copy()
-                print(f"Epoch {epoch}: Train={avg_epoch_loss:.4f}, Val={best_val_loss:.4f} (NEW BEST)")
+                print(f"Epoch {epoch}: Train={epoch_avg_losses['actor_loss']:.4f}, Val={best_val_loss:.4f} (NEW BEST)")
             else:
                 patience_counter += 1                
-                print(f"Epoch {epoch}: Train={avg_epoch_loss:.4f}, Val={val_losses[epoch]:.4f} ({patience_counter}/{patience} - NO IMPROVEMENT)")
+                print(f"Epoch {epoch}: Train={epoch_avg_losses['actor_loss']:.4f}, Val={current_val_loss:.4f} ({patience_counter}/{patience} - NO IMPROVEMENT)")
                 
             #  Early stopping - stop training THIS hyperparameter combination
             if patience_counter >= patience:

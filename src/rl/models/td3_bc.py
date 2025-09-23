@@ -120,41 +120,57 @@ class Critic(nn.Module):
 
 class TD3_BC(object):
 	def __init__(
-		self,
-		state_dim,
-		action_dim,
-		max_action,
-		discount=0.99,
-		tau=0.005,
-		policy_noise=0.2,
-		noise_clip=0.5,
-		policy_freq=2,
-		alpha=2.5,
-		device="CUDA" if torch.cuda.is_available() else "cpu",
-		action_mode: str = "mixed"
-	):
-
-		self.actor = Actor(state_dim, action_dim, max_action).to(device)
-		self.actor_target = copy.deepcopy(self.actor)
-		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
-
-		self.critic = Critic(state_dim, action_dim).to(device)
-		self.critic_target = copy.deepcopy(self.critic)
-		self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
-
+		 self,
+        max_action: np.ndarray,
+        actor: nn.Module = None,
+		actor_optimizer: torch.optim.Optimizer = None,
+		critic: nn.Module = None,
+		critic_optimizer: torch.optim.Optimizer = None,	
+		discount: float = 0.99,
+		policy_noise: float = 0.2,
+		noise_clip: float = 0.5,
+		policy_freq: int = 2,
+		alpha: float = 2.5,
+        device: str = "CUDA" if torch.cuda.is_available() else "CPU",
+        action_mode: str = "mixed",
+        dose_actions: int = 2,  #  Number of dose actions
+        binary_actions: int = 2,		
+		tau: float = 0.005,
+    ):
+		
 		self.max_action = max_action
+		self.actor = actor
+		self.actor_optimizer = actor_optimizer
+		self.critic = critic
+		self.critic_optimizer = critic_optimizer		
 		self.discount = discount
-		self.tau = tau
 		self.policy_noise = policy_noise
 		self.noise_clip = noise_clip
 		self.policy_freq = policy_freq
 		self.alpha = alpha
 		self.device = device
+		self.action_mode = action_mode
+		self.dose_actions = dose_actions
+		self.binary_actions = binary_actions
+		self.tau = tau
 
 		self.total_it = 0
 
 		self.utils = TrainerUtils()
 
+		# copy the actor network to create the target actor
+		self.actor_target = copy.deepcopy(self.actor)
+
+		# copy the critic network to create the target critic
+		self.critic_target = copy.deepcopy(self.critic)
+
+		self.max_action = max_action
+		self.discount = discount
+		self.tau = tau
+		# self.policy_noise = policy_noise
+		# self.noise_clip = noise_clip
+		# self.policy_freq = policy_freq
+		# self.alpha = alpha
 
 	def select_action(self, state):
 		state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
@@ -173,7 +189,7 @@ class TD3_BC(object):
 				dose_actions=self.dose_actions if hasattr(self, 'dose_actions') else None
 			)
 
-			log_dict["actor_loss"] = actor_loss.item()
+			log_dict["actor_loss_prelim"] = actor_loss.item()
 
 		elif self.action_mode == "mixed":
 			actor_loss, dose_loss, binary_loss = TrainerUtils._compute_actor_loss(
@@ -184,19 +200,15 @@ class TD3_BC(object):
 			)     
 			
 			# Log individual losses for monitoring
-			log_dict["actor_loss"] = actor_loss.item()
+			log_dict["actor_loss_prelim"] = actor_loss.item()
 			log_dict["dose_loss"] = dose_loss.item() 
 			log_dict["binary_loss"] = binary_loss.item()
 
-		return log_dict
+		return actor_loss, log_dict
 
 
-	def train(self, batch: TensorBatch) -> Dict[str, float]:
-		self.total_it += 1
 
-		# Sample replay buffer 
-		state, action, next_state, reward, not_done = TrainerUtils._unpack_batch(batch)
-
+	def target_q(self, action, next_state, reward, not_done):
 		with torch.no_grad():
 			# Select action according to policy and add clipped noise
 			noise = (
@@ -210,13 +222,27 @@ class TD3_BC(object):
 			# Compute the target Q value
 			target_Q1, target_Q2 = self.critic_target(next_state, next_action)
 			target_Q = torch.min(target_Q1, target_Q2)
-			target_Q = reward + not_done * self.discount * target_Q
+			target_Q = reward + not_done * self.discount * target_Q			
+			
+			return target_Q
+		
+
+	def train(self, batch: TensorBatch) -> Dict[str, float]:
+		self.total_it += 1
+
+		# Sample replay buffer 
+		state, action, reward, next_state, done = TrainerUtils._unpack_batch(batch, self.device)
+		not_done = 1 - done
+		
+		# compute the target Q value
+		target_Q = self.target_q(action, next_state, reward, not_done)
 
 		# Get current Q estimates
 		current_Q1, current_Q2 = self.critic(state, action)
 
 		# Compute critic loss
 		critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
+		log_dict = {"critic_loss": critic_loss.item()}
 
 		# Optimize the critic
 		self.critic_optimizer.zero_grad()
@@ -232,9 +258,10 @@ class TD3_BC(object):
 			lmbda = self.alpha/Q.abs().mean().detach()
 
 			# compute actor loss using TrainerUtils function
-			log_dict = self.compute_actor_loss(pi, action, log_dict)
-			actor_loss_prelim = log_dict["actor_loss"]
-			actor_loss = -lmbda * Q.mean() + actor_loss_prelim 
+			actor_loss_prelim, actor_dict = self.compute_actor_loss(pi, action)
+			actor_loss = -lmbda * Q.mean() + actor_loss_prelim
+			log_dict.update(actor_dict)
+			log_dict["actor_loss"] = actor_loss.item()
 			
 			# Optimize the actor 
 			self.actor_optimizer.zero_grad()
@@ -247,6 +274,40 @@ class TD3_BC(object):
 
 			for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
 				target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+
+		return log_dict
+	
+
+	def evaluate(self, batch: TensorBatch) -> Dict[str, float]:
+		self.actor.eval()  # ✅ This is correct and important!
+		self.critic.eval()  # Ensure critic is also in eval mode
+		
+		state, action, reward, next_state, done = TrainerUtils._unpack_batch(batch, self.device)
+		not_done = 1 - done
+
+		with torch.no_grad():
+			# compute the target Q value
+			target_Q = self.target_q(action, next_state, reward, not_done)
+
+			# Get current Q estimates
+			current_Q1, current_Q2 = self.critic(state, action)
+
+			# Compute critic loss
+			critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
+			log_dict = {"critic_loss": critic_loss.item()}
+		
+			# Compute actor loss
+			pi = self.actor(state)
+			Q = self.critic.Q1(state, pi)
+			lmbda = self.alpha/Q.abs().mean().detach()
+
+			# compute actor loss using TrainerUtils function
+			actor_loss_prelim, actor_dict = self.compute_actor_loss(pi, action)
+			actor_loss = -lmbda * Q.mean() + actor_loss_prelim
+			log_dict.update(actor_dict)
+			log_dict["actor_loss"] = actor_loss.item()
+
+		return log_dict
 
 
 	def save(self, filename):
@@ -292,31 +353,36 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 			dropout=hyperparams['dropout'],
 			max_action = max_action
 			).to(config_manager.training_config['device'])
-    
+		
+	
 	actor_optimizer = torch.optim.Adam(
 		actor.parameters(), 
 		lr=learning_rate
 		)
 	
-	if action_mode == 'binary_only':
-		dose_actions = 0
-		binary_actions = action_dim
-	elif action_mode == 'continuous_only':
-		dose_actions = action_dim
-		binary_actions = 0
-	elif action_mode == 'mixed':
-		dose_actions = action_dim // 2
-		binary_actions = action_dim // 2
-    
-	trainer = TD3_BC(
-		max_action=max_action,
-		actor=actor,
-		actor_optimizer=actor_optimizer,
-		discount=config_manager.training_config['discount'],
-		device=config_manager.training_config['device'],
-		action_mode = action_mode,
-        dose_actions=dose_actions,
-        binary_actions=binary_actions
+	critic = Critic(state_dim, action_dim).to(config_manager.training_config['device'])
+
+	critic_optimizer = torch.optim.Adam(
+		critic.parameters(),
+		lr=learning_rate
 	)
+
+	trainer = TD3_BC(
+			max_action=max_action,
+			actor=actor,
+			actor_optimizer=actor_optimizer,
+			critic=critic,
+			critic_optimizer=critic_optimizer,
+			discount=config_manager.training_config['discount'],
+			device=config_manager.training_config['device'],
+			action_mode=action_mode,
+			dose_actions=action_dim//2,
+			binary_actions=action_dim//2,
+			tau=config_manager.training_config['tau'],	
+			policy_noise=config_manager.training_config['policy_noise'],
+			noise_clip=config_manager.training_config['noise_clip'],
+			policy_freq=config_manager.training_config['policy_freq'],
+			alpha=config_manager.training_config['alpha']		
+		)
 
 	return trainer

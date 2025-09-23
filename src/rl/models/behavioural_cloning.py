@@ -332,13 +332,13 @@ class BC:
         
         self.total_it += 1
 
-        state, action = self._get_state_and_action(batch)
+        state, action = self._get_state_and_action(batch, self.device)
 
         # generate actions
         pi = self.actor(state)
 
         # Compute actor loss
-        log_dict = self.compute_actor_loss(pi, action, log_dict)
+        log_dict = self.compute_actor_loss(pi, action)
         actor_loss = log_dict["actor_loss"]
         
         # Optimize the actor
@@ -371,28 +371,30 @@ class BC:
             if torch.isnan(pi).any() or torch.isinf(pi).any():
                 raise ValueError("Actor network output contains NaNs or Infs.")
             
-            if self.action_mode == "binary_only":
-                overall_metrics = self._evaluate_binary(pi, action)
+            overall_metrics = self.compute_actor_loss(pi, action)
             
-            elif self.action_mode == "continuous_only":
-                overall_metrics = self._evaluate_continuous(pi, action)
-
-            elif self.action_mode == "mixed":            
+            # if self.action_mode == "binary_only":
+            #     overall_metrics = self._evaluate_binary(pi, action)
             
-                # Split predictions and targets
-                dose_pred = pi[:, :self.dose_actions]
-                binary_pred = pi[:, self.dose_actions:]
-                dose_target = action[:, :self.dose_actions]
-                binary_target = action[:, self.dose_actions:]
+            # elif self.action_mode == "continuous_only":
+            #     overall_metrics = self._evaluate_continuous(pi, action)
 
-                binary_metrics = self._evaluate_binary(binary_pred, binary_target)
-                continuous_metrics = self._evaluate_continuous(dose_pred, dose_target)
+            # elif self.action_mode == "mixed":            
+            
+            #     # Split predictions and targets
+            #     dose_pred = pi[:, :self.dose_actions]
+            #     binary_pred = pi[:, self.dose_actions:]
+            #     dose_target = action[:, :self.dose_actions]
+            #     binary_target = action[:, self.dose_actions:]
 
-                # Combine metrics
-                actor_loss = (binary_metrics["eval/binary_bce(loss)"] + 
-                            continuous_metrics["eval/dose_mse(loss)"])
+            #     binary_metrics = self._evaluate_binary(binary_pred, binary_target)
+            #     continuous_metrics = self._evaluate_continuous(dose_pred, dose_target)
+
+            #     # Combine metrics
+            #     actor_loss = (binary_metrics["eval/binary_bce(loss)"] + 
+            #                 continuous_metrics["eval/dose_mse(loss)"])
                 
-                overall_metrics = {"eval/total_loss": actor_loss, **binary_metrics, **continuous_metrics}
+            #     overall_metrics = {"eval/total_loss": actor_loss, **binary_metrics, **continuous_metrics}
             
             return overall_metrics, action.cpu().numpy(), pi.cpu().numpy()
 

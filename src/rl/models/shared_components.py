@@ -10,6 +10,12 @@ class TrainerUtils:
     def _unpack_batch(batch: List[torch.Tensor], device: str) -> Tuple[torch.Tensor, ...]:
         """Unpacks a batch and moves tensors to specified device."""
         state, action, reward, next_state, done = batch
+
+        # unsqueeze reward and done if necessary
+        if reward.dim() == 1:
+            reward = reward.unsqueeze(1)
+        if done.dim() == 1:
+            done = done.unsqueeze(1)
         
         state = state.to(device)
         action = action.to(device)

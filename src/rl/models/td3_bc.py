@@ -297,6 +297,16 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 		actor.parameters(), 
 		lr=learning_rate
 		)
+	
+	if action_mode == 'binary_only':
+		dose_actions = 0
+		binary_actions = action_dim
+	elif action_mode == 'continuous_only':
+		dose_actions = action_dim
+		binary_actions = 0
+	elif action_mode == 'mixed':
+		dose_actions = action_dim // 2
+		binary_actions = action_dim // 2
     
 	trainer = TD3_BC(
 		max_action=max_action,
@@ -304,8 +314,9 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 		actor_optimizer=actor_optimizer,
 		discount=config_manager.training_config['discount'],
 		device=config_manager.training_config['device'],
-		dose_actions=action_dim//2,
-		binary_actions=action_dim//2
+		action_mode = action_mode,
+        dose_actions=dose_actions,
+        binary_actions=binary_actions
 	)
 
 	return trainer

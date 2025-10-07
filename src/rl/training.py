@@ -274,6 +274,15 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
         shuffle=False
         )
     
+    # get starting state distribution for V0 estimation if we're doing TD3-BC
+    if config_manager.monitor_vO:
+        training_starting_states = train_processor.rl_dataset["observations"][
+            train_processor.rl_dataset["dones"] == 1
+        ]
+        val_starting_states = val_test_processor.rl_dataset["observations"][
+            val_test_processor.rl_dataset["dones"] == 1
+        ] 
+
     # Create model with hyperparameters
     state_dim = train_processor.rl_dataset["observations"].shape[1]
     action_dim = train_processor.rl_dataset["actions"].shape[1]
@@ -320,6 +329,9 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
         # Calculate average loss for this epoch
         epoch_avg_losses = {key: np.mean(values) for key, values in epoch_training_losses.items()}
 
+        if config_manager.monitor_v0:
+            v0 = trainer.estimate_v0(training_starting_states, mode='train')
+
         # Append epoch averages to training_losses
         for key, value in epoch_avg_losses.items():
             training_losses[key].append(value)        
@@ -338,7 +350,11 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
                 # Automatically append all validation metrics
                 for key, value in batch_losses.items():
                     epoch_val_losses[key].append(value)
-                
+            
+            if config_manager.monitor_v0:
+                v0_val = trainer.estimate_v0(val_starting_states, mode='val')
+                print(f"Epoch {epoch}: V0 Train={v0:.4f}, V0 Val={v0_val:.4f}")
+
             # Calculate average validation losses for this epoch
             epoch_val_avg = {key: np.mean(values) for key, values in epoch_val_losses.items()}
         
@@ -391,6 +407,10 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
         
         test_metrics = average_dicts(epoch_losses)       
         print(f"Final test metrics: {test_metrics}")
+
+        if config_manager.monitor_v0:
+            v0_test = trainer.estimate_v0(val_starting_states, mode='test')
+            print(f"Final V0 Test={v0_test:.4f}")
 
         # Save final model if this is the final training
         model_path = Path(config_manager.fold_dir /  "final_model.pt")

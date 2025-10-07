@@ -278,6 +278,10 @@ class TD3_BC(object):
 		return log_dict
 	
 
+	@torch.no_grad()
+	def estimate_v0(self, start_states: torch.Tensor) -> torch.Tensor:
+		pass
+
 	def evaluate(self, batch: TensorBatch) -> Dict[str, float]:
 		self.actor.eval()  # ✅ This is correct and important!
 		self.critic.eval()  # Ensure critic is also in eval mode

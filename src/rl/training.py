@@ -347,7 +347,7 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
                 val_losses[key].append(value)    
 
             # Determine validation loss for early stopping
-            current_val_loss = epoch_val_avg['actor_loss']
+            current_val_loss = epoch_val_avg['critic_loss'] # THIS NEEDS TO BE CHANGED BASED ON MODEL!!!!!!!!!!!!
             
             # Check for improvement
             improvement = best_val_loss - current_val_loss

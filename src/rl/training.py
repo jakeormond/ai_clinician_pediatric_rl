@@ -333,7 +333,7 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
                 if batch_idx * batch_size >= 5000:  # Limit validation to 5000 samples for speed
                     break
                
-                batch_losses = trainer.evaluate(batch)
+                batch_losses, _, _ = trainer.evaluate(batch)
                 
                 # Automatically append all validation metrics
                 for key, value in batch_losses.items():
@@ -381,10 +381,11 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
 
         # Final evaluation on test set
         for batch_idx, batch in enumerate(val_test_buffer):
+           
             batch_metrics, targets, predictions = trainer.evaluate(batch)
 
-            all_targets.append(targets)
-            all_predictions.append(predictions)
+            all_targets.append(targets.cpu())
+            all_predictions.append(predictions.cpu())
             
             epoch_losses.append(batch_metrics)
         

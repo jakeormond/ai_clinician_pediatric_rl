@@ -307,9 +307,21 @@ class TD3_BC(object):
 			log_dict.update(actor_dict)
 			log_dict["actor_loss"] = actor_loss.item()
 
-		return log_dict
+		return log_dict, action, pi
 
 
+	def state_dict(self) -> Dict[str, torch.Tensor]:
+		return {
+			"actor": self.actor.state_dict(),
+			"actor_optimizer": self.actor_optimizer.state_dict(),
+			"critic": self.critic.state_dict(),
+			"critic_optimizer": self.critic_optimizer.state_dict(),
+			"actor_target": self.actor_target.state_dict(),
+			"critic_target": self.critic_target.state_dict(),
+		}
+
+
+	######################## currently unused ###############################
 	def save(self, filename):
 		torch.save(self.critic.state_dict(), filename + "_critic")
 		torch.save(self.critic_optimizer.state_dict(), filename + "_critic_optimizer")
@@ -317,7 +329,7 @@ class TD3_BC(object):
 		torch.save(self.actor.state_dict(), filename + "_actor")
 		torch.save(self.actor_optimizer.state_dict(), filename + "_actor_optimizer")
 
-
+	######################## currently unused ###############################
 	def load(self, filename):
 		self.critic.load_state_dict(torch.load(filename + "_critic"))
 		self.critic_optimizer.load_state_dict(torch.load(filename + "_critic_optimizer"))

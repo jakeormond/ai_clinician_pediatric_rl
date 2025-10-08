@@ -52,7 +52,6 @@ def parse_distribution(dist_str):
     args = args.rstrip(")")
     args = [float(x) for x in args.split(",")]
     return DISTRIBUTIONS[name](*args)
-
    
 def outer_training_loop(dataset, config_manager): 
     """Runs single outer fold - designed for HPC job array."""
@@ -275,13 +274,9 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
         )
     
     # get starting state distribution for V0 estimation if we're doing TD3-BC
-    if config_manager.monitor_vO:
-        training_starting_states = train_processor.rl_dataset["observations"][
-            train_processor.rl_dataset["dones"] == 1
-        ]
-        val_starting_states = val_test_processor.rl_dataset["observations"][
-            val_test_processor.rl_dataset["dones"] == 1
-        ] 
+    if config_manager.training_config['monitor_v0']:
+        training_starting_states = train_processor.get_start_states()
+        val_starting_states = val_test_processor.get_start_states()
 
     # Create model with hyperparameters
     state_dim = train_processor.rl_dataset["observations"].shape[1]
@@ -329,12 +324,15 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
         # Calculate average loss for this epoch
         epoch_avg_losses = {key: np.mean(values) for key, values in epoch_training_losses.items()}
 
-        if config_manager.monitor_v0:
-            v0 = trainer.estimate_v0(training_starting_states, mode='train')
-
         # Append epoch averages to training_losses
         for key, value in epoch_avg_losses.items():
             training_losses[key].append(value)        
+
+        if config_manager.training_config['monitor_v0']:
+            train_v0_mean, train_v0_sem = trainer.estimate_v0(training_starting_states, batch_size = batch_size)
+            # print(f"Epoch {epoch}: Train mean start state values: {train_v0_mean:.4f} ± {train_v0_sem:.4f}")
+            training_losses['v0_mean'].append(train_v0_mean)
+            training_losses['v0_sem'].append(train_v0_sem)
     
         # Evaluate periodically
         if epoch % config_manager.training_config['eval_freq'] == 0 \
@@ -350,20 +348,25 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
                 # Automatically append all validation metrics
                 for key, value in batch_losses.items():
                     epoch_val_losses[key].append(value)
+                 
             
-            if config_manager.monitor_v0:
-                v0_val = trainer.estimate_v0(val_starting_states, mode='val')
-                print(f"Epoch {epoch}: V0 Train={v0:.4f}, V0 Val={v0_val:.4f}")
-
+            
             # Calculate average validation losses for this epoch
             epoch_val_avg = {key: np.mean(values) for key, values in epoch_val_losses.items()}
+            print(f"Epoch {epoch}: Validation metrics: {epoch_val_avg}")
         
             # Append to val_losses with epoch as key
             for key, value in epoch_val_avg.items():
                 val_losses[key].append(value)    
 
+            if config_manager.training_config['monitor_v0']:
+                val_v0_mean, val_v0_sem = trainer.estimate_v0(val_starting_states, batch_size = batch_size)
+                print(f"Epoch {epoch}: Val mean start state values: {val_v0_mean:.4f} ± {val_v0_sem:.4f}")
+                val_losses['v0_mean'].append(val_v0_mean)
+                val_losses['v0_sem'].append(val_v0_sem)
+            
             # Determine validation loss for early stopping
-            current_val_loss = epoch_val_avg['critic_loss'] # THIS NEEDS TO BE CHANGED BASED ON MODEL!!!!!!!!!!!!
+            current_val_loss = epoch_val_avg[config_manager.training_config['val_loss_metric']]
             
             # Check for improvement
             improvement = best_val_loss - current_val_loss
@@ -406,11 +409,14 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
             epoch_losses.append(batch_metrics)
         
         test_metrics = average_dicts(epoch_losses)       
-        print(f"Final test metrics: {test_metrics}")
 
-        if config_manager.monitor_v0:
-            v0_test = trainer.estimate_v0(val_starting_states, mode='test')
-            print(f"Final V0 Test={v0_test:.4f}")
+        if config_manager.training_config['monitor_v0']:
+            v0_test, v0_test_sem = trainer.estimate_v0(val_starting_states, batch_size = batch_size)
+            print(f"Final test mean start state values: {v0_test:.4f} ± {v0_test_sem:.4f}")
+            test_metrics['v0_test_mean'] = float(v0_test)
+            test_metrics['v0_test_sem'] = float(v0_test_sem)
+
+        print(f"Final test metrics: {test_metrics}")
 
         # Save final model if this is the final training
         model_path = Path(config_manager.fold_dir /  "final_model.pt")

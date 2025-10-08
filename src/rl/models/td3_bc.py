@@ -279,8 +279,25 @@ class TD3_BC(object):
 	
 
 	@torch.no_grad()
-	def estimate_v0(self, start_states: torch.Tensor) -> torch.Tensor:
-		pass
+	def estimate_v0(self, start_states: torch.Tensor, batch_size: int = 256) -> float:
+		"""
+		"""
+		self.actor.eval(); 
+		self.critic.eval()
+
+		q_values = []
+		for i in range(0, len(start_states), batch_size):
+			batch_states = start_states[i:i+batch_size]
+			actions = self.actor(batch_states)
+			q1, q2 = self.critic(batch_states, actions)
+			q_batch = torch.min(q1, q2)
+			q_values.append(q_batch.cpu().numpy())
+
+		q_values = np.concatenate(q_values, axis=0)
+		v0_mean = q_values.mean()
+		v0_sem = q_values.std() / np.sqrt(len(q_values))
+
+		return v0_mean, v0_sem
 
 	def evaluate(self, batch: TensorBatch) -> Dict[str, float]:
 		self.actor.eval()  # ✅ This is correct and important!

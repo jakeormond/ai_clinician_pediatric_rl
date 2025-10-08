@@ -79,6 +79,20 @@ class DataProcessor:
         if create_binary_actions: # note that this requires zeros to have remained zeros after transformation and normalization
             self._create_binary_actions(config_manager)
 
+    
+    def get_start_states(self):
+        """Get starting states for V0 estimation."""
+        start_ind = np.where(self.rl_dataset["terminated"] == 1)[0] + 1
+        start_ind = start_ind[start_ind < len(self.rl_dataset["terminated"])]
+        start_ind = np.insert(start_ind, 0, 0)  # add the very first index
+
+        starting_states = self.rl_dataset["observations"][start_ind]
+        # make starting states a tensor so it can be passed to the actor and critic networks
+        starting_states = torch.tensor(starting_states, dtype=torch.float32)
+        # move to CUDA device
+        starting_states = starting_states.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+        return starting_states
+
 
     def normalize(self, norm_params=None, normalize_obs=True,
                   normalize_actions=True, transform_actions=True):

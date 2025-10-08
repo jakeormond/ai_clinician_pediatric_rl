@@ -38,6 +38,7 @@ from .plotting import plot_losses
 
 MODEL_MODULES = {
     "any_percent_bc": "src.rl.models.behavioural_cloning",
+    "basic_q": "src.rl.models.basic_q",
     "td3_bc": "src.rl.models.td3_bc"
 }
 
@@ -257,6 +258,7 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
     """Train model with specific hyperparameters and return validation score."""
     
     batch_size = hyperparams['batch_size']
+    loss_metric = config_manager.training_config['loss_metric']
 
     # Create replay buffers
     train_dataset = RLDataset(train_processor.rl_dataset)
@@ -348,9 +350,7 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
                 # Automatically append all validation metrics
                 for key, value in batch_losses.items():
                     epoch_val_losses[key].append(value)
-                 
-            
-            
+                             
             # Calculate average validation losses for this epoch
             epoch_val_avg = {key: np.mean(values) for key, values in epoch_val_losses.items()}
             print(f"Epoch {epoch}: Validation metrics: {epoch_val_avg}")
@@ -366,7 +366,7 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
                 val_losses['v0_sem'].append(val_v0_sem)
             
             # Determine validation loss for early stopping
-            current_val_loss = epoch_val_avg[config_manager.training_config['val_loss_metric']]
+            current_val_loss = epoch_val_avg[loss_metric]
             
             # Check for improvement
             improvement = best_val_loss - current_val_loss
@@ -374,11 +374,16 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
                 best_val_loss = current_val_loss
                 patience_counter = 0
                 # Save best model state for this hyperparameter combination
-                best_model_state = trainer.actor.state_dict().copy()
-                print(f"Epoch {epoch}: Train={epoch_avg_losses['actor_loss']:.4f}, Val={best_val_loss:.4f} (NEW BEST)")
+                if model_type in ['basic_q']:
+                    best_model_state = trainer.critic.state_dict().copy()
+
+                else:
+                    best_model_state = trainer.actor.state_dict().copy()
+                
+                print(f"Epoch {epoch}: Train={epoch_avg_losses[loss_metric]:.4f}, Val={best_val_loss:.4f} (NEW BEST)")
             else:
                 patience_counter += 1                
-                print(f"Epoch {epoch}: Train={epoch_avg_losses['actor_loss']:.4f}, Val={current_val_loss:.4f} ({patience_counter}/{patience} - NO IMPROVEMENT)")
+                print(f"Epoch {epoch}: Train={epoch_avg_losses[loss_metric]:.4f}, Val={current_val_loss:.4f} ({patience_counter}/{patience} - NO IMPROVEMENT)")
                 
             #  Early stopping - stop training THIS hyperparameter combination
             if patience_counter >= patience:
@@ -389,7 +394,10 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
     
     # Restore best model state before returning score
     if best_model_state is not None:
-        trainer.actor.load_state_dict(best_model_state)
+        if model_type in ['basic_q']:
+            trainer.critic.load_state_dict(best_model_state)
+        else:
+            trainer.actor.load_state_dict(best_model_state)
         print(f"    Restored best model (val_loss={best_val_loss:.4f})")
 
     
@@ -403,9 +411,10 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
            
             batch_metrics, targets, predictions = trainer.evaluate(batch)
 
-            all_targets.append(targets.cpu())
-            all_predictions.append(predictions.cpu())
-            
+            if targets is not None and predictions is not None:
+                all_targets.append(targets.cpu())
+                all_predictions.append(predictions.cpu())
+                
             epoch_losses.append(batch_metrics)
         
         test_metrics = average_dicts(epoch_losses)       
@@ -425,22 +434,25 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
 
         ##### make a dataframe of targets and predictions ####
         # columns are config_manager.data_config['action_cols']
-        action_cols = train_processor.actions
+        if not all_targets or not all_predictions:
+            print("No targets or predictions were collected during evaluation.")
+        else:
+            action_cols = train_processor.actions
 
-        pred_cols = [col + "_pred" for col in action_cols]
+            pred_cols = [col + "_pred" for col in action_cols]
 
-        # create dataframe using all_targets and all_predictions
-        all_targets = np.vstack(all_targets)
-        all_predictions = np.vstack(all_predictions)
+            # create dataframe using all_targets and all_predictions
+            all_targets = np.vstack(all_targets)
+            all_predictions = np.vstack(all_predictions)
 
-        results_df = pd.DataFrame(
-            data=np.hstack([all_targets, all_predictions]),
-            columns=action_cols + pred_cols
-        )
+            results_df = pd.DataFrame(
+                data=np.hstack([all_targets, all_predictions]),
+                columns=action_cols + pred_cols
+            )
 
-        results_path = Path(config_manager.fold_dir / "test_predictions.parquet")
-        results_df.to_parquet(results_path)
-        print(f" Test predictions saved to {results_path}")       
+            results_path = Path(config_manager.fold_dir / "test_predictions.parquet")
+            results_df.to_parquet(results_path)
+            print(f" Test predictions saved to {results_path}")       
 
         return best_val_loss, training_losses, val_losses, test_metrics
     

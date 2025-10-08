@@ -42,7 +42,7 @@ def parse_arguments():
     
     parser.add_argument('--model_type', 
                         default='any_percent_bc', 
-                        choices=['any_percent_bc', 'td3_bc'], 
+                        choices=['any_percent_bc', 'td3_bc', 'basic_q'], 
                         help='Model type to train (default: any_percent_bc)') 
 
     parser.add_argument('--mode', type=str, default='single_fold',

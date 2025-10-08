@@ -120,7 +120,7 @@ class Critic(nn.Module):
 
 class TD3_BC(object):
 	def __init__(
-		 self,
+		self,
         max_action: np.ndarray,
         actor: nn.Module = None,
 		actor_optimizer: torch.optim.Optimizer = None,
@@ -164,13 +164,7 @@ class TD3_BC(object):
 		# copy the critic network to create the target critic
 		self.critic_target = copy.deepcopy(self.critic)
 
-		self.max_action = max_action
-		self.discount = discount
-		self.tau = tau
-		# self.policy_noise = policy_noise
-		# self.noise_clip = noise_clip
-		# self.policy_freq = policy_freq
-		# self.alpha = alpha
+
 
 	def select_action(self, state):
 		state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
@@ -300,7 +294,7 @@ class TD3_BC(object):
 		return v0_mean, v0_sem
 
 	def evaluate(self, batch: TensorBatch) -> Dict[str, float]:
-		self.actor.eval()  # ✅ This is correct and important!
+		self.actor.eval()  # This is correct and important!
 		self.critic.eval()  # Ensure critic is also in eval mode
 		
 		state, action, reward, next_state, done = TrainerUtils._unpack_batch(batch, self.device)
@@ -400,7 +394,8 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 		lr=learning_rate
 	)
 
-	trainer = TD3_BC(
+	if action_mode == 'binary_only' or action_mode == 'continuous_only':
+		trainer = TD3_BC(
 			max_action=max_action,
 			actor=actor,
 			actor_optimizer=actor_optimizer,
@@ -409,13 +404,29 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 			discount=config_manager.training_config['discount'],
 			device=config_manager.training_config['device'],
 			action_mode=action_mode,
-			dose_actions=action_dim//2,
-			binary_actions=action_dim//2,
 			tau=config_manager.training_config['tau'],	
 			policy_noise=config_manager.training_config['policy_noise'],
 			noise_clip=config_manager.training_config['noise_clip'],
 			policy_freq=config_manager.training_config['policy_freq'],
 			alpha=config_manager.training_config['alpha']		
 		)
-
+	
+	elif action_mode == 'mixed':
+		trainer = TD3_BC(
+				max_action=max_action,
+				actor=actor,
+				actor_optimizer=actor_optimizer,
+				critic=critic,
+				critic_optimizer=critic_optimizer,
+				discount=config_manager.training_config['discount'],
+				device=config_manager.training_config['device'],
+				action_mode=action_mode,
+				dose_actions=action_dim//2,
+				binary_actions=action_dim//2,
+				tau=config_manager.training_config['tau'],	
+				policy_noise=config_manager.training_config['policy_noise'],
+				noise_clip=config_manager.training_config['noise_clip'],
+				policy_freq=config_manager.training_config['policy_freq'],
+				alpha=config_manager.training_config['alpha']		
+		)
 	return trainer

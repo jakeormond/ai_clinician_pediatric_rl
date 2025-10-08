@@ -24,19 +24,33 @@ class RLDataset(Dataset):
         self.actions = torch.tensor(rl_dataset["actions"], dtype=torch.float32)
         self.rewards = torch.tensor(rl_dataset["rewards"], dtype=torch.float32)
         self.next_states = torch.tensor(rl_dataset["next_observations"], dtype=torch.float32)
+        # if next actions are included, add them here
+        if "next_actions" in rl_dataset:
+            self.next_actions = torch.tensor(rl_dataset["next_actions"], dtype=torch.float32)
         self.dones = torch.tensor(rl_dataset["terminated"], dtype=torch.float32)
+
 
     def __len__(self) -> int:
         return len(self.states)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        return [
-            self.states[idx],
-            self.actions[idx],
-            self.rewards[idx],
-            self.next_states[idx],
-            self.dones[idx],
-        ]
+        if hasattr(self, 'next_actions'):
+            return [
+                self.states[idx],
+                self.actions[idx],
+                self.rewards[idx],
+                self.next_states[idx],
+                self.next_actions[idx],
+                self.dones[idx],
+            ]
+        else:
+            return [
+                self.states[idx],
+                self.actions[idx],
+                self.rewards[idx],
+                self.next_states[idx],
+                self.dones[idx],
+            ]
     
 
 class ReplayBuffer:

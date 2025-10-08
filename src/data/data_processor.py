@@ -123,22 +123,25 @@ class DataProcessor:
             
         
     def _split_into_rl_dataset(self, dataset, config_manager):
-        # This function will split the dataframe into the format needed for RL
-        # It will return a dictionary with the following keys:
-        # - observations
-        # - actions
-        # - rewards
-        # - terminations
-        # - next_observations
-        # 
-        # state and action come from a given timestep, reward, next_state and terminated 
-        # come from the next timestep.
-        # Therefore, each trajectory will actually be length n_timesteps - 1. So observations
-        # and actions will have indices 0 to n_timesteps - 2, next_observations and rewards 
-        # and terminated will have indices 1 to n_timesteps - 1.
+        """
+        This function will split the dataframe into the format needed for RL
+        It will return a dictionary with the following keys:
+        - observations
+        - actions
+        - rewards
+        - terminations
+        - next_observations
+        - next_actions (if running basiq_q (SARSA))
+        
+        state and action come from a given timestep, reward, next_state and terminated 
+        come from the next timestep.
+        Therefore, each trajectory will actually be length n_timesteps - 1. So observations
+        and actions will have indices 0 to n_timesteps - 2, next_observations and rewards 
+        and terminated will have indices 1 to n_timesteps - 1.
 
-        # we piece off the rewards and actions and then will have the observations left
-
+        we piece off the rewards and actions and then will have the observations left
+        """
+        
         ##### SHOULD ADD SOME KIND OF UNIT TEST HERE TO CONFIRM EVERYTHING IS WORKING AS EXPECTED #####
 
         if self.use_reward:
@@ -151,14 +154,9 @@ class DataProcessor:
             if self.scale_reward != 1.0:
                 rewards = rewards * self.scale_reward
 
-            # now compute hourly change in reward
-            rewards = rewards.shift(-1) - rewards
-            rewards = rewards.fillna(0)
+            # now compute hourly change in reward (don't need to shift, that is handled below!)
+            rewards = rewards.diff().fillna(0)
            
-            # set final indices of each patient to zero
-            final_indices = dataset.dataframe.groupby(self.encounter_col).tail(1).index
-            rewards.loc[final_indices] = 0
-
             # clip rewards to avoid extreme outliers; these only get used if not 
             # already set in the config file
             lower_bound_temp = np.percentile(rewards, self.reward_lower_percentile)
@@ -172,9 +170,7 @@ class DataProcessor:
             # make reward positive if specified in config file
             if config_manager.training_config['make_rewards_positive']:
                 eps = 1e-6
-                rewards = rewards - lower_bound + eps
-               
-            
+                rewards = rewards - lower_bound + eps           
 
         else:
             rewards = pd.Series(0., index=dataset.dataframe.index)
@@ -213,8 +209,11 @@ class DataProcessor:
         # add the terminal rewards to the rewards
         rewards = rewards + terminal_rewards
         
-        # get the next observations
+        # get the next observations and, if necessart, next_actions
         next_observations = observations.copy()
+
+        if config_manager.training_config['include_next_actions']:
+            next_actions = actions.copy()
 
         # get the indices of all the trajectory starts, i.e. the first index of each patient
         trajectory_starts = dataset.dataframe.groupby(self.encounter_col).head(1).index
@@ -230,22 +229,36 @@ class DataProcessor:
         rewards = rewards.drop(index=trajectory_starts)
         next_observations = next_observations.drop(index=trajectory_starts)
         terminated = terminated.drop(index=trajectory_starts)
+        if config_manager.training_config['include_next_actions']:
+            next_actions = next_actions.drop(index=trajectory_starts)
 
         # convert to numpy arrays
         observations = observations.to_numpy()  
         actions = actions.to_numpy()
         rewards = rewards.to_numpy()
         next_observations = next_observations.to_numpy()
+        if config_manager.training_config['include_next_actions']:
+            next_actions = next_actions.to_numpy()
         terminated = terminated.to_numpy()
 
-        return {
-            "observations": observations,
-            "actions": actions,
-            "rewards": rewards,
-            "next_observations": next_observations,
-            "terminated": terminated
-        }
-    
+        if config_manager.training_config['include_next_actions']:
+            return {
+                "observations": observations,
+                "actions": actions,
+                "rewards": rewards,
+                "next_observations": next_observations,
+                "next_actions": next_actions,
+                "terminated": terminated
+            }
+        else:
+            return {
+                "observations": observations,
+                "actions": actions,
+                "rewards": rewards,
+                "next_observations": next_observations,
+                "terminated": terminated
+            }
+        
 
     def _create_binary_actions(self, config_manager):
                 

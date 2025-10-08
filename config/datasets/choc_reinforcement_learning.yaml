@@ -29,6 +29,8 @@ reward_col: "health_score" # this is the name of the column in the reward file t
 flip_reward: False
 offset_reward: 0.0
 scale_reward: 100.0
+reward_lower_percentile: 1 # for clipping rewards
+reward_upper_percentile: 99
 
 use_terminal_reward: False
 terminal_reward_col: "mortality" # other wise make False

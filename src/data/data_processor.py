@@ -138,9 +138,18 @@ class DataProcessor:
                 rewards = rewards * self.scale_reward
 
             # now compute hourly change in reward
-            rewards = rewards.diff().fillna(0)
-            first_indices = dataset.dataframe.groupby(self.encounter_col).head(1).index
-            rewards.loc[first_indices] = 0      
+            rewards = rewards.shift(-1) - rewards
+            rewards = rewards.fillna(0)
+           
+            # set final indices of each patient to zero
+            final_indices = dataset.dataframe.groupby(self.encounter_col).tail(1).index
+            rewards.loc[final_indices] = 0
+
+            # clip rewards to avoid extreme outliers
+            lower_bound = np.percentile(rewards, self.reward_lower_percentile)
+            upper_bound = np.percentile(rewards, self.reward_upper_percentile)  
+
+            rewards = rewards.clip(lower=lower_bound, upper=upper_bound)
 
         else:
             rewards = pd.Series(0., index=dataset.dataframe.index)

@@ -66,7 +66,7 @@ class DataProcessor:
             print(f"Input feature: {f}")
 
         # split into the rl_dataset
-        self.rl_dataset = self._split_into_rl_dataset(dataset)           
+        self.rl_dataset = self._split_into_rl_dataset(dataset, config_manager)           
             
         self.norm_params = norm_params
         # self.normalize_obs = normalize_obs
@@ -122,7 +122,7 @@ class DataProcessor:
             self._normalize_actions() 
             
         
-    def _split_into_rl_dataset(self, dataset):
+    def _split_into_rl_dataset(self, dataset, config_manager):
         # This function will split the dataframe into the format needed for RL
         # It will return a dictionary with the following keys:
         # - observations
@@ -159,11 +159,22 @@ class DataProcessor:
             final_indices = dataset.dataframe.groupby(self.encounter_col).tail(1).index
             rewards.loc[final_indices] = 0
 
-            # clip rewards to avoid extreme outliers
-            lower_bound = np.percentile(rewards, self.reward_lower_percentile)
-            upper_bound = np.percentile(rewards, self.reward_upper_percentile)  
+            # clip rewards to avoid extreme outliers; these only get used if not 
+            # already set in the config file
+            lower_bound_temp = np.percentile(rewards, self.reward_lower_percentile)
+            upper_bound_temp = np.percentile(rewards, self.reward_upper_percentile)  
+
+            lower_bound = config_manager.training_config.setdefault('lower_bound', lower_bound_temp)
+            upper_bound = config_manager.training_config.setdefault('upper_bound', upper_bound_temp)
 
             rewards = rewards.clip(lower=lower_bound, upper=upper_bound)
+
+            # make reward positive if specified in config file
+            if config_manager.training_config['make_rewards_positive']:
+                eps = 1e-6
+                rewards = rewards - lower_bound + eps
+               
+            
 
         else:
             rewards = pd.Series(0., index=dataset.dataframe.index)

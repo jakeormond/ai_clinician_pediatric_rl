@@ -28,3 +28,6 @@
 
     # validation loss
     val_loss_metric: "critic_loss"  # Which metric to use for validation loss
+
+    # changes to reward structure
+    make_rewards_positive: True  # Whether to shift rewards to be positive

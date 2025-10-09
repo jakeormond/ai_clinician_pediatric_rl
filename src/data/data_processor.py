@@ -407,9 +407,13 @@ class DataProcessor:
                 self.action_minimum[action] = self.rl_dataset['actions'][:, i].min()
                 self.action_maximum[action] = self.rl_dataset['actions'][:, i].max()
 
-            self.rl_dataset['actions'][:, i] = (self.rl_dataset['actions'][:, i] - self.action_minimum[action]) / \
-                                              (self.action_maximum[action] - self.action_minimum[action])
+            self.rl_dataset['actions'][:, i] = (self.rl_dataset['actions'][:, i] 
+                - self.action_minimum[action]) / (self.action_maximum[action] - self.action_minimum[action])
             
+            # if next_actions exist, normalize them too
+            if 'next_actions' in self.rl_dataset:
+                self.rl_dataset['next_actions'][:, i] = (self.rl_dataset['next_actions'][:, i] 
+                    - self.action_minimum[action]) / (self.action_maximum[action] - self.action_minimum[action])
 
             print(f"Normalized action {action} between 0 and 1.")        
 
@@ -442,6 +446,11 @@ class DataProcessor:
                 # transform the training data
                 self.rl_dataset['actions'][:, i] = pt.transform(
                     self.rl_dataset['actions'][:, i].reshape(-1, 1)).flatten()
+
+                # if next_actions exist, transform them too
+                if 'next_actions' in self.rl_dataset:
+                    self.rl_dataset['next_actions'][:, i] = pt.transform(
+                        self.rl_dataset['next_actions'][:, i].reshape(-1, 1)).flatten()
                                      
                 print(f"Transformed target {target} with Yeo-Johnson transform.")
 
@@ -450,6 +459,10 @@ class DataProcessor:
                 # this will leave zeros as zeros, and compress the higher values
                 self.rl_dataset['actions'][:, i] = np.log1p(self.rl_dataset['actions'][:, i])
                 
+                # if next_actions exist, transform them too
+                if 'next_actions' in self.rl_dataset:
+                    self.rl_dataset['next_actions'][:, i] = np.log1p(self.rl_dataset['next_actions'][:, i])
+
                 print(f"Transformed target {target} with log1p transform.")
 
     

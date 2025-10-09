@@ -2,22 +2,22 @@
     project: "AI_Clininician"
     "group": "reinforcement_learning"
     name: "basic_q"
-    n_episodes: 100  # How many episodes run during evaluation
+    n_episodes: 1000  # How many episodes run during evaluation
     # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
     discount: 0.99  # Discount factor
     # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
     max_traj_len: 72  # Max trajectory length - probably need to change this
     device: "cuda"  # Device (cuda or cpu)
-    learning_rate: "loguniform(1e-5, 1e-3)"           #      [1e-6]  # Learning rates to try
+    learning_rate: "loguniform(1e-6, 2e-6)"           #      [1e-6]  # Learning rates to try
     dropout: "uniform(0.0, 0.5)"
-    tau: 0.005 # Target network update rate
+    tau: 0.01 # Target network update rate
     policy_noise: 0.2 # Noise added to target policy during critic updates
     batch_size: [256, 512]  # Batch size for all networks
     hidden_dim: [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
 
     # Early stopping parameters (fixed for all combinations)
-    patience: 15        # Stop if no improvement for 15 evaluations
+    patience: 1500        # Stop if no improvement for 15 evaluations
     eval_freq: 5       # Evaluate every 20 epochs  
     min_delta: 0.0001   # Minimum improvement threshold
 
@@ -31,3 +31,5 @@
 
     # include next actions
     include_next_actions: True  # needed for SARSA
+
+

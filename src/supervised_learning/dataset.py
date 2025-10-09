@@ -94,7 +94,44 @@ class Dataset:
 
         print(f"Removed {n_encounter_ids_before - n_encounter_ids_after} "
                 f"encounter IDs and {n_rows_before - n_rows_after} rows with NaN values.")
-        print(f"Remaining encounter IDs: {n_encounter_ids_after}, Remaining rows: {n_rows_after}")       
+        print(f"Remaining encounter IDs: {n_encounter_ids_after}, Remaining rows: {n_rows_after}")     
+
+        if self.truncate_trajectories:
+            
+            min_traj_len = self.min_traj_len
+            max_trajectory_length = self.max_trajectory_length
+            
+            print("Truncating trajectories..."
+                  f" to a maximum length of {max_trajectory_length} and a minimum length of {min_traj_len}.")
+
+            # identify encounter_ids with mortality == 1
+            mortality_encounter_ids = self.dataframe[self.dataframe['mortality'] == 1][self.encounter_col].unique()
+            
+            # truncate each trajectory (identified by encounter_id) to max_trajectory_length
+            df_limited = self.dataframe.groupby(self.encounter_col).head(max_trajectory_length).reset_index(drop=True)
+
+            # get the lengths of each trajectory (identified by encounter_id)
+            traj_lengths = df_limited.groupby(self.encounter_col).size()
+
+            # remove any trajectories that are shorter than min_traj_len
+            valid_encounter_ids = traj_lengths[traj_lengths >= min_traj_len].index
+            df_limited = df_limited[df_limited[self.encounter_col].isin(valid_encounter_ids)].reset_index(drop=True)
+
+            # for each mortality encounter_id, ensure that the last row has mortality == 1
+            df_limited.loc[
+                df_limited['encounter_id'].isin(mortality_encounter_ids) & 
+                (df_limited.groupby('encounter_id')['time'].transform('max') == df_limited['time']),
+                'mortality'
+            ] = 1
+
+            # print how many encoutner_ids are left, and how many mortality encounter_ids are left
+            n_encounter_ids_limited = df_limited[self.encounter_col].nunique()
+            n_mortality_encounter_ids_limited = df_limited[df_limited['mortality'] == 1][self.encounter_col].nunique()
+            print(f"After truncating, {n_encounter_ids_limited} encounter IDs remain, "
+                  f"of which {n_mortality_encounter_ids_limited} have mortality == 1.")
+
+            self.dataframe = df_limited.copy()
+
 
         return self
     

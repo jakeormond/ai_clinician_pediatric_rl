@@ -69,7 +69,7 @@ def parse_arguments():
     parser.add_argument('--start_time', type=str, default = None,                  
                     help='Start time for this experiment run')
     
-    parser.add_argument('--testing', type=bool, default = False,                  
+    parser.add_argument('--testing', action='store_true',                 
                     help='if true, we pare down the data for quick testing')
     
     parser.add_argument('--n_epochs', type=int, default = 10,                  

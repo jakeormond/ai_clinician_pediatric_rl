@@ -92,8 +92,7 @@
                 "--experiment_variant", "quick_test",
                 "--search_variant", "random_search",
                 "--n_search_iterations", "2",
-                "--testing", "true",
-                "--n_epochs", "10",
+                "--n_epochs", "100",
                 "--action_mode", "continuous_only",
             
             ],

@@ -101,6 +101,15 @@ class Q_Learner(object):
 
         # Get current Q estimates
         current_Q1, current_Q2 = self.critic(state, action)
+        
+        ########## check critic and target critic outputs ##########
+        target_Q1, target_Q2 = self.critic_target(state, action)
+
+        ############## check next state and next action ##############
+        next_target1, next_target2 = self.critic_target(next_state, next_action)
+
+        next_1, next_2 = self.critic(next_state, next_action)
+
 
         # Compute critic loss
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)

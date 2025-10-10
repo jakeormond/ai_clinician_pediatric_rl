@@ -4,6 +4,7 @@ from dataclasses import asdict
 from pathlib import Path
 import os
 import time
+import logging
 
 
 import pyrallis
@@ -26,6 +27,16 @@ from ...rl.training import outer_training_loop
 
 
 TensorBatch = List[torch.Tensor]
+
+logger = logging.getLogger(__name__)
+
+def setup_logger(verbose=False):
+    level = logging.INFO if verbose else logging.WARNING
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
 
 def parse_arguments():
@@ -72,6 +83,9 @@ def parse_arguments():
     parser.add_argument('--testing', action='store_true',                 
                     help='if true, we pare down the data for quick testing')
     
+    parser.add_argument('--verbose', action='store_true',                 
+                    help='if true, print details of all the features and normalization steps')
+    
     parser.add_argument('--n_epochs', type=int, default = 10,                  
                     help='Number of epochs to train for - should be 1000, but for testing we set to 10')
     
@@ -113,6 +127,8 @@ def main():
     args = parse_arguments()
     validate_arguments(args)
 
+    setup_logger(verbose=args.verbose)
+
     # Initialize config manager, it holds paths and environment info
     config_manager = ConfigManager(args)
 
@@ -126,29 +142,29 @@ def main():
         # load data. Note that features, actions, and rewards can be used immediately for xgboost,
         # but require further processing for RL. 
         dataset = Dataset(config_manager.data_config)
-        print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
+        logger.warning(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
 
         if config_manager.testing:
             dataset = dataset.subsample_dataset(0.1)
-            print(f"Subsampled dataset to {len(dataset.dataframe)} rows for testing")            
+            logger.Warning(f"Subsampled dataset to {len(dataset.dataframe)} rows for testing")            
 
         # Initialize W&B - will implement later
         # log_fold_results_to_wandb(results)
 
         # load training config
-        config_manager.set_training_config() # based on model type (i.e. any_percent_bc.yaml in this case)   
+        config_manager.set_training_config() # based on model type 
 
-        print(f"Running on {config_manager.environment} environment")
-        print(f"Experiment directory: {config_manager.experiment_dir}")
-        print(f"Fold directory: {config_manager.fold_dir}")
+        logger.warning(f"Running on {config_manager.environment} environment")
+        logger.warning(f"Experiment directory: {config_manager.experiment_dir}")
+        logger.warning(f"Fold directory: {config_manager.fold_dir}")
 
         results = outer_training_loop(dataset, config_manager)
 
         # LOG TO W&B in main script
         # log_fold_results_to_wandb(results)
 
-        print(f"Fold {args.fold} completed successfully")
-        print(f"Test metrics: {results}")
+        logger.warning(f"Fold {args.fold} completed successfully")
+        logger.warning(f"Test metrics: {results}")
         
         if wandb.run is not None:
             wandb.finish()

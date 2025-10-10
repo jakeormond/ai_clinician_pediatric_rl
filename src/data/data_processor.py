@@ -20,8 +20,11 @@ from sklearn.preprocessing import PowerTransformer
 import torch
 from torch.utils.data import Dataset, DataLoader
 
+import logging
+logger = logging.getLogger(__name__)
+
 class DataProcessor:
-    def __init__(self, dataset, config_manager, norm_params=None):
+    def __init__(self, dataset, config_manager, norm_params=None, verbose=False):
                 
         # self should inherit all the key value pairs from the dataset except the dataframe
         for key, value in vars(dataset).items():
@@ -63,7 +66,7 @@ class DataProcessor:
                                col != self.terminal_reward_col]
         
         for f in self.input_features:
-            print(f"Input feature: {f}")
+            logger.info(f"Input feature: {f}")
 
         # split into the rl_dataset
         self.rl_dataset = self._split_into_rl_dataset(dataset, config_manager)           
@@ -287,9 +290,9 @@ class DataProcessor:
         else:
             raise ValueError(f"Invalid action_mode: {config_manager.action_mode}")
         
-        print(f"Created {binary_actions.shape[1]} binary actions")
-        print(f"Binary actions: {binary_names}")
-        print(f"New action array shape: {self.rl_dataset['actions'].shape}")
+        logging.warning(f"Created {binary_actions.shape[1]} binary actions")
+        logging.warning(f"Binary actions: {binary_names}")
+        logging.warning(f"New action array shape: {self.rl_dataset['actions'].shape}")
 
 
     def _normalize_obs(self):
@@ -385,13 +388,13 @@ class DataProcessor:
                np.isinf(self.rl_dataset['next_observations'][:, i]).any():
                 raise ValueError(f"Infs found in normalized feature {feature}") 
 
-            print(f"Normalized feature {feature} with {normalization_type} normalization. "
+            logging.info(f"Normalized feature {feature} with {normalization_type} normalization. "
                 f"Min: {self.obs_norm_dict[feature]['min']}, \
                     Max: {self.obs_norm_dict[feature]['max']}, \
                         Mean: {self.obs_norm_dict[feature]['mean']}, \
                             Std: {self.obs_norm_dict[feature]['std']}")
 
-        print("Observation normalization complete.")                        
+        logging.warning("Observation normalization complete.")                        
 
     
     def _normalize_actions(self):
@@ -415,7 +418,7 @@ class DataProcessor:
                 self.rl_dataset['next_actions'][:, i] = (self.rl_dataset['next_actions'][:, i] 
                     - self.action_minimum[action]) / (self.action_maximum[action] - self.action_minimum[action])
 
-            print(f"Normalized action {action} between 0 and 1.")        
+            logging.warning(f"Normalized action {action} between 0 and 1.")        
 
 
     def _transform_actions(self):
@@ -452,7 +455,7 @@ class DataProcessor:
                     self.rl_dataset['next_actions'][:, i] = pt.transform(
                         self.rl_dataset['next_actions'][:, i].reshape(-1, 1)).flatten()
                                      
-                print(f"Transformed target {target} with Yeo-Johnson transform.")
+                logging.warning(f"Transformed target {target} with Yeo-Johnson transform.")
 
             elif target_transform == "log1p":
                 # apply log1p transform, which is log(1 + x)
@@ -463,7 +466,7 @@ class DataProcessor:
                 if 'next_actions' in self.rl_dataset:
                     self.rl_dataset['next_actions'][:, i] = np.log1p(self.rl_dataset['next_actions'][:, i])
 
-                print(f"Transformed target {target} with log1p transform.")
+                logging.warning(f"Transformed target {target} with log1p transform.")
 
     
     def get_normalization_params(self):

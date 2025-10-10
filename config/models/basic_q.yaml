@@ -17,7 +17,7 @@
     hidden_dim: [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
 
     # Early stopping parameters (fixed for all combinations)
-    patience: 1500        # Stop if no improvement for 15 evaluations
+    patience: 6        # Stop if no improvement for 15 evaluations
     eval_freq: 5       # Evaluate every 20 epochs  
     min_delta: 0.0001   # Minimum improvement threshold
 

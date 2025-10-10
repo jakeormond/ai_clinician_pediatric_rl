@@ -92,9 +92,8 @@
                 "--experiment_variant", "quick_test",
                 "--search_variant", "random_search",
                 "--n_search_iterations", "2",
-                "--n_epochs", "100",
-                "--action_mode", "continuous_only",
-            
+                "--n_epochs", "20",
+                "--action_mode", "continuous_only"            
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

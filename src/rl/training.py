@@ -140,6 +140,7 @@ def get_early_stopping_config(config_manager):
     """Extracts early stopping configuration from config_manager."""
     early_stopping = {
         "patience": config_manager.training_config.get('patience', 10),
+        "patience_counter": 0,
         "eval_freq": config_manager.training_config.get('eval_freq', 5),
         "min_delta": config_manager.training_config.get('min_delta', 0.001)
     }
@@ -190,7 +191,32 @@ def evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_lo
     return val_losses
 
 
-   
+def check_improvement(best_val_loss, current_val_loss, early_stopping):
+    improvement = best_val_loss - current_val_loss
+    if improvement > early_stopping['min_delta']:
+        best_val_loss = current_val_loss
+        early_stopping['patience_counter'] = 0               
+        logger.warning(f"NEW BEST: Val loss={current_val_loss:.4f}")
+    else:
+        early_stopping['patience_counter'] += 1                
+        logger.warning(f"No improvement, Val={current_val_loss:.4f}, ({early_stopping['patience_counter']}/{early_stopping['patience']} - NO IMPROVEMENT)")
+    
+    return improvement, best_val_loss
+
+
+def copy_model_parameters(trainer, config_manager):
+    if config_manager.model_type in ['basic_q']:
+        return trainer.critic.state_dict().copy()
+    else:
+        return trainer.actor.state_dict().copy()
+    
+def restore_model_parameters(trainer, best_model_state, best_val_loss, config_manager):
+    if config_manager.model_type in ['basic_q']:
+        trainer.critic.load_state_dict(best_model_state)
+    else:
+        trainer.actor.load_state_dict(best_model_state) # for td3-bc I imagine we need both models!!!!!! SO FIX!!!!!!
+    logger.warning(f"    Restored best model (val_loss={best_val_loss:.4f})")
+
 def outer_training_loop(dataset, config_manager): 
     """Runs single outer fold - designed for HPC job array."""
     
@@ -376,7 +402,6 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
     early_stopping = get_early_stopping_config(config_manager)
 
     best_val_loss = float('inf')
-    patience_counter = 0
     best_model_state = None
 
     logger.warning(f"Training with early stopping (patience={early_stopping['patience']}, eval_freq={early_stopping['eval_freq']}, min_delta={early_stopping['min_delta']})")
@@ -419,38 +444,22 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
             # Determine validation loss for early stopping
             current_val_loss = val_losses[loss_metric][-1]
             
-            # Check for improvement
-            improvement = best_val_loss - current_val_loss
-            if improvement > min_delta:
-                best_val_loss = current_val_loss
-                patience_counter = 0               
-                logger.warning(f"Epoch {epoch}: Train={epoch_avg_losses[loss_metric]:.4f}, Val={best_val_loss:.4f} (NEW BEST)")
-            else:
-                patience_counter += 1                
-                logger.warning(f"Epoch {epoch}: Train={epoch_avg_losses[loss_metric]:.4f}, Val={current_val_loss:.4f} ({patience_counter}/{patience} - NO IMPROVEMENT)")
+            # Check for improvement and copy model parameters if best
+            improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)
 
             if improvement > 0:
-                if model_type in ['basic_q']:
-                    best_model_state = trainer.critic.state_dict().copy()
-                else:
-                    best_model_state = trainer.actor.state_dict().copy()
-
-            #  Early stopping - stop training THIS hyperparameter combination
-            if patience_counter >= patience:
+                best_model_state = copy_model_parameters(trainer, config_manager)
                 
-                logger.warning(f" Early stopping this hyperparameter combination at epoch {epoch}/{n_epochs}")
+            #  Early stopping - stop training THIS hyperparameter combination
+            if early_stopping['patience_counter'] >= early_stopping['patience']:                
+                logger.warning(f" Early stopping at epoch {epoch}/{n_epochs}")
                 logger.warning(f" Best validation loss: {best_val_loss:.4f}")
                 break
     
     # Restore best model state before returning score
     if best_model_state is not None:
-        if model_type in ['basic_q']:
-            trainer.critic.load_state_dict(best_model_state)
-        else:
-            trainer.actor.load_state_dict(best_model_state) # for td3-bc I imagine we need both models!!!!!!! SO FIX!!!!!!
-        logger.warning(f"    Restored best model (val_loss={best_val_loss:.4f})")
-
-    
+        restore_model_parameters(trainer, best_model_state, best_val_loss, config_manager)
+          
     if final_model:
         epoch_losses = []
         all_targets = []

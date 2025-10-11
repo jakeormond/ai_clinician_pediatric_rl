@@ -511,13 +511,16 @@ def train_with_hyperparameters(
             if epoch % config_manager.training_config['eval_freq'] == 0 \
                                                     or epoch == n_epochs - 1:
                 evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_losses)
+                
+                # Determine validation loss for early stopping
+                current_val_loss = val_losses[loss_metric][-1]
+                logger.warning(f"Epoch {epoch}: Train {loss_metric}={training_losses[loss_metric][-1]:.4f}, Val {loss_metric}={current_val_loss:.4f}")
+                                
                 # optionally, estimate V0 and append to validation losses
                 if config_manager.training_config['monitor_v0']:
                     estimate_v0(trainer, val_starting_states, batch_size, val_losses)
                     logger.warning(f"Epoch {epoch}: Val mean start state values: {val_losses['v0_mean'][-1]:.4f} ± {val_losses['v0_sem'][-1]:.4f}")                 
                 
-                # Determine validation loss for early stopping
-                current_val_loss = val_losses[loss_metric][-1]
                 
                 # Check for improvement and copy model parameters if best
                 improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)

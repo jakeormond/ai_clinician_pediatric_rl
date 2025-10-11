@@ -98,7 +98,7 @@ def create_processors(dataset, train_id, val_id, config_manager):
     val_processor = DataProcessor(val_dataset, config_manager, 
                                  norm_params=norm_params)
     
-    return train_processor, val_processor
+    return train_processor, val_processor, norm_params
 
 
 def select_best_trajectories(processor, config_manager):
@@ -157,12 +157,13 @@ def append_epoch_losses(
     for key, value in epoch_avg_losses.items():
         training_losses[key].append(value)     
 
-def estimate_v0(trainer, starting_states, batch_size, v0):
+def estimate_v0(trainer, starting_states, batch_size, losses_dict):
+    # we store the estimates in losses_dict
     # optionally, estimate V0 and append to training losses
         v0_mean, v0_sem = trainer.estimate_v0(starting_states, batch_size = batch_size)
         # print(f"Epoch {epoch}: Train mean start state values: {train_v0_mean:.4f} ± {train_v0_sem:.4f}")
-        v0['mean'].append(v0_mean)
-        v0['sem'].append(v0_sem)
+        losses_dict['v0_mean'].append(float(v0_mean))
+        losses_dict['v0_sem'].append(float(v0_sem))
 
 
 def evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_losses):
@@ -184,11 +185,61 @@ def evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_lo
     if len(epoch_val_avg) > 1:
         logger.warning(f"Epoch {epoch}: Validation metrics: {epoch_val_avg}")
 
+    # add a key for epoch number
+    epoch_val_avg['epoch'] = epoch
+
     # Append to val_losses with epoch as key
     for key, value in epoch_val_avg.items():
-        val_losses[key].append(value)    
+        val_losses[key].append(value)  
+
+
+def evaluate_final_model(trainer, test_buffer, test_processor, config_manager):
+    test_losses = defaultdict(list)
+    all_targets = []
+    all_predictions = []
+
+    # Final evaluation on test set
+    for batch_idx, batch in enumerate(test_buffer):
+        
+        batch_losses, targets, predictions = trainer.evaluate(batch)
+
+        # Automatically append all validation metrics
+        for key, value in batch_losses.items():
+            test_losses[key].append(value)
+
+        if targets is not None and predictions is not None:
+            all_targets.append(targets.cpu())
+            all_predictions.append(predictions.cpu())
+        
+    # Calculate average test losses across all batches
+    test_losses = {key: np.mean(values) for key, values in test_losses.items()}
     
-    return val_losses
+    ##### make a dataframe of targets and predictions ####
+    # columns are config_manager.data_config['action_cols']
+    if not all_targets or not all_predictions:
+        logger.warning("No targets or predictions were collected during final evaluation.")
+        return test_losses, None
+
+    else:
+        action_cols = test_processor.actions
+
+        pred_cols = [col + "_pred" for col in action_cols]
+
+        # create dataframe using all_targets and all_predictions
+        all_targets = np.vstack(all_targets)
+        all_predictions = np.vstack(all_predictions)
+
+        results_df = pd.DataFrame(
+            data=np.hstack([all_targets, all_predictions]),
+            columns=action_cols + pred_cols
+        )
+
+        results_path = Path(config_manager.fold_dir / "test_predictions.parquet")
+        results_df.to_parquet(results_path)
+        logger.warning(f" Test predictions saved to {results_path}\n")       
+
+    return test_losses, results_df
+
 
 
 def check_improvement(best_val_loss, current_val_loss, early_stopping):
@@ -210,12 +261,12 @@ def copy_model_parameters(trainer, config_manager):
     else:
         return trainer.actor.state_dict().copy()
     
-def restore_model_parameters(trainer, best_model_state, best_val_loss, config_manager):
+def restore_model_parameters(trainer, best_model_state, config_manager):
     if config_manager.model_type in ['basic_q']:
         trainer.critic.load_state_dict(best_model_state)
     else:
         trainer.actor.load_state_dict(best_model_state) # for td3-bc I imagine we need both models!!!!!! SO FIX!!!!!!
-    logger.warning(f"    Restored best model (val_loss={best_val_loss:.4f})")
+    
 
 def outer_training_loop(dataset, config_manager): 
     """Runs single outer fold - designed for HPC job array."""
@@ -246,11 +297,14 @@ def outer_training_loop(dataset, config_manager):
 
         ###################   HYPERPARAMETER OPTIMIZATION #############################
         logger.warning("Phase 1: Hyperparameter Optimization")
-        best_hyperparameters = optimize_hyperparameters(
+        best_hyperparameters, training_scores, val_scores, n_epochs = optimize_hyperparameters(
             train_dataset, config_manager, n_inner_folds=n_inner_folds, 
             outer_fold=outer_fold
         )
         logger.warning(f"Best hyperparameters: {best_hyperparameters}")
+
+        # get the max number of epochs used in inner folds
+        n_epochs = max(n_epochs) # for final training
 
         #################### RETRAIN FINAL MODEL #############################
         logger.warning("Phase 2: Final Model Training & Evaluation")
@@ -266,16 +320,17 @@ def outer_training_loop(dataset, config_manager):
             select_best_trajectories(train_processor, config_manager)
             select_best_trajectories(test_processor, config_manager)
                         
-        best_val_loss, training_losses, val_losses, test_metrics = train_with_hyperparameters(
-                train_processor, 
-                test_processor, 
-                config_manager, 
-                best_hyperparameters,
-                final_model=True
-            )
+        final_training_scores, test_scores, n_epochs = train_with_hyperparameters(
+                                                                train_processor, 
+                                                                test_processor, 
+                                                                config_manager, 
+                                                                best_hyperparameters,
+                                                                n_epochs=n_epochs,
+                                                                final_model=True
+                                                            )
         
         # PLOT THE TRAINING AND VALIDATION LOSSES
-        plot_losses(training_losses, val_losses, outer_fold, config_manager)
+        plot_losses(training_scores, val_scores, test_scores, outer_fold, config_manager)
         
         # save the configuration_manager
         with open(config_manager.fold_dir / "config_manager.pkl", "wb") as f:
@@ -291,12 +346,13 @@ def outer_training_loop(dataset, config_manager):
             json.dump({
                 'outer_fold': outer_fold,
                 'best_hyperparameters': best_hyperparameters,
-                'final_metrics': test_metrics,
+                'final_metrics': test_scores,
                 'config': config_manager.training_config
             }, f, indent=2)
         
         logger.warning(f"✓ Outer fold {outer_fold} complete. Results saved to {results_path}")
-        return test_metrics
+        
+        return test_scores
     
 
 def optimize_hyperparameters(train_dataset, config_manager,
@@ -305,6 +361,9 @@ def optimize_hyperparameters(train_dataset, config_manager,
                                                 outer_fold=None):
     """Inner CV loop for hyperparameter optimization."""
     
+    loss_metric = config_manager.training_config['loss_metric'] # e.g. actor loss, critic loss etc, depends on algorithm
+
+    ################################ create hyperparameter space ################################
     # the hyperparameter space to search consists of the parameters that are lists 
     # in config_manager.training_config
     hyperparameter_space = {k: v for k, v in 
@@ -312,27 +371,32 @@ def optimize_hyperparameters(train_dataset, config_manager,
     if not hyperparameter_space:
         raise ValueError("No hyperparameters to optimize. Ensure that config_manager.training_config contains lists of values to search over.")
     
-    # and also continuoius distributions specified as strings
+    # and also continuous distributions specified as strings
     for k, v in config_manager.training_config.items():
         if isinstance(v, str) and '(' in v and ')' in v:
             hyperparameter_space[k] = parse_distribution(v)
 
-    best_hyperparams = None
-    best_val_score = float('inf')
+    ############################ initialize best_val_score #############################
+    # used to select best hyperparameters
+    best_val_loss = float('inf') 
     
+    ##################### loop through hyperparameter combinations #####################
+    logger.warning(f"Starting hyperparameter optimization with {config_manager.n_search_iterations} iterations...")
     for i in range(config_manager.n_search_iterations):
-        
-        # select hyperparameters randomly
+        ################# select hyperparameters randomly #################
         current_params = select_hyperparameters_randomly(
             hyperparameter_space, config_manager
-        )
-       
+        )       
         logger.warning(f"Testing hyperparameters {i+1}/{config_manager.n_search_iterations}: {current_params}")
         
-        # Inner CV evaluation for these hyperparameters
-        val_scores = []
+        # create storage for validation, training scores, and n_epochs
+        inner_training_scores = [None] * n_inner_folds
+        inner_val_scores = [None] * n_inner_folds
+        inner_n_epochs = [None] * n_inner_folds        
+
+        ################# Inner CV evaluation for testing hyperparameters #################       
         kf_inner = KFold(n_splits=n_inner_folds, shuffle=True, 
-                         random_state=config_manager.data_config["seed"])
+                         random_state=config_manager.data_config["seed"])        
         
         for inner_fold, (inner_train_id, inner_val_id) in enumerate(kf_inner.split(train_dataset.encounter_ids())):
             logger.warning(f"  Inner fold {inner_fold+1}/{n_inner_folds}")
@@ -347,42 +411,53 @@ def optimize_hyperparameters(train_dataset, config_manager,
                 logger.warning(f"    Selecting best trajectories (frac={config_manager.frac})")
                 select_best_trajectories(inner_train_processor, config_manager)
                 select_best_trajectories(inner_val_processor, config_manager)
-
            
             ######################### Train with current hyperparameters ########################
-            best_val_loss, training_losses, val_losses = train_with_hyperparameters(
-                inner_train_processor, inner_val_processor, config_manager, current_params
-            )                        
+            inner_training_scores[inner_fold], inner_val_scores[inner_fold], inner_n_epochs[inner_fold] = \
+                train_with_hyperparameters(
+                    inner_train_processor, 
+                    inner_val_processor, 
+                    config_manager, 
+                    current_params
+                )                        
             
-            logger.warning(f"  Inner fold {inner_fold+1} score: {best_val_loss:.4f}")
-            val_scores.append(best_val_loss)
+            current_val_loss = min(inner_val_scores[inner_fold][loss_metric])
+            logger.warning(f"  Inner fold {inner_fold+1} val loss: {current_val_loss:.4f}")
         
         ###################### Evaluate and update best hyperparameters ########################
-        # Average validation score across inner folds
-        avg_val_score = np.mean(val_scores)
-        std_val_score = np.std(val_scores)
-        logger.warning(f"Average validation score: {avg_val_score:.4f} ± {std_val_score:.4f}")
-        
-        # Update best hyperparameters
-        if avg_val_score < best_val_score:
-            improvement = best_val_score - avg_val_score
-            best_val_score = avg_val_score
+        overall_val_loss = np.mean([min(score[loss_metric]) for score in inner_val_scores])
+        logger.warning(f" Overall mean validation {loss_metric}: {overall_val_loss:.4f}")
+        if overall_val_loss < best_val_loss:
+            improvement = best_val_loss - overall_val_loss
+            logger.warning(f" New best hyperparameters found! (improvement: {improvement:.4f})\n")
+            best_val_loss = overall_val_loss
             best_hyperparams = current_params.copy()
-            logger.warning(f"New best hyperparameters found! (improvement: {improvement:.4f})\n")
+            training_scores_best = inner_training_scores
+            val_scores_best = inner_val_scores
+            n_epochs_best = inner_n_epochs
         else:
-            logger.warning(f"No improvement (current best: {best_val_score:.4f})\n")
-
+            logger.warning(f"No improvement (current best: {best_val_loss:.4f})\n")
+        
+    ############################ Summarize hyperparameter optimization results #############################
+    logger.warning(f"Best hyperparameters after {config_manager.n_search_iterations} iterations: {best_hyperparams}")
     logger.warning(f"\n                 Hyperparameter optimization complete!")
-    logger.warning(f"Best validation score: {best_val_score:.4f}")
 
-    return best_hyperparams
-
+    return best_hyperparams, training_scores_best, val_scores_best, n_epochs_best
 
 
-def train_with_hyperparameters(train_processor, val_test_processor, config_manager, hyperparams, final_model=False):
+def train_with_hyperparameters(
+        train_processor, 
+        val_test_processor, 
+        config_manager, 
+        hyperparams, 
+        n_epochs = None, 
+        final_model=False
+    ):
     """Train model with specific hyperparameters and return validation score."""
     
-    n_epochs = config_manager.n_epochs
+    if n_epochs is None:
+        n_epochs = config_manager.n_epochs
+
     batch_size = hyperparams['batch_size']
     loss_metric = config_manager.training_config['loss_metric']
 
@@ -407,10 +482,10 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
     logger.warning(f"Training with early stopping (patience={early_stopping['patience']}, eval_freq={early_stopping['eval_freq']}, min_delta={early_stopping['min_delta']})")
     
     # Use defaultdict to automatically create new keys
-    training_losses = defaultdict(list)
-    training_v0 = defaultdict(list)
-    val_losses = defaultdict(list)
-    val_v0 = defaultdict(list)
+    training_losses = defaultdict(list) 
+    
+    if not final_model:
+        val_losses = defaultdict(list)
     
     ############################### Training loop #################################
     for epoch in range(n_epochs):
@@ -424,97 +499,75 @@ def train_with_hyperparameters(train_processor, val_test_processor, config_manag
                 epoch_training_losses[key].append(value)
 
         # Calculate average loss for this epoch and append to training_losses
-        append_epoch_losses(epoch_training_losses, training_losses, config_manager)
+        append_epoch_losses(epoch_training_losses, training_losses)
 
         # optionally, estimate V0 and append to training losses
         if config_manager.training_config['monitor_v0']:
-            estimate_v0(trainer, training_starting_states, batch_size, training_v0)
+            estimate_v0(trainer, training_starting_states, batch_size, training_losses)
 
-        # Evaluate periodically
-        if epoch % config_manager.training_config['eval_freq'] == 0 \
-                                                   or epoch == n_epochs - 1:
-            val_losses = evaluate_during_training(
-                trainer, epoch, val_test_buffer, batch_size, val_losses
-            )
-
-            if config_manager.training_config['monitor_v0']:
-                estimate_v0(trainer, val_starting_states, batch_size, val_v0)
-                logger.warning(f"Epoch {epoch}: Val mean start state values: {val_v0['mean'][-1]:.4f} ± {val_v0['sem'][-1]:.4f}")                 
-            
-            # Determine validation loss for early stopping
-            current_val_loss = val_losses[loss_metric][-1]
-            
-            # Check for improvement and copy model parameters if best
-            improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)
-
-            if improvement > 0:
-                best_model_state = copy_model_parameters(trainer, config_manager)
+        #################### Evaluate during hyperparameter tuning ONLY ####################
+        if not final_model:            
+            # Evaluate periodically
+            if epoch % config_manager.training_config['eval_freq'] == 0 \
+                                                    or epoch == n_epochs - 1:
+                evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_losses)
+                # optionally, estimate V0 and append to validation losses
+                if config_manager.training_config['monitor_v0']:
+                    estimate_v0(trainer, val_starting_states, batch_size, val_losses)
+                    logger.warning(f"Epoch {epoch}: Val mean start state values: {val_losses['v0_mean'][-1]:.4f} ± {val_losses['v0_sem'][-1]:.4f}")                 
                 
-            #  Early stopping - stop training THIS hyperparameter combination
-            if early_stopping['patience_counter'] >= early_stopping['patience']:                
-                logger.warning(f" Early stopping at epoch {epoch}/{n_epochs}")
-                logger.warning(f" Best validation loss: {best_val_loss:.4f}")
-                break
+                # Determine validation loss for early stopping
+                current_val_loss = val_losses[loss_metric][-1]
+                
+                # Check for improvement and copy model parameters if best
+                improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)
+
+                if improvement > 0:
+                    best_model_state = copy_model_parameters(trainer, config_manager)
+                    
+                #  Early stopping - stop training THIS hyperparameter combination
+                if early_stopping['patience_counter'] >= early_stopping['patience']:                
+                    logger.warning(f" Early stopping at epoch {epoch}/{n_epochs}")
+                    logger.warning(f" Best validation loss: {best_val_loss:.4f}")
+
+                    n_epochs = epoch + 1  # Update n_epochs to actual number run
+
+                    break
     
-    # Restore best model state before returning score
-    if best_model_state is not None:
-        restore_model_parameters(trainer, best_model_state, best_val_loss, config_manager)
-          
-    if final_model:
-        epoch_losses = []
-        all_targets = []
-        all_predictions = []
+    ######################### return results if hyperparameter tuning ########################
+    if not final_model:
+        # Restore best model state before returning score
+        if best_model_state is not None:
+            restore_model_parameters(trainer, best_model_state, config_manager)
+            logger.warning(f"    Restored best model (val_loss={best_val_loss:.4f})")
 
-        # Final evaluation on test set
-        for batch_idx, batch in enumerate(val_test_buffer):
-           
-            batch_metrics, targets, predictions = trainer.evaluate(batch)
+        return training_losses, val_losses, n_epochs
 
-            if targets is not None and predictions is not None:
-                all_targets.append(targets.cpu())
-                all_predictions.append(predictions.cpu())
-                
-            epoch_losses.append(batch_metrics)
+    ########################## evaluate on test set after training if final model ##########################
+    # note that results df will be None if no targets/predictions were collected during evaluation (i.e.Q learning)
+    test_losses, results_df = \
+            evaluate_final_model(
+            trainer, 
+            val_test_buffer, 
+            val_test_processor, 
+            config_manager
+        )
+    
+    if config_manager.training_config['monitor_v0']:        
+        estimate_v0(trainer, val_starting_states, batch_size, test_losses)
         
-        test_metrics = average_dicts(epoch_losses)       
+    logger.warning(f"Final test metrics: {test_losses}")
 
-        if config_manager.training_config['monitor_v0']:
-            v0_test, v0_test_sem = trainer.estimate_v0(val_starting_states, batch_size = batch_size)
-            logger.warning(f"Final test mean start state values: {v0_test:.4f} ± {v0_test_sem:.4f}")
-            test_metrics['v0_test_mean'] = float(v0_test)
-            test_metrics['v0_test_sem'] = float(v0_test_sem)
+    # Save final model if this is the final training
+    model_path = Path(config_manager.fold_dir /  "final_model.pt")
+    torch.save(trainer.state_dict(), model_path)
+    logger.warning(f" Final model saved to {model_path}")
 
-        logger.warning(f"Final test metrics: {test_metrics}")
+    # Save test predictions if available
+    if results_df is not None:
+        results_path = Path(config_manager.fold_dir / "test_predictions.parquet")
+        results_df.to_parquet(results_path)
+        logger.warning(f" Test predictions saved to {results_path}\n")       
 
-        # Save final model if this is the final training
-        model_path = Path(config_manager.fold_dir /  "final_model.pt")
-        torch.save(trainer.state_dict(), model_path)
-        logger.warning(f" Final model saved to {model_path}")
-
-        ##### make a dataframe of targets and predictions ####
-        # columns are config_manager.data_config['action_cols']
-        if not all_targets or not all_predictions:
-            logger.warning("No targets or predictions were collected during evaluation.")
-        else:
-            action_cols = train_processor.actions
-
-            pred_cols = [col + "_pred" for col in action_cols]
-
-            # create dataframe using all_targets and all_predictions
-            all_targets = np.vstack(all_targets)
-            all_predictions = np.vstack(all_predictions)
-
-            results_df = pd.DataFrame(
-                data=np.hstack([all_targets, all_predictions]),
-                columns=action_cols + pred_cols
-            )
-
-            results_path = Path(config_manager.fold_dir / "test_predictions.parquet")
-            results_df.to_parquet(results_path)
-            logger.warning(f" Test predictions saved to {results_path}\n")       
-
-        return best_val_loss, training_losses, val_losses, test_metrics
-    
-    else:
-        return best_val_loss, training_losses, val_losses
+    return training_losses, test_losses, n_epochs
 

@@ -156,7 +156,7 @@ def main():
 
         logger.warning(f"Running on {config_manager.environment} environment")
         logger.warning(f"Experiment directory: {config_manager.experiment_dir}")
-        logger.warning(f"Fold directory: {config_manager.fold_dir}")
+        logger.warning(f"Fold directory: {config_manager.fold_dir}\n")
 
         results = outer_training_loop(dataset, config_manager)
 

@@ -178,6 +178,15 @@ class DataProcessor:
         else:
             rewards = pd.Series(0., index=dataset.dataframe.index)
 
+        # mortality needs to be processed as we want to augment transitions with a patient-level label for online analysis
+        non_survival_ids = dataset.dataframe[dataset.dataframe['mortality'] == 1][self.encounter_col].unique()  
+        # create mortality_df
+        mortality_df = dataset.dataframe[[self.encounter_col, 'mortality']]
+        # set mortality for all rows for non_survival_ids to 1
+        mortality_df.loc[mortality_df[self.encounter_col].isin(non_survival_ids), 'mortality'] = 1
+        # create mortality
+        mortality = mortality_df['mortality'].copy()
+
         # Note that terminal rewards must be caculated after we calculate "terminated"
         
         # get the actions and observations
@@ -228,6 +237,9 @@ class DataProcessor:
         observations = observations.drop(index=trajectory_ends)
         actions = actions.drop(index=trajectory_ends)
 
+        # for mortality, we also remove the trajectory ends (could be the starts, doesn't matter, just need the lenght to match)
+        mortality = mortality.drop(index=trajectory_ends)
+
         # for rewards, next_observations, and terminated, we remove the trajectory starts
         rewards = rewards.drop(index=trajectory_starts)
         next_observations = next_observations.drop(index=trajectory_starts)
@@ -243,6 +255,7 @@ class DataProcessor:
         if config_manager.training_config['include_next_actions']:
             next_actions = next_actions.to_numpy()
         terminated = terminated.to_numpy()
+        mortality = mortality.to_numpy()
 
         if config_manager.training_config['include_next_actions']:
             return {
@@ -251,7 +264,8 @@ class DataProcessor:
                 "rewards": rewards,
                 "next_observations": next_observations,
                 "next_actions": next_actions,
-                "terminated": terminated
+                "terminated": terminated,
+                "mortality": mortality
             }
         else:
             return {
@@ -259,7 +273,8 @@ class DataProcessor:
                 "actions": actions,
                 "rewards": rewards,
                 "next_observations": next_observations,
-                "terminated": terminated
+                "terminated": terminated,
+                "mortality": mortality
             }
         
 

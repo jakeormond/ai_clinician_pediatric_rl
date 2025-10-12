@@ -336,6 +336,18 @@ def outer_training_loop(dataset, config_manager):
         with open(config_manager.fold_dir / "config_manager.pkl", "wb") as f:
             pickle.dump(config_manager, f)  
 
+        # create a dictionary to save the scores
+        all_scores = {
+            "inner_training_scores": training_scores,
+            "inner_val_scores": val_scores,
+            "final_training_scores": final_training_scores,
+            "test_scores": test_scores,
+            "best_hyperparameters": best_hyperparameters,
+            "n_epochs": n_epochs
+        }
+        with open(config_manager.fold_dir / "all_scores.pkl", "wb") as f:
+            pickle.dump(all_scores, f)
+
         # save the normalization parameters as a pkl file
         with open(config_manager.fold_dir / "norm_params.pkl", "wb") as f:
             pickle.dump(norm_params, f)        

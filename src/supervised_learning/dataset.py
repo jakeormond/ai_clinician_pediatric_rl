@@ -71,7 +71,9 @@ class Dataset:
         # make list of features
         features = self.features_to_use['feature'].tolist()
 
-        # append terminal reward column if needed, the main reward is handled separately, but within this file
+        ################# WE ACTUALLY NEED TO KEEP MORTALITY FOR ONLINE ANALYSIS DURING TRAINING!!!!!!!!!!!! ################
+        # make sure to handle it correctly in data_processor.py
+        
         if self.model_type == "reinforcement_learning":
             if self.use_terminal_reward:
                 if self.terminal_reward_col not in features:
@@ -124,7 +126,7 @@ class Dataset:
                 'mortality'
             ] = 1
 
-            # print how many encoutner_ids are left, and how many mortality encounter_ids are left
+            # print how many encounter_ids are left, and how many mortality encounter_ids are left
             n_encounter_ids_limited = df_limited[self.encounter_col].nunique()
             n_mortality_encounter_ids_limited = df_limited[df_limited['mortality'] == 1][self.encounter_col].nunique()
             print(f"After truncating, {n_encounter_ids_limited} encounter IDs remain, "

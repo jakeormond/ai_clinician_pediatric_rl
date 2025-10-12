@@ -28,6 +28,7 @@ class RLDataset(Dataset):
         if "next_actions" in rl_dataset:
             self.next_actions = torch.tensor(rl_dataset["next_actions"], dtype=torch.float32)
         self.dones = torch.tensor(rl_dataset["terminated"], dtype=torch.float32)
+        self.mortality = torch.tensor(rl_dataset["mortality"], dtype=torch.float32)
 
 
     def __len__(self) -> int:
@@ -42,6 +43,7 @@ class RLDataset(Dataset):
                 self.next_states[idx],
                 self.next_actions[idx],
                 self.dones[idx],
+                self.mortality[idx]
             ]
         else:
             return [
@@ -50,9 +52,10 @@ class RLDataset(Dataset):
                 self.rewards[idx],
                 self.next_states[idx],
                 self.dones[idx],
+                self.mortality[idx]
             ]
     
-
+############# this is unused!!!!
 class ReplayBuffer:
     def __init__(
         self,

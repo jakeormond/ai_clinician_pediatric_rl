@@ -93,7 +93,7 @@ class Q_Learner(object):
         self.total_it += 1
 
         # sample the replay buffer
-        state, action, reward, next_state, next_action, done = TrainerUtils._unpack_batch(batch, self.device)
+        state, action, reward, next_state, next_action, done, _ = TrainerUtils._unpack_batch(batch, self.device)
         not_done = 1 - done
 
         # compute the target Q value
@@ -130,7 +130,7 @@ class Q_Learner(object):
     def evaluate(self, batch: TensorBatch) -> Dict[str, float]:
         self.critic.eval()  # Ensure critic is also in eval mode
         
-        state, action, reward, next_state, next_action, done = TrainerUtils._unpack_batch(batch, self.device)
+        state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
         not_done = 1 - done
 
         with torch.no_grad():
@@ -140,9 +140,15 @@ class Q_Learner(object):
             # Get current Q estimates
             current_Q1, current_Q2 = self.critic(state, action)
 
+            # create current_Q as the mean of current_Q1 and current_Q2
+            current_Q = (current_Q1 + current_Q2) / 2.0
+            # calculate the survival_Q and non_survival_Q as the mean of current_Q where mortality is 0 and 1 respectively
+            survival_Q = current_Q[mortality == 0].mean().item() if (mortality == 0).any() else float('nan')
+            non_survival_Q = current_Q[mortality == 1].mean().item() if (mortality == 1).any() else float('nan')
+            
             # Compute critic loss
             critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
-            log_dict = {"critic_loss": critic_loss.item()}
+            log_dict = {"critic_loss": critic_loss.item(), "survival_Q": survival_Q, "non_survival_Q": non_survival_Q}
         
         return log_dict, None, None
 	

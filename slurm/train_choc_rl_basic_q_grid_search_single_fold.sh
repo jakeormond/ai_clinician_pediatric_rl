@@ -9,10 +9,10 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=64G
 #SBATCH --time=08:00:00
-#SBATCH --partition=normal
-#SBATCH --gres=gpu:l40:1     
-# #SBATCH --partition=GPU
-# #SBATCH --gres=gpu:h100:1     
+# #SBATCH --partition=normal
+# #SBATCH --gres=gpu:l40:1     
+#SBATCH --partition=GPU
+#SBATCH --gres=gpu:h100:1     
 #SBATCH --mail-type=END,FAIL        # Email notifications
 #SBATCH --mail-user=j.ormond@imperial.ac.uk
 
@@ -73,7 +73,7 @@ python -m src.scripts.rl.reinforcement_learning \
     --search_variant random_search \
     --n_search_iterations 5 \
     --n_epochs 1000 \
-    --action_mode binary_only \
+    --action_mode continuous_only \
     --start_time $START_TIME 
 
 exit_code=$?

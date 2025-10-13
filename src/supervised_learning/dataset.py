@@ -3,6 +3,9 @@ import pandas as pd
 import copy
 import numpy as np
 
+import logging
+logger = logging.getLogger(__name__)
+
 # this class holds the complete dataset, the folds can 
 # access the data they need using the encounter IDs
 # and the methods in this class
@@ -36,7 +39,7 @@ class Dataset:
         filename = f"{load_df_filename}_prop_{proportion_w_data}.parquet"
         path = config.get_experiments_dir + "/" + filename
         self.dataframe.to_parquet(path, index=False)
-        print(f"DataFrame saved to {path}")
+        logger.info(f"DataFrame saved to {path}")
 
 
     def _load_dataset(self, drop_actions):
@@ -94,16 +97,16 @@ class Dataset:
         n_encounter_ids_after = self.dataframe[self.encounter_col].nunique()
         n_rows_after = self.dataframe.shape[0]
 
-        print(f"Removed {n_encounter_ids_before - n_encounter_ids_after} "
+        logger.info(f"Removed {n_encounter_ids_before - n_encounter_ids_after} "
                 f"encounter IDs and {n_rows_before - n_rows_after} rows with NaN values.")
-        print(f"Remaining encounter IDs: {n_encounter_ids_after}, Remaining rows: {n_rows_after}")     
+        logger.info(f"Remaining encounter IDs: {n_encounter_ids_after}, Remaining rows: {n_rows_after}")     
 
         if self.truncate_trajectories:
             
             min_traj_len = self.min_traj_len
             max_trajectory_length = self.max_trajectory_length
             
-            print("Truncating trajectories..."
+            logger.info("Truncating trajectories..."
                   f" to a maximum length of {max_trajectory_length} and a minimum length of {min_traj_len}.")
 
             # identify encounter_ids with mortality == 1
@@ -126,10 +129,10 @@ class Dataset:
                 'mortality'
             ] = 1
 
-            # print how many encounter_ids are left, and how many mortality encounter_ids are left
+            # logger.info how many encounter_ids are left, and how many mortality encounter_ids are left
             n_encounter_ids_limited = df_limited[self.encounter_col].nunique()
             n_mortality_encounter_ids_limited = df_limited[df_limited['mortality'] == 1][self.encounter_col].nunique()
-            print(f"After truncating, {n_encounter_ids_limited} encounter IDs remain, "
+            logger.info(f"After truncating, {n_encounter_ids_limited} encounter IDs remain, "
                   f"of which {n_mortality_encounter_ids_limited} have mortality == 1.")
 
             self.dataframe = df_limited.copy()
@@ -178,7 +181,7 @@ class Dataset:
 
         # find the encounter_ids that have target_data equal to 1
         target_encounter_ids = self.dataframe[self.dataframe[self.target_col] == 1][self.encounter_col].unique()
-        print(f"Found {len(target_encounter_ids)} encounter IDs with target_data = 1")
+        logger.info(f"Found {len(target_encounter_ids)} encounter IDs with target_data = 1")
         
         # get the surviving encounter_ids
         surviving_encounter_ids = set(encounter_ids) - set(target_encounter_ids)

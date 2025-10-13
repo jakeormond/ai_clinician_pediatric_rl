@@ -71,7 +71,7 @@ python -m src.scripts.rl.reinforcement_learning \
     --fold 0 \
     --experiment_variant standard \
     --search_variant random_search \
-    --n_search_iterations 1 \
+    --n_search_iterations 5 \
     --n_epochs 1000 \
     --action_mode continuous_only \
     --start_time $START_TIME 

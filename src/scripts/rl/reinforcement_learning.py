@@ -31,7 +31,7 @@ TensorBatch = List[torch.Tensor]
 logger = logging.getLogger(__name__)
 
 def setup_logger(verbose=False):
-    level = logging.INFO if verbose else logging.WARNING
+    level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
         format="%(asctime)s | %(levelname)s | %(message)s",
@@ -142,11 +142,11 @@ def main():
         # load data. Note that features, actions, and rewards can be used immediately for xgboost,
         # but require further processing for RL. 
         dataset = Dataset(config_manager.data_config)
-        logger.warning(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
+        logger.info(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
 
         if config_manager.testing:
             dataset = dataset.subsample_dataset(0.1)
-            logger.Warning(f"Subsampled dataset to {len(dataset.dataframe)} rows for testing")            
+            logger.info(f"Subsampled dataset to {len(dataset.dataframe)} rows for testing")            
 
         # Initialize W&B - will implement later
         # log_fold_results_to_wandb(results)
@@ -154,17 +154,17 @@ def main():
         # load training config
         config_manager.set_training_config() # based on model type 
 
-        logger.warning(f"Running on {config_manager.environment} environment")
-        logger.warning(f"Experiment directory: {config_manager.experiment_dir}")
-        logger.warning(f"Fold directory: {config_manager.fold_dir}\n")
+        logger.info(f"Running on {config_manager.environment} environment")
+        logger.info(f"Experiment directory: {config_manager.experiment_dir}")
+        logger.info(f"Fold directory: {config_manager.fold_dir}\n")
 
         results = outer_training_loop(dataset, config_manager)
 
         # LOG TO W&B in main script
         # log_fold_results_to_wandb(results)
 
-        logger.warning(f"Fold {args.fold} completed successfully")
-        logger.warning(f"Test metrics: {results}")
+        logger.info(f"Fold {args.fold} completed successfully")
+        logger.info(f"Test metrics: {results}")
         
         if wandb.run is not None:
             wandb.finish()

@@ -1,7 +1,7 @@
 #!/bin/bash
 # slurm/train_choc_rl_bc_grid_search_single_fold.sh
 
-#SBATCH --job-name=choc_rl_td3_bc
+#SBATCH --job-name=choc_rl_basic_q
 #SBATCH --output=slurm/logs/%x_%j.out
 #SBATCH --error=slurm/logs/%x_%j.err
 #SBATCH --nodes=1
@@ -71,7 +71,7 @@ python -m src.scripts.rl.reinforcement_learning \
     --fold 0 \
     --experiment_variant standard \
     --search_variant random_search \
-    --n_search_iterations 5 \
+    --n_search_iterations 1 \
     --n_epochs 1000 \
     --action_mode continuous_only \
     --start_time $START_TIME 

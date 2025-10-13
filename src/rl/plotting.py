@@ -77,19 +77,31 @@ def plot_Q_by_mortality(val_scores, test_scores, outer_fold, config_manager):
     # create a figure with n_subplots subplots
     plt.figure(figsize=(15, 5))
 
+    # determine the maximum length of epochs across all folds, as well as the value of the final
+    # epoch for the longest fold
+    max_epoch = max(val_scores[fold]['epoch'][-1] for fold in range(n_folds))
     max_length = max(len(val_scores[fold]['epoch']) for fold in range(n_folds))
 
-    survival_Q_array = np.full((n_folds, max_length), np.nan)
-    non_survival_Q_array = np.full((n_folds, max_length), np.nan)
+    # create a vector from 0 to max_epoch
+    epochs = np.arange(0, max_epoch + 1)
+
+    survival_Q_array = np.full((n_folds, len(epochs)), np.nan)
+    non_survival_Q_array = np.full((n_folds, len(epochs)), np.nan)
 
     for fold in range(n_folds):
-        epochs = val_scores[fold]['epoch'] if len(val_scores[fold]['epoch']) == max_length else None            
+        epochs_fold = val_scores[fold]['epoch']           
         survival_Q = val_scores[fold]['survival_Q']
         non_survival_Q = val_scores[fold]['non_survival_Q']
-        survival_Q_array[fold, :] = survival_Q
-        non_survival_Q_array[fold, :] = non_survival_Q
-    
+
+        survival_Q_array[fold, epochs_fold] = survival_Q
+        non_survival_Q_array[fold, epochs_fold] = non_survival_Q 
+       
     epochs = [epoch+1 for epoch in epochs]
+
+    mask = ~np.all(np.isnan(survival_Q_array), axis=0)
+    survival_Q_array = survival_Q_array[:, mask]
+    non_survival_Q_array = non_survival_Q_array[:, mask]
+    epochs = np.array(epochs)[mask]
 
     min_survival_Q = np.nanmin(survival_Q_array, axis=0)
     max_survival_Q = np.nanmax(survival_Q_array, axis=0)
@@ -100,10 +112,10 @@ def plot_Q_by_mortality(val_scores, test_scores, outer_fold, config_manager):
     mean_non_survival_Q = np.nanmean(non_survival_Q_array, axis=0)
 
     plt.fill_between(epochs, min_survival_Q, max_survival_Q, color=plt.cm.Blues(0.6), alpha=0.25, edgecolor=None)
-    plt.plot(epochs, mean_survival_Q, color=plt.cm.Blues(0.9), linewidth=2, label='Training Loss - Mean')
+    plt.plot(epochs, mean_survival_Q, color=plt.cm.Blues(0.9), linewidth=2, label='Val survival_Q - Mean')
 
     plt.fill_between(epochs, min_non_survival_Q, max_non_survival_Q, color=plt.cm.Oranges(0.6), alpha=0.25, edgecolor=None)
-    plt.plot(epochs, mean_non_survival_Q, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss - Mean')
+    plt.plot(epochs, mean_non_survival_Q, color=plt.cm.Oranges(0.9), linewidth=2, label='Val non_survival_Q - Mean')
 
     plt.axhline(y=test_scores['survival_Q'], color='blue', linestyle='--', linewidth=2, label='Test survival_Q')
     plt.axhline(y=test_scores['non_survival_Q'], color='orange', linestyle='--', linewidth=2, label='Test non_survival_Q')

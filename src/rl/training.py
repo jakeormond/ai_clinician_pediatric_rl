@@ -33,7 +33,7 @@ from .replay_buffer import ReplayBuffer, RLDataset
 from .models.behavioural_cloning import keep_best_trajectories, keep_positive_trajectories
 from .models.td3_bc import TD3_BC
 from ..utils.utilities import set_seed
-from .plotting import plot_losses
+from .plotting import plot_losses, plot_Q_by_mortality
 
 import logging
 logger = logging.getLogger(__name__)
@@ -331,6 +331,11 @@ def outer_training_loop(dataset, config_manager):
         
         # PLOT THE TRAINING AND VALIDATION LOSSES
         plot_losses(training_scores, val_scores, test_scores, outer_fold, config_manager)
+
+        # if "survival_Q" in test_scores, plot it
+        if "survival_Q" in test_scores:
+            plot_Q_by_mortality(val_scores, test_scores, outer_fold, config_manager)
+
         
         # save the configuration_manager
         with open(config_manager.fold_dir / "config_manager.pkl", "wb") as f:

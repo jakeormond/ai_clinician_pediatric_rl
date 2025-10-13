@@ -68,3 +68,62 @@ def plot_losses(training_scores, val_scores, test_scores, outer_fold, config_man
     plots_path = Path(config_manager.fold_dir) / f"fold_{outer_fold}_loss_plot.png"
     plt.savefig(plots_path)
     plt.close()
+
+    
+def plot_Q_by_mortality(val_scores, test_scores, outer_fold, config_manager):
+
+    n_folds = len(val_scores)
+
+    # create a figure with n_subplots subplots
+    plt.figure(figsize=(15, 5))
+
+    max_length = max(len(val_scores[fold]['epoch']) for fold in range(n_folds))
+
+    survival_Q_array = np.full((n_folds, max_length), np.nan)
+    non_survival_Q_array = np.full((n_folds, max_length), np.nan)
+
+    for fold in range(n_folds):
+        epochs = val_scores[fold]['epoch'] if len(val_scores[fold]['epoch']) == max_length else None            
+        survival_Q = val_scores[fold]['survival_Q']
+        non_survival_Q = val_scores[fold]['non_survival_Q']
+        survival_Q_array[fold, :] = survival_Q
+        non_survival_Q_array[fold, :] = non_survival_Q
+    
+    epochs = [epoch+1 for epoch in epochs]
+
+    min_survival_Q = np.nanmin(survival_Q_array, axis=0)
+    max_survival_Q = np.nanmax(survival_Q_array, axis=0)
+    mean_survival_Q = np.nanmean(survival_Q_array, axis=0)
+
+    min_non_survival_Q = np.nanmin(non_survival_Q_array, axis=0)
+    max_non_survival_Q = np.nanmax(non_survival_Q_array, axis=0)
+    mean_non_survival_Q = np.nanmean(non_survival_Q_array, axis=0)
+
+    plt.fill_between(epochs, min_survival_Q, max_survival_Q, color=plt.cm.Blues(0.6), alpha=0.25, edgecolor=None)
+    plt.plot(epochs, mean_survival_Q, color=plt.cm.Blues(0.9), linewidth=2, label='Training Loss - Mean')
+
+    plt.fill_between(epochs, min_non_survival_Q, max_non_survival_Q, color=plt.cm.Oranges(0.6), alpha=0.25, edgecolor=None)
+    plt.plot(epochs, mean_non_survival_Q, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss - Mean')
+
+    plt.axhline(y=test_scores['survival_Q'], color='blue', linestyle='--', linewidth=2, label='Test survival_Q')
+    plt.axhline(y=test_scores['non_survival_Q'], color='orange', linestyle='--', linewidth=2, label='Test non_survival_Q')
+
+    plt.xlabel('Epochs')
+    plt.ylabel('Q value')
+    plt.xticks(np.arange(1, epochs[-1] + 1, step=5))
+    plt.xlim(0.5, np.max(epochs))
+    plt.title(f'Fold {outer_fold+1} - Q values by Mortality over Epochs')
+    plt.grid(True)
+    plt.legend(
+        loc='upper left',
+        facecolor='white',  # solid white background
+        framealpha=1,
+        edgecolor='lightgray',
+        bbox_to_anchor=(0.02, 0.98),
+        fontsize=10,
+    )
+
+    # Save the plot
+    plots_path = Path(config_manager.fold_dir) / f"fold_{outer_fold}_Q_by_mortality_plot.png"
+    plt.savefig(plots_path)
+    plt.close()

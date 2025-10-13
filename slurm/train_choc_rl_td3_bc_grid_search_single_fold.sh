@@ -74,7 +74,6 @@ python -m src.scripts.rl.reinforcement_learning \
     --n_search_iterations 5 \
     --n_epochs 1000 \
     --action_mode binary_only \
-    --testing false \
     --start_time $START_TIME 
 
 exit_code=$?

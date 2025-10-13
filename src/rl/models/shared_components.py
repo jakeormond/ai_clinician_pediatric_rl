@@ -9,13 +9,15 @@ class TrainerUtils:
     @staticmethod
     def _unpack_batch(batch: List[torch.Tensor], device: str) -> Tuple[torch.Tensor, ...]:
         """Unpacks a batch and moves tensors to specified device."""
-        if len(batch) == 6: # for basic_q (SARSA)
-            state, action, reward, next_state, next_action, done = batch
+        if len(batch) == 7: # for basic_q (SARSA)
+            state, action, reward, next_state, next_action, done, mortality = batch
             # unsqueeze reward and done if necessary
             if reward.dim() == 1:
                 reward = reward.unsqueeze(1)
             if done.dim() == 1:
                 done = done.unsqueeze(1)
+            if mortality.dim() == 1:
+                mortality = mortality.unsqueeze(1)
             
             state = state.to(device)
             action = action.to(device)
@@ -23,24 +25,28 @@ class TrainerUtils:
             next_state = next_state.to(device)
             next_action = next_action.to(device)
             done = done.to(device)
+            mortality = mortality.to(device)
             
-            return state, action, reward, next_state, next_action, done
+            return state, action, reward, next_state, next_action, done, mortality
         else:
-            state, action, reward, next_state, done = batch
+            state, action, reward, next_state, done, mortality = batch
 
             # unsqueeze reward and done if necessary
             if reward.dim() == 1:
                 reward = reward.unsqueeze(1)
             if done.dim() == 1:
                 done = done.unsqueeze(1)
+            if mortality.dim() == 1:
+                mortality = mortality.unsqueeze(1)
             
             state = state.to(device)
             action = action.to(device)
             reward = reward.to(device)
             next_state = next_state.to(device)
             done = done.to(device)
+            mortality = mortality.to(device)
             
-            return state, action, reward, next_state, done
+            return state, action, reward, next_state, done, mortality
 
     @staticmethod
     def _compute_binary_loss(binary_predictions: torch.Tensor, binary_targets: torch.Tensor) -> torch.Tensor:

@@ -23,9 +23,6 @@ class Dataset:
         if config['model_type'] == 'supervised_learning' and transform_target: # this is generally used for supervised learning, so gets
             self._transform_target() 
 
-        if self.use_reward:
-            self._load_reward()
-
 
     def save_dataframe(self, config):
 
@@ -100,6 +97,9 @@ class Dataset:
         logger.info(f"Removed {n_encounter_ids_before - n_encounter_ids_after} "
                 f"encounter IDs and {n_rows_before - n_rows_after} rows with NaN values.")
         logger.info(f"Remaining encounter IDs: {n_encounter_ids_after}, Remaining rows: {n_rows_after}")     
+
+        if self.use_reward:
+            self._load_reward()
 
         if self.truncate_trajectories:
             

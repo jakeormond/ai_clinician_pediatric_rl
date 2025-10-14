@@ -79,6 +79,23 @@
         },
 
         {
+            "name": "reward_analysis",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.rl.reinforcement_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "reinforcement_learning",
+                "--model_type", "reward_analysis", 
+                "--mode", "analysis", 
+                "--search_variant", "random_search",
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
             "name": "basic_q",
             "type": "debugpy",
             "request": "launch",

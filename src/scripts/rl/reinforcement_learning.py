@@ -20,11 +20,12 @@ from ...config_manager import ConfigManager  # Import the config manager
 from ...supervised_learning.dataset import Dataset
 from ...utils.logging_utilities import wandb_init  # Add this import
 
+
 # from src.data.data_processor import DataProcessor
 # from src.rl.replay_buffer import ReplayBuffer
 
 from ...rl.training import outer_training_loop
-
+from ...analyse_input_features.analyse_health_score import analyse_health_score
 
 TensorBatch = List[torch.Tensor]
 
@@ -53,11 +54,11 @@ def parse_arguments():
     
     parser.add_argument('--model_type', 
                         default='any_percent_bc', 
-                        choices=['any_percent_bc', 'td3_bc', 'basic_q'], 
+                        choices=['any_percent_bc', 'td3_bc', 'basic_q', 'reward_analysis'], 
                         help='Model type to train (default: any_percent_bc)') 
 
     parser.add_argument('--mode', type=str, default='single_fold',
-                        choices=['single_fold', 'aggregate'],
+                        choices=['single_fold', 'aggregate', 'analysis'],
                         help='Mode of training: single_fold or aggregate (default: single_fold)')
     
     # mode-specific arguments    
@@ -168,6 +169,20 @@ def main():
         
         if wandb.run is not None:
             wandb.finish()
+    
+    elif args.mode == "analysis":
+        dataset = Dataset(config_manager.data_config)
+        logger.info(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
+
+        config_manager.set_training_config() # based on model type 
+
+        # set config_manager.experiment_dir as "reward_analysis" within the experiments dir
+        config_manager.experiment_dir = os.path.join(config_manager.paths['experiments_dir'], "reward_analysis")
+
+        logger.info(f"Running on {config_manager.environment} environment")
+        logger.info(f"Experiment directory: {config_manager.experiment_dir}")
+        
+        analyse_health_score(dataset, config_manager)
 
     
 if __name__ == "__main__":

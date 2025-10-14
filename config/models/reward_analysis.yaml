@@ -1,0 +1,10 @@
+# this is for analysing the intermediate rewards generated from the health score
+    project: "AI_Clininician"
+    "group": "reinforcement_learning"
+    name: "reward_analysis"
+   
+    discount: 0.99  # Discount factor
+    
+   
+   
+

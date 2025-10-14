@@ -24,7 +24,7 @@ normalize_actions: True # NOTE: we are not currently set up to use
 normalize_obs: True
 
 # reward is stored in the experiments dir, and the path is specified in config/rewards/reward_paths.yaml
-use_reward: False
+use_reward: True
 reward_type: "xgbclassifier_discharge_mortality" # if no reward, set to "none"
 reward_col: "health_score" # this is the name of the column in the reward file that has the reward values
 flip_reward: False
@@ -33,7 +33,7 @@ scale_reward: 100.0
 reward_lower_percentile: 1 # for clipping rewards
 reward_upper_percentile: 99
 
-use_terminal_reward: True
+use_terminal_reward: False
 terminal_reward_col: "mortality" # other wise make False
 flip_terminal_reward: True # mortality needs to be flipped so that death = -1
 offset_terminal_reward: 0.0
@@ -45,4 +45,4 @@ features_to_drop: [] # we should never drop mortality, since we need it for eval
 # truncate trajectories
 truncate_trajectories: True
 min_traj_len: 72  # in hours
-max_traj_length: 200 # in hours
+max_traj_length: 72 # in hours

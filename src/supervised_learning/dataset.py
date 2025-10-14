@@ -114,7 +114,11 @@ class Dataset:
             mortality_encounter_ids = self.dataframe[self.dataframe['mortality'] == 1][self.encounter_col].unique()
             
             # truncate each trajectory (identified by encounter_id) to max_trajectory_length
-            df_limited = self.dataframe.groupby(self.encounter_col).head(max_traj_length).reset_index(drop=True)
+            if self.truncate_from == "start":
+                # keep the last max_traj_length rows for each encounter_id
+                df_limited = self.dataframe.groupby(self.encounter_col).tail(max_traj_length).reset_index(drop=True)
+            else:
+                df_limited = self.dataframe.groupby(self.encounter_col).head(max_traj_length).reset_index(drop=True)
 
             # get the lengths of each trajectory (identified by encounter_id)
             traj_lengths = df_limited.groupby(self.encounter_col).size()

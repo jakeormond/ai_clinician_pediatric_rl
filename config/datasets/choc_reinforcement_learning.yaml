@@ -37,7 +37,7 @@ use_terminal_reward: True
 terminal_reward_col: "mortality" # other wise make False
 flip_terminal_reward: True # mortality needs to be flipped so that death = -1
 offset_terminal_reward: 0.0
-scale_terminal_reward: 1.0
+scale_terminal_reward: 100.0
 
 # features_to_drop: ["mortality"]
 features_to_drop: [] # we should never drop mortality, since we need it for evaluation even if we don't use it for reward
@@ -45,4 +45,4 @@ features_to_drop: [] # we should never drop mortality, since we need it for eval
 # truncate trajectories
 truncate_trajectories: True
 min_traj_len: 48  # in hours
-max_trajectory_length: 1000 # in hours
+max_traj_length: 1000 # in hours

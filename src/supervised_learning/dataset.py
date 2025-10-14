@@ -104,7 +104,7 @@ class Dataset:
         if self.truncate_trajectories:
             
             min_traj_len = self.min_traj_len
-            max_trajectory_length = self.max_trajectory_length
+            max_traj_length = self.max_traj_length
             
             logger.info("Truncating trajectories..."
                   f" to a maximum length of {max_trajectory_length} and a minimum length of {min_traj_len}.")

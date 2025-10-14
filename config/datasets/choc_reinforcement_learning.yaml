@@ -45,4 +45,4 @@ features_to_drop: [] # we should never drop mortality, since we need it for eval
 # truncate trajectories
 truncate_trajectories: True
 min_traj_len: 72  # in hours
-max_traj_length: 500 # in hours
+max_traj_length: 200 # in hours

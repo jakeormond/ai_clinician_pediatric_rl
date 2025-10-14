@@ -271,6 +271,9 @@ def restore_model_parameters(trainer, best_model_state, config_manager):
 def outer_training_loop(dataset, config_manager): 
     """Runs single outer fold - designed for HPC job array."""
     
+    logger.info("Starting outer training loop...")
+    logger.info("Discount set to: " + str(config_manager.training_config['discount']))
+
     # Get CV configuration
     n_outer_folds = config_manager.cv_config["n_outer_folds"]
     n_inner_folds = config_manager.cv_config["n_inner_folds"]

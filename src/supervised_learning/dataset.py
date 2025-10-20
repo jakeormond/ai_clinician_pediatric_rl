@@ -290,6 +290,7 @@ class Dataset:
         """
         subset = copy.deepcopy(self)
         subset.dataframe = subset.dataframe[self.dataframe[self.encounter_col].isin(encounter_ids)].copy()
+        subset.dataframe = subset.dataframe.reset_index(drop=True)
         return subset
     
     def subsample_dataset(self, fraction):

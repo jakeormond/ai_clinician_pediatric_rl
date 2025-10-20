@@ -35,14 +35,14 @@ export WANDB_MODE=offline
 export WANDB_DIR=/home/38/bt310238/wandb
 
 # Navigate to project directory
-cd /home/38/bt310238/code/ai_clinician_pediatric_rl
+cd /groups/a-faisal/jakeormond/code/ai_clinician_pediatric_rl
 
 # Create logs directory
 mkdir -p slurm/logs
 
 # Activate conda environment
 eval "$(conda shell.bash hook)"
-conda activate rl_env
+conda /groups/a-faisal/jakeormond/.conda/envs/rl_env
 
 # Print job information
 echo "========================================="

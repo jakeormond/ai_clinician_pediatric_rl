@@ -410,15 +410,20 @@ def optimize_hyperparameters(train_dataset, config_manager,
         logger.info(f"Testing hyperparameters {i+1}/{config_manager.n_search_iterations}: {current_params}")
         
         # create storage for validation, training scores, and n_epochs
-        inner_training_scores = [None] * n_inner_folds
-        inner_val_scores = [None] * n_inner_folds
-        inner_n_epochs = [None] * n_inner_folds        
+        n_inner_folds_to_run = config_manager.cv_config.get('n_inner_to_run', n_inner_folds)
+        inner_training_scores = [None] * n_inner_folds_to_run
+        inner_val_scores = [None] * n_inner_folds_to_run
+        inner_n_epochs = [None] * n_inner_folds_to_run        
 
         ################# Inner CV evaluation for testing hyperparameters #################       
         kf_inner = KFold(n_splits=n_inner_folds, shuffle=True, 
                          random_state=config_manager.data_config["seed"])        
         
         for inner_fold, (inner_train_id, inner_val_id) in enumerate(kf_inner.split(train_dataset.encounter_ids())):
+            if inner_fold >= config_manager.cv_config.get('n_inner_to_run', n_inner_folds):
+                logger.info(f"  Skipping inner fold {inner_fold+1} as per n_inner_to_run setting.")
+                continue  # Skip extra inner folds if specified
+            
             logger.info(f"  Inner fold {inner_fold+1}/{n_inner_folds}")
             
             # create train and val processors with shared normalization

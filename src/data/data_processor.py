@@ -225,6 +225,10 @@ class DataProcessor:
                     start_index = start_indices[i]
                     end_index = reward[0]
                     inc_reward = reward[1] / (end_index - start_index)
+                    
+                    # clip rewards to -.1 and .1 to avoid extreme outliers
+                    inc_reward = np.clip(inc_reward, -0.1, 0.1)
+                    
                     # set rewards between start_index and end_index to inc_reward
                     terminal_rewards.loc[start_index:end_index] = inc_reward
 

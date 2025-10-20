@@ -44,7 +44,7 @@ make_terminal_incremental: True
 features_to_drop: [] # we should never drop mortality, since we need it for evaluation even if we don't use it for reward
 
 # truncate trajectories
-truncate_trajectories: False
+truncate_trajectories: True
 truncate_from: "start" # "start" or "end"
 min_traj_len: 72  # in hours
 max_traj_length: 72 # in hours

@@ -37,7 +37,7 @@ use_terminal_reward: True
 terminal_reward_col: "mortality" # other wise make False
 flip_terminal_reward: True # mortality needs to be flipped so that death = -1
 offset_terminal_reward: 0.0
-scale_terminal_reward: 1000.0
+scale_terminal_reward: 100.0
 make_terminal_incremental: True
 
 # features_to_drop: ["mortality"]

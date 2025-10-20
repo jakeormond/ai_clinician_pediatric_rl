@@ -216,12 +216,12 @@ class DataProcessor:
             if self.scale_terminal_reward:
                 terminal_rewards = terminal_rewards * self.scale_terminal_reward
             if self.make_terminal_incremental:
-                rewards = terminal_rewards[terminal_rewards != 0]
-                start_indices = rewards.index + 1
+                individual_rewards = terminal_rewards[terminal_rewards != 0]
+                start_indices = individual_rewards.index + 1
                 # concatenate a zeo at the start of start_indices and remove the last index
                 start_indices = pd.Index([0]).append(start_indices[:-1])
 
-                for i, reward in enumerate(rewards.items()):
+                for i, reward in enumerate(individual_rewards.items()):
                     start_index = start_indices[i]
                     end_index = reward[0]
                     inc_reward = reward[1] / (end_index - start_index)

@@ -133,13 +133,23 @@ class Q_Learner(object):
 
             # create current_Q as the mean of current_Q1 and current_Q2
             current_Q = (current_Q1 + current_Q2) / 2.0
-            # calculate the survival_Q and non_survival_Q as the mean of current_Q where mortality is 0 and 1 respectively
+            mean_Q = current_Q.mean().item()
+            variance_Q = current_Q.var().item()
+            batch_n = current_Q.shape[0]
+            
+            # calculate the survival_Q and non_survival_Q as the mean of current_Q where mortality is 0 and 1 respectively            
             survival_Q = current_Q[mortality == 0].mean().item() if (mortality == 0).any() else float('nan')
+            survival_variance_Q = current_Q[mortality == 0].var().item() if (mortality == 0).any() else float('nan')
+            survival_n = (mortality == 0).sum().item()
             non_survival_Q = current_Q[mortality == 1].mean().item() if (mortality == 1).any() else float('nan')
+            non_survival_variance_Q = current_Q[mortality == 1].var().item() if (mortality == 1).any() else float('nan')
+            non_survival_n = (mortality == 1).sum().item()
             
             # Compute critic loss
             critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
-            log_dict = {"critic_loss": critic_loss.item(), "survival_Q": survival_Q, "non_survival_Q": non_survival_Q}
+            log_dict = {"critic_loss": critic_loss.item(), "batch_n": batch_n, "mean_Q": mean_Q, "variance_Q": variance_Q, 
+                        "survival_n": survival_n, "survival_Q": survival_Q, "survival_variance_Q": survival_variance_Q,
+                        "non_survival_n": non_survival_n, "non_survival_Q": non_survival_Q, "non_survival_variance_Q": non_survival_variance_Q}
         
         return log_dict, None, None
 	

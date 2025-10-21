@@ -166,6 +166,58 @@ def estimate_v0(trainer, starting_states, batch_size, losses_dict):
         losses_dict['v0_sem'].append(float(v0_sem))
 
 
+
+def calculate_q_stats(losses_dict):
+    # calculate q value stats if available
+    mean_Qs = losses_dict["mean_Q"]
+    variance_Qs = losses_dict["variance_Q"]
+    counts_all = losses_dict["batch_n"]
+
+    overall_mean_Q = np.sum(np.array(mean_Qs) * np.array(counts_all)) / np.sum(counts_all)
+    overall_variance_Q = np.sum(counts_all * (variance_Qs + np.array(mean_Qs - overall_mean_Q)**2)) / np.sum(counts_all)
+    overall_std_Q = np.sqrt(overall_variance_Q)
+
+    mean_survival_Qs = losses_dict["survival_Q"]
+    variance_survival_Qs = losses_dict["survival_variance_Q"]
+    counts_survival = losses_dict["survival_n"]
+
+    overall_mean_survival_Q = np.sum(np.array(mean_survival_Qs) * np.array(counts_survival)) / np.sum(counts_survival)
+    overall_variance_survival_Q = np.sum(counts_survival * (variance_survival_Qs + np.array(mean_survival_Qs - overall_mean_survival_Q)**2)) / np.sum(counts_survival)
+    overall_std_survival_Q = np.sqrt(overall_variance_survival_Q)
+
+    mean_non_survival_Qs = losses_dict["non_survival_Q"]
+    variance_non_survival_Qs = losses_dict["non_survival_variance_Q"]
+    counts_non_survival = losses_dict["non_survival_n"]
+
+    overall_mean_non_survival_Q = np.sum(np.array(mean_non_survival_Qs) * np.array(counts_non_survival)) / np.sum(counts_non_survival)
+    overall_variance_non_survival_Q = np.sum(counts_non_survival * (variance_non_survival_Qs + np.array(mean_non_survival_Qs - overall_mean_non_survival_Q)**2)) / np.sum(counts_non_survival)
+    overall_std_non_survival_Q = np.sqrt(overall_variance_non_survival_Q)
+
+    survival_non_survival_diff = overall_mean_survival_Q - overall_mean_non_survival_Q
+    survival_non_survival_snr = survival_non_survival_diff**2/(0.5*(overall_variance_survival_Q + overall_variance_non_survival_Q))
+
+    # create a dictionary of these values 
+    q_stats = {
+        "mean_Q": overall_mean_Q,
+        "std_Q": overall_std_Q,
+        "mean_survival_Q": overall_mean_survival_Q,
+        "std_survival_Q": overall_std_survival_Q,
+        "mean_non_survival_Q": overall_mean_non_survival_Q,
+        "std_non_survival_Q": overall_std_non_survival_Q,
+        "survival_non_survival_diff": survival_non_survival_diff,
+        "survival_non_survival_snr": survival_non_survival_snr
+    }
+
+    # drop q keys from losses
+    for key in ["mean_Q", "variance_Q", "batch_n",
+                "survival_Q", "survival_variance_Q", "survival_n",
+                "non_survival_Q", "non_survival_variance_Q", "non_survival_n"]:
+        losses_dict.pop(key, None)
+
+
+    return q_stats, losses_dict
+
+
 def evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_losses):
     
     epoch_val_losses = defaultdict(list)
@@ -180,6 +232,10 @@ def evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_lo
         for key, value in batch_losses.items():
             epoch_val_losses[key].append(value)
                      
+    # calculate q value stats if available
+    if "mean_Q" in epoch_val_losses:
+        q_stats, epoch_val_losses = calculate_q_stats(epoch_val_losses)
+
     # Calculate average validation losses for this epoch
     epoch_val_avg = {key: np.mean(values) for key, values in epoch_val_losses.items()}
     if len(epoch_val_avg) > 1:
@@ -187,6 +243,10 @@ def evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_lo
 
     # add a key for epoch number
     epoch_val_avg['epoch'] = epoch
+
+    # add q stats if available
+    if 'q_stats' in locals():
+        epoch_val_avg.update(q_stats)
 
     # Append to val_losses with epoch as key
     for key, value in epoch_val_avg.items():
@@ -211,9 +271,17 @@ def evaluate_final_model(trainer, test_buffer, test_processor, config_manager):
             all_targets.append(targets.cpu())
             all_predictions.append(predictions.cpu())
         
+    # calculate q value stats if available
+    if "mean_Q" in test_losses:
+        q_stats, test_losses = calculate_q_stats(test_losses)
+    
     # Calculate average test losses across all batches
     test_losses = {key: np.mean(values) for key, values in test_losses.items()}
     
+    # add q stats if available
+    if 'q_stats' in locals():
+        test_losses.update(q_stats)
+        
     ##### make a dataframe of targets and predictions ####
     # columns are config_manager.data_config['action_cols']
     if not all_targets or not all_predictions:

@@ -109,7 +109,7 @@
                 "--experiment_variant", "standard",
                 "--search_variant", "random_search",
                 "--n_search_iterations", "1",
-                "--n_epochs", "40",
+                "--n_epochs", "10",
                 "--action_mode", "continuous_only"            
             ],
             "console": "integratedTerminal",

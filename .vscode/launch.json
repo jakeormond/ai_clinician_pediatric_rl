@@ -69,7 +69,7 @@
                 "--search_variant", "random_search",
                 "--n_search_iterations", "2",
                 "--testing", "true",
-                "--n_epochs", "10",
+                "--n_epochs", "100",
                 "--action_mode", "continuous_only",
                 "--frac", "0.2"                
             ],
@@ -109,7 +109,7 @@
                 "--experiment_variant", "standard",
                 "--search_variant", "random_search",
                 "--n_search_iterations", "1",
-                "--n_epochs", "10",
+                "--n_epochs", "200",
                 "--action_mode", "continuous_only"            
             ],
             "console": "integratedTerminal",

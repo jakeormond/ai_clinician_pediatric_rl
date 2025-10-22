@@ -152,10 +152,21 @@ def append_epoch_losses(
         training_losses
     ):
     """Calculates average losses for the epoch and appends to training_losses."""    
+    
+    # calculate q value stats if available
+    if "mean_Q" in epoch_training_losses:
+        with torch.no_grad():
+            q_stats, epoch_training_losses = calculate_q_stats(epoch_training_losses)
+    
     epoch_avg_losses = {key: np.mean(values) for key, values in epoch_training_losses.items()}
     # Append epoch averages to training_losses
     for key, value in epoch_avg_losses.items():
         training_losses[key].append(value)     
+
+    # add q stats if available
+    if 'q_stats' in locals():
+        training_losses.update(q_stats)
+
 
 def estimate_v0(trainer, starting_states, batch_size, losses_dict):
     # we store the estimates in losses_dict
@@ -234,7 +245,8 @@ def evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_lo
                      
     # calculate q value stats if available
     if "mean_Q" in epoch_val_losses:
-        q_stats, epoch_val_losses = calculate_q_stats(epoch_val_losses)
+        with torch.no_grad():
+            q_stats, epoch_val_losses = calculate_q_stats(epoch_val_losses)
 
     # Calculate average validation losses for this epoch
     epoch_val_avg = {key: np.mean(values) for key, values in epoch_val_losses.items()}
@@ -251,7 +263,7 @@ def evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_lo
     # Append to val_losses with epoch as key
     for key, value in epoch_val_avg.items():
         val_losses[key].append(value)  
-
+    
 
 def evaluate_final_model(trainer, test_buffer, test_processor, config_manager):
     test_losses = defaultdict(list)
@@ -273,7 +285,8 @@ def evaluate_final_model(trainer, test_buffer, test_processor, config_manager):
         
     # calculate q value stats if available
     if "mean_Q" in test_losses:
-        q_stats, test_losses = calculate_q_stats(test_losses)
+        with torch.no_grad():
+            q_stats, test_losses = calculate_q_stats(test_losses)
     
     # Calculate average test losses across all batches
     test_losses = {key: np.mean(values) for key, values in test_losses.items()}
@@ -606,7 +619,7 @@ def train_with_hyperparameters(
                 evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_losses)
                 
                 # Determine validation loss for early stopping
-                current_val_loss = val_losses[loss_metric][-1]
+                current_val_loss = val_losses[loss_metric][-1]            
                 logger.info(f"Epoch {epoch}: Train {loss_metric}={training_losses[loss_metric][-1]:.4f}, Val {loss_metric}={current_val_loss:.4f}")
                                 
                 # optionally, estimate V0 and append to validation losses

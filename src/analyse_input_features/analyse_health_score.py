@@ -9,12 +9,14 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.stats import ttest_ind, mannwhitneyu
+from scipy.stats import ttest_ind, mannwhitneyu, pearsonr, spearmanr
+import os
+
 
 def plot_health_score_distribution(survival_df, mortality_df, plot_dir):
     plt.figure(figsize=(10,6))
-    plt.hist(survival_df['health_score_diff'], bins=50, alpha=0.5, label='Survived', color='g', density=True)
-    plt.hist(mortality_df['health_score_diff'], bins=50, alpha=0.5, label='Died', color='r', density=True)
+    plt.hist(survival_df['health_score'], bins=50, alpha=0.5, label='Survived', color='g', density=True)
+    plt.hist(mortality_df['health_score'], bins=50, alpha=0.5, label='Died', color='r', density=True)
     plt.xlabel('Health Score')
     plt.ylabel('Density')
     plt.title('Health Score Distribution by Mortality')
@@ -27,7 +29,7 @@ def plot_health_score_distribution(survival_df, mortality_df, plot_dir):
 
     # plot as violin plot
     plt.figure(figsize=(8,6))
-    sns.violinplot(x='mortality', y='health_score_diff', data=pd.concat([survival_df, mortality_df]))
+    sns.violinplot(x='mortality', y='health_score', data=pd.concat([survival_df, mortality_df]))
     plt.xlabel('Mortality (0=Survived, 1=Died)')
     plt.ylabel('Health Score')
     plt.title('Health Score Distribution by Mortality')
@@ -88,6 +90,54 @@ def compare_time_stretched_trajectories(survival_df, mortality_df, plot_dir):
     plt.close()
 
 
+def compute_health_score_outcome_correlation(dataframe, output_dir):
+        
+    all_health_scores = dataframe['health_score'].values
+    all_mortalities = dataframe['mortality'].values
+    pearson_corr, pearson_p = pearsonr(all_health_scores, all_mortalities)
+    spearman_corr, spearman_p = spearmanr(all_health_scores, all_mortalities)
+    print(f"Pearson correlation between health score and mortality: r={pearson_corr:.3f}, p={pearson_p:.3e}")
+    print(f"Spearman correlation between health score and mortality: r={spearman_corr:.3f}, p={spearman_p:.3e}")
+
+    all_health_scores_diff = dataframe['health_score_diff'].values
+    pearson_corr_diff, pearson_p_diff = pearsonr(all_health_scores_diff, all_mortalities)
+    spearman_corr_diff, spearman_p_diff = spearmanr(all_health_scores_diff, all_mortalities)
+    print(f"Pearson correlation between health score diff and mortality: r={pearson_corr_diff:.3f}, p={pearson_p_diff:.3e}")
+    print(f"Spearman correlation between health score diff and mortality: r={spearman_corr_diff:.3f}, p={spearman_p_diff:.3e}")
+
+    # save to a txt file
+    output_path = os.path.join(output_dir, "health_score_outcome_correlation.txt")
+    with open(output_path, "w") as f:
+        f.write(f"Pearson correlation between health score and mortality: r={pearson_corr:.3f}, p={pearson_p:.3e}\n")
+        f.write(f"Spearman correlation between health score and mortality: r={spearman_corr:.3f}, p={spearman_p:.3e}\n")
+        f.write(f"Pearson correlation between health score diff and mortality: r={pearson_corr_diff:.3f}, p={pearson_p_diff:.3e}\n")
+        f.write(f"Spearman correlation between health score diff and mortality: r={spearman_corr_diff:.3f}, p={spearman_p_diff:.3e}\n")
+
+
+
+def compute_24hr_avg_health_score_outcome_correlation(dataframe, output_dir):
+    # get first 24 hours average health score per encounter
+    first_24hr_avg = dataframe[dataframe['time'] <= 24].groupby('encounter_id')['health_score'].mean()
+    last_24hr_avg = dataframe[dataframe['time'] > (dataframe['time'].max() - 24)].groupby('encounter_id')['health_score'].mean()
+    mortality_series = dataframe.groupby('encounter_id')['mortality'].first()
+
+    # align indices
+    first_24hr_avg = first_24hr_avg.loc[mortality_series.index]
+    last_24hr_avg = last_24hr_avg.loc[mortality_series.index]
+    # calculate the difference
+    diff_24hr_avg = last_24hr_avg - first_24hr_avg
+
+    # compute correlation diff_24hr_avg with mortality
+    pearson_corr, pearson_p = pearsonr(diff_24hr_avg.values, mortality_series.values)
+    spearman_corr, spearman_p = spearmanr(diff_24hr_avg.values, mortality_series.values)
+    # save to txt file
+    output_path = os.path.join(output_dir, "24hr_avg_health_score_outcome_correlation.txt")
+    with open(output_path, "w") as f:
+        f.write(f"Pearson correlation between 24hr avg health score diff and mortality: r={pearson_corr:.3f}, p={pearson_p:.3e}\n")
+        f.write(f"Spearman correlation between 24hr avg health score diff and mortality: r={spearman_corr:.3f}, p={spearman_p:.3e}\n")
+
+
+
 
 def analyse_health_score(dataset, config_manager):
     
@@ -116,7 +166,14 @@ def analyse_health_score(dataset, config_manager):
     # visualize time stretched trajctories across all survivors and non-survivors
     compare_time_stretched_trajectories(survival_df, mortality_df, plot_dir)
 
-    pass
+    # make mortality equal 1 at all timesteps for non-survivors
+    dataframe.loc[dataframe['encounter_id'].isin(mortality_ids), 'mortality'] = 1
+
+    # compute pearson correlation between health score and mortality
+    compute_health_score_outcome_correlation(dataframe, plot_dir)
+    
+    # let's get first and last 24 hours average health score for each encounter and correlate with outcome
+    compute_24hr_avg_health_score_outcome_correlation(dataframe, plot_dir)
 
 
 def main():

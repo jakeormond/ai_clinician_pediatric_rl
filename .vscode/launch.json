@@ -42,12 +42,33 @@
                 "--hospital", "choc", 
                 "--experiment_type", "supervised_learning",
                 "--model_type", "xgbregressor", 
-                "--prediction_type", "discharge_mortality",
+                "--prediction_type", "discharge_mortality_tte",
                 "--mode", "single_fold", 
                 "--fold", "0",
                 "--experiment_variant", "quick_test",
                 "--search_variant", "random_search",
                 "--n_search_iterations", "2"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
+            "name": "DeepHit",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "supervised_learning",
+                "--model_type", "deephit", 
+                "--prediction_type", "discharge_mortality_tte",
+                "--mode", "single_fold", 
+                "--fold", "0",
+                "--experiment_variant", "quick_test",                
+                "--search_variant", "random_search",
+                "--n_search_iterations", "1"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

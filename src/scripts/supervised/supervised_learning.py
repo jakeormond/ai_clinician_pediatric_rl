@@ -23,7 +23,7 @@ from ...supervised_learning.training import outer_training_loop, \
 from ...utils.logging_utilities import wandb_init  # Add this import
 
 def parse_arguments():
-    parser = argparse.ArgumentParser(description='Train mortality prediction model')
+    parser = argparse.ArgumentParser(description='Supervised learning')
     parser.add_argument('--hospital', 
                         default='choc', 
                         choices=['choc', 'mimic'], 
@@ -36,13 +36,13 @@ def parse_arguments():
     
     parser.add_argument('--model_type', 
                         default=None, 
-                        choices=['xgbclassifier', 'xgbregressor'], 
+                        choices=['xgbclassifier', 'xgbregressor', 'deephit'], 
                         help='Model type to train (default: xgbclassifier)') 
     
     parser.add_argument('--prediction_type', 
                         default=None, 
-                        choices=['mortality_all', 'mortality_24', 'discharge_mortality'], 
-                        help='type of predictoin to make (default: mortality_all)') 
+                        choices=['mortality_all', 'mortality_24', 'discharge_mortality', 'discharge_mortality_tte'], 
+                        help='type of prediction to make (default: mortality_all)') 
 
     parser.add_argument('--mode', type=str, default='single_fold',
                         choices=['save_dataframe', 'single_fold', 'aggregate', 'plot_shap', 'plot_model_results'],
@@ -67,9 +67,15 @@ def parse_arguments():
     parser.add_argument('--n_search_iterations', type=int, default=0,
                         help='Number of search iterations for random search (default: 0)')
 
-    parser.add_argument('--start_time', type=str, default = None,                  # ✅ New argument
+    parser.add_argument('--start_time', type=str, default = None,                  
                     help='Start time for this experiment run')
     
+    parser.add_argument('--testing', action='store_true',                 
+                    help='if true, we pare down the data for quick testing')
+
+    parser.add_argument('--verbose', action='store_true',                 
+                    help='if true, print details of all the features and normalization steps')
+
     parser.add_argument('--calculate_shap', type=str, default='false',
                         choices=['true', 'false'],
                         help='Whether to calculate SHAP values (default: false)')
@@ -80,6 +86,8 @@ def parse_arguments():
     parser.add_argument('--shap_background_samples', type=int, default=100,
                         help='Number of background samples for SHAP analysis (default: 100)')
     
+    parser.add_argument('--n_epochs', type=int, default = 10,                  
+                    help='Number of epochs to train for - should be 1000, but for testing we set to 10')  
     
     args = parser.parse_args()
 
@@ -139,7 +147,7 @@ def main():
         config_manager.set_search_grid()      
        
         # load data
-        dataset = Dataset(config_manager.hospital_config)
+        dataset = Dataset(config_manager.data_config)
         print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
             
         # Initialize W&B 

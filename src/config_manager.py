@@ -137,21 +137,22 @@ class ConfigManager:
                 )
 
         # set reward path if reward_type is not "none"
-        if self._data_config['use_reward']:
-            reward_type = self._data_config['reward_type']
-            reward_paths_config_path = self.config_dir / "rewards" / "reward_paths.yaml"
-            if not reward_paths_config_path.exists():
-                raise FileNotFoundError(f"Reward paths config file not found: {reward_paths_config_path}")
-            with open(reward_paths_config_path, 'r') as f:
-                reward_paths = yaml.safe_load(f).get("rewards", {})
-            if reward_type:
-                if reward_type not in reward_paths:
-                    raise ValueError(f"Reward type '{reward_type}' not found in reward paths config")
-                reward_path = reward_paths[reward_type]
-                if not os.path.isabs(reward_path):
-                    reward_path = os.path.join(self.get_experiments_dir, reward_path)
-                self._data_config['reward_path'] = reward_path
-                print(f"Set reward_path to: {self._data_config['reward_path']}")
+        if self.experiment_type != "supervised_learning": # supervised learning is for generating rewards, so doesn't use them
+            if self._data_config['use_reward']:
+                reward_type = self._data_config['reward_type']
+                reward_paths_config_path = self.config_dir / "rewards" / "reward_paths.yaml"
+                if not reward_paths_config_path.exists():
+                    raise FileNotFoundError(f"Reward paths config file not found: {reward_paths_config_path}")
+                with open(reward_paths_config_path, 'r') as f:
+                    reward_paths = yaml.safe_load(f).get("rewards", {})
+                if reward_type:
+                    if reward_type not in reward_paths:
+                        raise ValueError(f"Reward type '{reward_type}' not found in reward paths config")
+                    reward_path = reward_paths[reward_type]
+                    if not os.path.isabs(reward_path):
+                        reward_path = os.path.join(self.get_experiments_dir, reward_path)
+                    self._data_config['reward_path'] = reward_path
+                    print(f"Set reward_path to: {self._data_config['reward_path']}")
 
     def _build_wandb_config(self):
         """Build W&B configuration and store it internally."""
@@ -240,8 +241,12 @@ class ConfigManager:
             print(f"Search grid config already exists at: {experiment_copy_path}, skipping copy")
 
     def set_experiment_name(self):
-        self.experiment_name = \
-            f"{self.hospital}_{self.model_type}_{self.action_mode}_{self.search_variant}_{self.experiment_variant}_{self.start_time}"
+        if self.experiment_type == "supervised_learning":
+            self.experiment_name = \
+                f"{self.hospital}_{self.model_type}_{self.prediction_type}_{self.experiment_variant}_{self.start_time}"
+        else:
+            self.experiment_name = \
+                f"{self.hospital}_{self.model_type}_{self.action_mode}_{self.search_variant}_{self.experiment_variant}_{self.start_time}"
         # make directory if it doesn't exist
         self._create_experiment_dir()
 

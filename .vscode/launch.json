@@ -55,14 +55,15 @@
         },
 
         {
-            "name": "DeepHit",
+            "name": "DynamicDeepHit",
             "type": "debugpy",
             "request": "launch",
             "module": "src.scripts.supervised.supervised_learning",
             "args": [
                 "--hospital", "choc", 
+                "--action_mode", "continuous_only",
                 "--experiment_type", "supervised_learning",
-                "--model_type", "deephit", 
+                "--model_type", "dynamic_deephit", 
                 "--prediction_type", "discharge_mortality_tte",
                 "--mode", "single_fold", 
                 "--fold", "0",

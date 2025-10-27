@@ -248,6 +248,15 @@ class Dataset:
                 )
                 self.dataframe.loc[second_half_sur_indices, self.target_col] = 2
 
+            elif self.prediction_type == "discharge_mortality_tte":
+                # for non-survivors, we can label mortality as 1 at every timepoint
+                # also, we add a new column "discharge", that is all 0s for all patients 
+                # that died, and all 1s for all patients that survived
+                self.dataframe.loc[self.dataframe[self.encounter_col].isin(target_encounter_ids), self.target_col] = 1
+                self.dataframe["discharge"] = 0
+                self.dataframe.loc[self.dataframe[self.encounter_col].isin(surviving_encounter_ids), "discharge"] = 1
+
+
             else:
                 # not implemented yet, so raise an error
                 raise NotImplementedError("Prediction time 'specific' is not implemented yet.")

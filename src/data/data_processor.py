@@ -36,6 +36,7 @@ class DataProcessor:
                     # Shallow copy is fine for immutable objects (str, int, float, etc.)
                     setattr(self, key, value)
              
+        
         if config_manager.action_mode == 'binary_only' or config_manager.action_mode == 'mixed':
             create_binary_actions = True
         else:
@@ -58,19 +59,30 @@ class DataProcessor:
         
         # before creating the binary actions, we need to make a list of all the input features;
         # these are the columns minus the reward, the actions and the encounter and time columns
-        self.input_features = [col for col in dataset.dataframe.columns
-                               if col not in dataset.actions and 
-                               col != self.reward_col and 
-                               col != self.encounter_col and 
-                               col != self.time_col and 
-                               col != self.terminal_reward_col]
+        if self.model_type == "supervised_learning":
+            self.input_features = [col for col in dataset.dataframe.columns
+                                if col != self.encounter_col and 
+                                col != self.time_col and 
+                                col != 'mortality' and 
+                                col != 'discharge']
+        else:
+            self.input_features = [col for col in dataset.dataframe.columns
+                                if col not in dataset.actions and 
+                                col != self.reward_col and 
+                                col != self.encounter_col and 
+                                col != self.time_col and 
+                                col != self.terminal_reward_col]
         
         for f in self.input_features:
             logger.debug(f"Input feature: {f}")
 
-        # split into the rl_dataset
-        self.rl_dataset = self._split_into_rl_dataset(dataset, config_manager)           
-            
+        if self.model_type != "dynamic_deephit":
+            # split into dymamic deephit dataset
+            self.dynamic_deephit_dataset = self._split_into_dynamic_deephit_dataset(dataset, config_manager)
+        else:
+            # split into the rl_dataset
+            self.rl_dataset = self._split_into_rl_dataset(dataset, config_manager)           
+                
         self.norm_params = norm_params
         # self.normalize_obs = normalize_obs
         # self.normalize_actions = normalize_actions
@@ -125,6 +137,47 @@ class DataProcessor:
             self._normalize_actions() 
             
         
+    def _split_into_dynamic_deephit_dataset(self, dataset, config_manager):
+        """
+        This function will split the dataframe into the format needed for dynamic deephit
+        It will return a dictionary with the following keys:
+        - 
+        """
+        self.horizon = config_manager.training_config['horizon']
+
+        # truncate each patient trajectory (by encounter_id) to the horizon
+        truncated_df = dataset.dataframe.groupby(self.encounter_col).tail(self.horizon).reset_index(drop=True)
+
+        # create new column 'mask' and populate with 1s
+        truncated_df['mask'] = 1
+
+        # create a time_to_event column that counts from 1 to trajectory length for each patient
+        truncated_df['time_to_event'] = truncated_df.groupby(self.encounter_col).cumcount() + 1
+
+        # get the lengths of each trajectory
+        traj_lengths = truncated_df.groupby(self.encounter_col).size().to_dict()
+
+        # restrict traj_lengths dictionary to only those with length < horizon
+        traj_lengths = {k: v for k, v in traj_lengths.items() if v < self.horizon}
+
+        for enc_id, length in traj_lengths.items():
+            # insert rows of zeros before the first rows to path the trajectory to the horizon
+            rows_to_add = self.horizon - length
+            first_index = truncated_df[truncated_df[self.encounter_col] == enc_id].index[0]
+            zero_rows = pd.DataFrame(0, index=np.arange(rows_to_add), columns=truncated_df.columns)
+            # make the encounter_col = enc_id for these rows
+            zero_rows[self.encounter_col] = enc_id
+            # insert the zero rows into the dataframe
+            truncated_df = pd.concat([truncated_df.iloc[:first_index], zero_rows, truncated_df.iloc[first_index:]]).reset_index(drop=True)
+
+
+
+
+
+
+
+
+
     def _split_into_rl_dataset(self, dataset, config_manager):
         """
         This function will split the dataframe into the format needed for RL
@@ -509,6 +562,9 @@ class DataProcessor:
             "action_transformers": self.action_transformers
         }
                 
+        
+
+
 
 def main():
     pass

@@ -1,8 +1,16 @@
 import os
 import yaml
+import importlib
+from typing import Any, Dict, List, Optional, Tuple, Union
+from collections import defaultdict
+from dataclasses import asdict
+from pathlib import Path
 import json
+import random
+import itertools
 import joblib
 import glob
+import copy
 import numpy as np
 import pandas as pd
 import pickle
@@ -13,676 +21,635 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, GridSearchCV, GroupKFold, RandomizedSearchCV
 from scipy.stats import uniform, randint, loguniform
 import xgboost as xgb
-from .evaluation import calculate_metrics
-from .plotting import create_all_plots, create_aggregated_shap_plots
+import torch
+from torch.utils.data import DataLoader
+import torch.nn.functional as F
+# from .evaluation import calculate_metrics
+# from .plotting import create_all_plots, create_aggregated_shap_plots
 from ..utils.logging_utilities import wandb_init
-from .dataset import Dataset
+from ..data.data_processor import DataProcessor
+# from .dataset import Dataset
+
+from ..utils.utilities import set_seed
+# from .plotting import plot_losses, plot_Q_by_mortality
+
+import logging
+logger = logging.getLogger(__name__)
 
 
-def get_safe_n_jobs():
-    """Get safe number of parallel jobs based on environment."""
-    if 'SLURM_CPUS_PER_TASK' in os.environ:
-        slurm_cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', '4'))
-        # Use half the allocated CPUs for safety
-        n_jobs = min(4, max(1, slurm_cpus // 2))
-        print(f"SLURM detected: Using n_jobs={n_jobs} (SLURM_CPUS_PER_TASK={slurm_cpus})")
-        return n_jobs
-    else:
-        print("Local environment: Using n_jobs=-1 (all cores)")
-        return -1
+MODEL_MODULES = {
+    "dynamic_deephit": "src.supervised.models.dynamic_deephit",
+}
+
+DISTRIBUTIONS = {
+    "loguniform": loguniform,
+    "uniform": uniform,
+}
+
+def parse_distribution(dist_str):
+    # Example: "loguniform(1e-5, 1e-2)"
+    name, args = dist_str.split("(", 1)
+    args = args.rstrip(")")
+    args = [float(x) for x in args.split(",")]
+    return DISTRIBUTIONS[name](*args)
+
+
+def average_dicts(list_of_dicts):
+    """Averages values for each key across a list of dictionaries.
+    Using this for evaluation metrics.    
+    """
+
+    from collections import defaultdict
+
+    # Collect all values for each key
+    values = defaultdict(list)
+    for d in list_of_dicts:
+        for k, v in d.items():
+            values[k].append(v)
+
+    # Compute averages
+    averages = {k: sum(v_list) / len(v_list) for k, v_list in values.items()}
+    return averages
+
+
+def select_hyperparameters_randomly(hyperparameter_space, config_manager):
+    """Selects hyperparameters randomly from the given space."""
+    selected_params = {}
+    for param, values in hyperparameter_space.items():
+        if isinstance(values, list):
+            selected_params[param] = random.choice(values)
+        else:  # assume it's a scipy.stats distribution
+            selected_params[param] = round(values.rvs(), 6)  # round for readability
+    return selected_params
+
+
+def create_processors(dataset, train_id, val_id, config_manager):
+    """Creates training and validation DataProcessors with shared normalization."""
     
-
-def get_feature_names_from_pipeline(pipeline, dataset):
-    """Extract feature names from the fitted pipeline."""
+    train_dataset = dataset.create_subset(dataset.encounter_ids()[train_id])     
+    val_dataset = dataset.create_subset(dataset.encounter_ids()[val_id])
     
-    # Get the original feature names from your dataset
-    # This depends on your dataset structure
-    try:
-        # If your dataset has a method to get feature names
-        base_feature_names = dataset.get_feature_names()
-    except:
-        # Fallback: use generic names
-        n_features = pipeline.named_steps['scaler'].n_features_in_
-        base_feature_names = [f'feature_{i}' for i in range(n_features)]
+    train_processor = DataProcessor(train_dataset, config_manager)
+    norm_params = train_processor.get_normalization_params()
+    val_processor = DataProcessor(val_dataset, config_manager, 
+                                 norm_params=norm_params)
     
-    return base_feature_names
+    return train_processor, val_processor, norm_params
 
 
-def prepare_param_for_pipeline(config_manager):
-    # add "model__" prefix to all parameters in the grid
-    if config_manager.search_variant == "grid_search":
-        # For grid search, use the exact values from the config
-        return {f"model__{k}": v for k, v in config_manager.search_grid.items() if k != "model__n_estimators"}
+
+def create_trainer(train_processor, hyperparams, config_manager):
+
+    state_dim = train_processor.rl_dataset["observations"].shape[1]
+    action_dim = train_processor.rl_dataset["actions"].shape[1]
+    max_action = np.max(np.abs(train_processor.rl_dataset["actions"]))
+
+    model_type = config_manager.model_type
+    module = importlib.import_module(MODEL_MODULES[model_type])
     
-    elif config_manager.search_variant == "random_search":
-        pipeline_params = {}
-        for param_name, param_config in config_manager.search_grid.items():
-            param_key = f"model__{param_name}"
-            
-            if isinstance(param_config, dict):
-                # Handle distribution specifications
-                if param_config['type'] == 'randint':
-                    pipeline_params[param_key] = randint(param_config['low'], param_config['high'])
-                elif param_config['type'] == 'uniform':
-                    if 'low' in param_config and 'high' in param_config:
-                        pipeline_params[param_key] = uniform(param_config['low'], 
-                                                           param_config['high'] - param_config['low'])
-                    else:
-                        # Old format with loc/scale
-                        pipeline_params[param_key] = uniform(param_config['loc'], param_config['scale'])
-                elif param_config['type'] == 'loguniform':
-                    pipeline_params[param_key] = loguniform(param_config['low'], param_config['high'])
-                elif param_config['type'] == 'choice':
-                    pipeline_params[param_key] = param_config['values']
-                else:
-                    raise ValueError(f"Unknown distribution type: {param_config['type']}")
-            else:
-                # Handle simple list values (for backwards compatibility)
-                pipeline_params[param_key] = param_config
+    return module.get_trainer(
+        config_manager,
+        state_dim,
+        action_dim,
+        max_action,
+        hyperparams
+    )
+
+
+def get_early_stopping_config(config_manager):
+    """Extracts early stopping configuration from config_manager."""
+    early_stopping = {
+        "patience": config_manager.training_config.get('patience', 10),
+        "patience_counter": 0,
+        "eval_freq": config_manager.training_config.get('eval_freq', 5),
+        "min_delta": config_manager.training_config.get('min_delta', 0.001)
+    }
+    return early_stopping
+
+
+def append_epoch_losses(
+        epoch_training_losses, 
+        training_losses
+    ):
+    """Calculates average losses for the epoch and appends to training_losses."""    
+    
+    # calculate q value stats if available
+    if "mean_Q" in epoch_training_losses:
+        with torch.no_grad():
+            q_stats, epoch_training_losses = calculate_q_stats(epoch_training_losses)
+    
+    epoch_avg_losses = {key: np.mean(values) for key, values in epoch_training_losses.items()}
+    # Append epoch averages to training_losses
+    for key, value in epoch_avg_losses.items():
+        training_losses[key].append(value)     
+
+    # add q stats if available
+    if 'q_stats' in locals():
+        training_losses.update(q_stats)
+
+
+def estimate_v0(trainer, starting_states, batch_size, losses_dict):
+    # we store the estimates in losses_dict
+    # optionally, estimate V0 and append to training losses
+        v0_mean, v0_sem = trainer.estimate_v0(starting_states, batch_size = batch_size)
+        # print(f"Epoch {epoch}: Train mean start state values: {train_v0_mean:.4f} ± {train_v0_sem:.4f}")
+        losses_dict['v0_mean'].append(float(v0_mean))
+        losses_dict['v0_sem'].append(float(v0_sem))
+
+
+
+def calculate_q_stats(losses_dict):
+    # calculate q value stats if available
+    mean_Qs = losses_dict["mean_Q"]
+    variance_Qs = losses_dict["variance_Q"]
+    counts_all = losses_dict["batch_n"]
+
+    overall_mean_Q = np.sum(np.array(mean_Qs) * np.array(counts_all)) / np.sum(counts_all)
+    overall_variance_Q = np.sum(counts_all * (variance_Qs + np.array(mean_Qs - overall_mean_Q)**2)) / np.sum(counts_all)
+    overall_std_Q = np.sqrt(overall_variance_Q)
+
+    mean_survival_Qs = losses_dict["survival_Q"]
+    variance_survival_Qs = losses_dict["survival_variance_Q"]
+    counts_survival = losses_dict["survival_n"]
+
+    overall_mean_survival_Q = np.sum(np.array(mean_survival_Qs) * np.array(counts_survival)) / np.sum(counts_survival)
+    overall_variance_survival_Q = np.sum(counts_survival * (variance_survival_Qs + np.array(mean_survival_Qs - overall_mean_survival_Q)**2)) / np.sum(counts_survival)
+    overall_std_survival_Q = np.sqrt(overall_variance_survival_Q)
+
+    mean_non_survival_Qs = losses_dict["non_survival_Q"]
+    variance_non_survival_Qs = losses_dict["non_survival_variance_Q"]
+    counts_non_survival = losses_dict["non_survival_n"]
+
+    overall_mean_non_survival_Q = np.sum(np.array(mean_non_survival_Qs) * np.array(counts_non_survival)) / np.sum(counts_non_survival)
+    overall_variance_non_survival_Q = np.sum(counts_non_survival * (variance_non_survival_Qs + np.array(mean_non_survival_Qs - overall_mean_non_survival_Q)**2)) / np.sum(counts_non_survival)
+    overall_std_non_survival_Q = np.sqrt(overall_variance_non_survival_Q)
+
+    survival_non_survival_diff = overall_mean_survival_Q - overall_mean_non_survival_Q
+    survival_non_survival_snr = survival_non_survival_diff**2/(0.5*(overall_variance_survival_Q + overall_variance_non_survival_Q))
+
+    # create a dictionary of these values 
+    q_stats = {
+        "mean_Q": overall_mean_Q,
+        "std_Q": overall_std_Q,
+        "mean_survival_Q": overall_mean_survival_Q,
+        "std_survival_Q": overall_std_survival_Q,
+        "mean_non_survival_Q": overall_mean_non_survival_Q,
+        "std_non_survival_Q": overall_std_non_survival_Q,
+        "survival_non_survival_diff": survival_non_survival_diff,
+        "survival_non_survival_snr": survival_non_survival_snr
+    }
+
+    # drop q keys from losses
+    for key in ["mean_Q", "variance_Q", "batch_n",
+                "survival_Q", "survival_variance_Q", "survival_n",
+                "non_survival_Q", "non_survival_variance_Q", "non_survival_n"]:
+        losses_dict.pop(key, None)
+
+
+    return q_stats, losses_dict
+
+
+def evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_losses):
+    
+    epoch_val_losses = defaultdict(list)
+
+    for batch_idx, batch in enumerate(val_test_buffer):      
+        if batch_idx * batch_size >= 5000:  # Limit validation to 5000 samples for speed, make this a variable
+            break
+       
+        batch_losses, _, _ = trainer.evaluate(batch)
         
-        return pipeline_params
+        # Automatically append all validation metrics
+        for key, value in batch_losses.items():
+            epoch_val_losses[key].append(value)
+                     
+    # calculate q value stats if available
+    if "mean_Q" in epoch_val_losses:
+        with torch.no_grad():
+            q_stats, epoch_val_losses = calculate_q_stats(epoch_val_losses)
+
+    # Calculate average validation losses for this epoch
+    epoch_val_avg = {key: np.mean(values) for key, values in epoch_val_losses.items()}
+    if len(epoch_val_avg) > 1:
+        logger.info(f"Epoch {epoch}: Validation metrics: {epoch_val_avg}")
+
+    # add a key for epoch number
+    epoch_val_avg['epoch'] = epoch
+
+    # add q stats if available
+    if 'q_stats' in locals():
+        epoch_val_avg.update(q_stats)
+
+    # Append to val_losses with epoch as key
+    for key, value in epoch_val_avg.items():
+        val_losses[key].append(value)  
     
+
+def evaluate_final_model(trainer, test_buffer, test_processor, config_manager):
+    test_losses = defaultdict(list)
+    all_targets = []
+    all_predictions = []
+
+    # Final evaluation on test set
+    for batch_idx, batch in enumerate(test_buffer):
+        
+        batch_losses, targets, predictions = trainer.evaluate(batch)
+
+        # Automatically append all validation metrics
+        for key, value in batch_losses.items():
+            test_losses[key].append(value)
+
+        if targets is not None and predictions is not None:
+            all_targets.append(targets.cpu())
+            all_predictions.append(predictions.cpu())
+        
+    # calculate q value stats if available
+    if "mean_Q" in test_losses:
+        with torch.no_grad():
+            q_stats, test_losses = calculate_q_stats(test_losses)
+    
+    # Calculate average test losses across all batches
+    test_losses = {key: np.mean(values) for key, values in test_losses.items()}
+    
+    # add q stats if available
+    if 'q_stats' in locals():
+        test_losses.update(q_stats)
+        
+    ##### make a dataframe of targets and predictions ####
+    # columns are config_manager.data_config['action_cols']
+    if not all_targets or not all_predictions:
+        logger.info("No targets or predictions were collected during final evaluation.")
+        return test_losses, None
+
     else:
-        raise ValueError(f"Unknown search variant: {config_manager.search_variant}")
-        # 
+        action_cols = test_processor.actions
 
-def remove_model_prefix_from_params(best_params):
-    """
-    Remove the 'model__' prefix from the parameter names.
-    This is necessary because the GridSearchCV returns parameters with 'model__' prefix.
-    """
-    return {k.replace('model__', ''): v for k, v in best_params.items() if k.startswith('model__')}
+        pred_cols = [col + "_pred" for col in action_cols]
+
+        # create dataframe using all_targets and all_predictions
+        all_targets = np.vstack(all_targets)
+        all_predictions = np.vstack(all_predictions)
+
+        results_df = pd.DataFrame(
+            data=np.hstack([all_targets, all_predictions]),
+            columns=action_cols + pred_cols
+        )
+
+        results_path = Path(config_manager.fold_dir / "test_predictions.parquet")
+        results_df.to_parquet(results_path)
+        logger.info(f" Test predictions saved to {results_path}\n")       
+
+    return test_losses, results_df
 
 
-def outer_training_loop(dataset, config_manager):
-   
-    n_classes = len(np.unique(dataset.dataframe[config_manager.hospital_config["target_col"]]))
 
-    # prepare the parameters for the pipeline
-    pipe_grid = prepare_param_for_pipeline(config_manager)
+def check_improvement(best_val_loss, current_val_loss, early_stopping):
+    improvement = best_val_loss - current_val_loss
+    if improvement > early_stopping['min_delta']:
+        best_val_loss = current_val_loss
+        early_stopping['patience_counter'] = 0               
+        logger.info(f"NEW BEST: Val loss={current_val_loss:.4f}")
+    else:
+        early_stopping['patience_counter'] += 1                
+        logger.info(f"No improvement, Val={current_val_loss:.4f}, ({early_stopping['patience_counter']}/{early_stopping['patience']} - NO IMPROVEMENT)")
+    
+    return improvement, best_val_loss
 
-    print(f"Number of unique encounter IDs: {len(dataset.encounter_ids())}")
 
-    # Get CV configuration from config
+def copy_model_parameters(trainer, config_manager):
+    if config_manager.model_type in ['basic_q']:
+        return trainer.critic.state_dict().copy()
+    else:
+        return trainer.actor.state_dict().copy()
+    
+def restore_model_parameters(trainer, best_model_state, config_manager):
+    if config_manager.model_type in ['basic_q']:
+        trainer.critic.load_state_dict(best_model_state)
+    else:
+        trainer.actor.load_state_dict(best_model_state) # for td3-bc I imagine we need both models!!!!!! SO FIX!!!!!!
+    
+
+def outer_training_loop(dataset, config_manager): 
+    """Runs single outer fold - designed for HPC job array."""
+    
+    logger.info("Starting outer training loop...")
+
+    # Get CV configuration
     n_outer_folds = config_manager.cv_config["n_outer_folds"]
     n_inner_folds = config_manager.cv_config["n_inner_folds"]
+    target_fold = config_manager.cv_config['fold']  # This comes from job array index when running on HPC
     
-    print(f"Using {n_outer_folds} outer folds and {n_inner_folds} inner folds") 
+    if target_fold is None:
+        raise ValueError("target_fold must be specified")
     
-    ######################################### OUTER SPLITS #################################################
-       
-    # the outer test splits are held out for the final prediction
-    # the outer train splits are used for hyperparameter tuning 
-    kf_outer = KFold(n_splits=n_outer_folds, 
-                     shuffle=True, random_state=config_manager.hospital_config["seed"])
-
-    target_fold = config_manager.cv_config['fold']
-    encounter_col = config_manager.hospital_config["encounter_col"]
-    time_col = config_manager.hospital_config["time_col"]
+    logger.info(f"Processing outer fold {target_fold+1}/{n_outer_folds}")
+    
+    # Outer CV split
+    kf_outer = KFold(n_splits=n_outer_folds, shuffle=True, 
+                     random_state=config_manager.data_config["seed"])
 
     for outer_fold, (outer_train_id, outer_test_id) in enumerate(kf_outer.split(dataset.encounter_ids())):
-        if target_fold is not None and outer_fold != target_fold:
-            print(f"Skipping outer fold {outer_fold} as it is not the target fold {target_fold}")
-            continue
-
-        outer_train_encounters = dataset.encounter_ids()[outer_train_id]
-        outer_test_encounters = dataset.encounter_ids()[outer_test_id]
-
-        print(f"Outer Loop Fold {outer_fold}: Train outer encounters={len(outer_train_encounters)}, "
-              f"Test outer encounters={len(outer_test_encounters)}")
-        
-        ################################## INNER SPLITS AND HYPERPARAMETER TUNING ##################################
-        # the outer train data is used to create inner training and validation splits for hyperparameter tuning
-        X_outer_train, y_outer_train, encounters_and_times = dataset.modeling_data(outer_train_encounters)
-
-        # make the groups for the GroupKFold splits
-        groups = encounters_and_times[encounter_col].values
-
-        # Inner CV for hyperparameter tuning - Note that GroupKFold is deterministic 
-        # (and does not allow setting of a random seed), so we will produce the 
-        # same splits every time
-        kf_inner = GroupKFold(n_splits=n_inner_folds)
-
-        if config_manager.model_type == "xgbclassifier":
-            model = xgb.XGBClassifier(
-                eval_metric='mlogloss', 
-                verbosity=2
-            )
-        elif config_manager.model_type == "xgbregressor":
-            model = xgb.XGBRegressor(
-                eval_metric='rmse', 
-                verbosity=2
-            )
-        else:
-            raise ValueError(f"Unsupported model type: {config_manager.model_type}")        
-        
-        pipe = Pipeline([
-            ('scaler', StandardScaler()),
-            ('model', model)
-        ])        
-
-        # grid search for hyper
-        if config_manager.model_type == "xgbclassifier":
-        # Check number of classes first
-            if n_classes == 2:
-                scoring_metric = 'average_precision'  # Binary classification
-            else:
-                scoring_metric = 'f1_macro'  # Multiclass classification
-                
-        elif config_manager.model_type == "xgbregressor":
-            scoring_metric = 'neg_mean_squared_error'
-        
-        n_jobs = get_safe_n_jobs()
-        print(f"Using {n_jobs} processes for hyperparameter tuning")
-
-        if config_manager.search_variant == "grid_search":
-            grid_search = GridSearchCV(
-                pipe, 
-                pipe_grid, 
-                cv=kf_inner, 
-                scoring=scoring_metric, 
-                n_jobs=n_jobs, # use all available CPU cores
-                verbose=2
-            )
-        elif config_manager.search_variant == "random_search":
-            grid_search = RandomizedSearchCV(
-                pipe, 
-                pipe_grid, 
-                n_iter=config_manager.n_search_iterations,
-                cv=kf_inner, 
-                scoring=scoring_metric, 
-                n_jobs=n_jobs, # use all available CPU cores
-                verbose=2,
-                random_state=config_manager.hospital_config["seed"]
-            )
-
-        if config_manager.model_type in ["xgbclassifier", "xgbregressor"] and n_classes > 2:
-                # Define your class weights
-                class_weights = {0: 5.0, 1: 1.0, 2: 1.0}  # Boost class 0
-                sample_weights = np.array([class_weights[int(label)] for label in y_outer_train])
-        
-                print(f"Class distribution: {np.bincount(y_outer_train.astype(int))}")
-                print(f"Using class weights: {class_weights}")
-                print(f"Sample weights range: [{sample_weights.min():.2f}, {sample_weights.max():.2f}]")    
-
-                # For multiclass, we need to pass the sample weights
-                grid_search.fit(X_outer_train, y_outer_train, groups=groups, 
-                                        model__sample_weight=sample_weights)
-        else:
-            # For binary classification or regression, we can fit without sample weights
-            grid_search.fit(X_outer_train, y_outer_train, groups=groups)
-
-        # Get best hyperparameters from inner CV
-        best_params = remove_model_prefix_from_params(grid_search.best_params_)
-        print(f"Best hyperparameters for outer fold {outer_fold}: {best_params}")
-
-        # Retrain model on full outer train set with best hyperparameters
-        if config_manager.model_type == "xgbclassifier":
-            best_model = xgb.XGBClassifier(**best_params, eval_metric='mlogloss')
-        elif config_manager.model_type == "xgbregressor":
-            best_model = xgb.XGBRegressor(**best_params, eval_metric='rmse')
-        else:
-            raise ValueError(f"Unsupported model type: {config_manager.model_type}")
-        
-        # scale X_outer_train, and output the parameters so they can be used to scale the test set
-        scaler = StandardScaler()
-        X_outer_train_scaled = scaler.fit_transform(X_outer_train)        
-        
-        if config_manager.model_type in ["xgbclassifier", "xgbregressor"] and n_classes > 2:
-            # For multiclass, we need to pass the sample weights
-            best_model.fit(X_outer_train_scaled, y_outer_train, 
-                           sample_weight=sample_weights)
-        else:
-            # For binary classification or regression, we can fit without sample weights
-            best_model.fit(X_outer_train_scaled, y_outer_train)
-
-        # Generate predictions on the outer test set
-        X_outer_test, y_outer_test, outer_test_encounters_and_times = \
-                                dataset.modeling_data(outer_test_encounters)
-        X_outer_test_scaled = scaler.transform(X_outer_test)
-        
-        # get predictions for the outer test set
-        if config_manager.model_type == "xgbclassifier":
-            y_pred = best_model.predict(X_outer_test_scaled)
-            y_pred_proba_raw = best_model.predict_proba(X_outer_test_scaled)
-
-            # Handle multiclass vs binary
-            if n_classes == 2:
-                # Binary classification: use positive class probabilities
-                y_pred_proba = y_pred_proba_raw[:, 1]
-            else:
-                # Multiclass: use max probability or specific class
-                y_pred_proba = y_pred_proba_raw[np.arange(len(y_outer_test)), y_outer_test.astype(int)]
-                # Or for specific class: y_pred_proba = y_pred_proba_raw[:, 2]  # Class 2 probabilities
-                
-        elif config_manager.model_type == "xgbregressor":
-            # y_pred = None
-            # y_pred_proba = best_model.predict(X_outer_test_scaled)
-
-            y_pred_continuous = best_model.predict(X_outer_test_scaled)
-
-            max_class = n_classes - 1   
+        if outer_fold != target_fold:
+            continue  # Skip other folds
             
-            y_pred = np.round(np.clip(y_pred_continuous, 0, max_class)).astype(int)  # Round to nearest class
-            y_pred_proba = y_pred_continuous  # Use continuous values as "probabilities"
-
-        # calculate metrics on the outer test set
-        # calculate metrics on the outer test set
-        if config_manager.model_type == "xgbclassifier" and y_pred_proba_raw.shape[1] > 2:
-            # Pass full probability matrix for multiclass
-            metrics = calculate_metrics(y_outer_test, y_pred_proba, 
-                        config_manager.model_type, y_pred_proba_raw=y_pred_proba_raw)
-        else:
-            # Binary classification or regression
-            metrics = calculate_metrics(y_outer_test, y_pred_proba, config_manager.model_type)
-        print(f"Outer Fold {outer_fold}: Test metrics: {metrics}")
-
-        # save to the fold directory        
-        with open(os.path.join(config_manager.fold_dir, f"metrics_fold_{outer_fold}.json"), "w") as f:
-            serializable_metrics = {k: float(v) if isinstance(v, (np.floating, np.integer)) else v 
-                          for k, v in metrics.items()}
-            json.dump(serializable_metrics, f)
-
-        # create a DataFrame to hold the predictions and true labels
-        predictions_df = pd.DataFrame({
-            'encounter_id': outer_test_encounters_and_times[encounter_col],
-            'time': outer_test_encounters_and_times[time_col],
-            'true_label': y_outer_test,
-            'predicted_label': y_pred,
-            'predicted_proba': y_pred_proba
-        })
-
-        # if xgbclassifier and multiclass, we need to save the full probability matrix
-        if config_manager.model_type == "xgbclassifier" and y_pred_proba_raw.shape[1] > 2:
-            # Add the full probability matrix to the DataFrame
-            for i in range(y_pred_proba_raw.shape[1]):
-                predictions_df[f'predicted_proba_class_{i}'] = y_pred_proba_raw[:, i]
-
-        # save the predictions to a parquet file
-        predictions_df.to_parquet(os.path.join(config_manager.fold_dir, 
-            f"predictions_fold_{outer_fold}.parquet"), engine='pyarrow', index=False)
-
-        # save the models
-        joblib.dump(scaler, os.path.join(config_manager.fold_dir, 
-                                         f"scaler_fold_{outer_fold}.joblib"))
-        joblib.dump(best_model, os.path.join(config_manager.fold_dir, 
-                                             f"model_fold_{outer_fold}.joblib"))
-
-        # Save hyperparameters
-        with open(os.path.join(config_manager.fold_dir, f"hyperparams_fold_{outer_fold}.json"), "w") as f:
-            json.dump(best_params, f)
-
-
-        # RETURN SUMMARY (for calling script to log)
-        results = {
-            'fold': outer_fold,
-            'best_cv_score': grid_search.best_score_,
-            'best_params': best_params,
-            'test_metrics': metrics,
-            'n_train_samples': len(y_outer_train),
-            'n_test_samples': len(y_outer_test)
-        }
-
-        # Log feature importance if available - NOT IMPLEMENTED YET
-        if hasattr(best_model, 'feature_importances_'):
-            feature_importance = best_model.feature_importances_
-            wandb.log({
-                f"fold_{outer_fold}/feature_importance": wandb.Histogram(feature_importance)
-            }, step=outer_fold)
+        logger.info(f"=== OUTER FOLD {outer_fold} ===")
         
-        break
+        # Create outer train/test splits
+        train_dataset = dataset.create_subset(dataset.encounter_ids()[outer_train_id])     
+        test_dataset = dataset.create_subset(dataset.encounter_ids()[outer_test_id])
 
-    if results is None:
-        raise ValueError(f"No matching fold found for target_fold={config_manager.cv_config['fold']}")
-    
-    return results
-
-
-def aggregate_results_across_outer_folds(config):
-    """
-    This function is used to combine the results across outer folds.
-    It will read the predictions and metrics from each outer fold and combine them into a single DataFrame.
-    """
-    print(f"Aggregating results from experiment directory: {config.experiment_dir}")
-    
-    n_folds = config.cv_config["n_outer_folds"]
-
-    # load the parquet files for each fold
-    all_test_data = []
-    
-    all_predictions_dfs = []
-    all_test_data = []    
-    
-    
-    for fold in range(n_folds):
-
-        # find the folder in the experiment directory that begins with f"fold_{fold}" and ends with some random numbers
-        fold_dir = config.experiment_dir / f"fold_{fold}_*"
-
-        # within that folder, find the parquet file that starts with "predictions_fold_" and ends with ".parquet"
-        fold_predictions_path = glob.glob(os.path.join(fold_dir, 
-                                    f"predictions_fold_{fold}.parquet"))
-        fold_df = pd.read_parquet(fold_predictions_path, engine='pyarrow')
-        all_predictions_dfs.append(fold_df)
-
-        # Load model and scaler for SHAP
-        model_path = fold_dir / f"model_fold_{fold}.joblib"
-        scaler_path = fold_dir / f"scaler_fold_{fold}.joblib"
-
-        # Load model and scaler for SHAP
-        model_path = glob.glob(os.path.join(fold_dir, 
-                                    f"model_fold_{fold}.joblib"))[0]
-        scaler_path = glob.glob(os.path.join(fold_dir, 
-                                    f"scaler_fold_{fold}.joblib"))[0]
-
-        model = joblib.load(model_path)
-        scaler = joblib.load(scaler_path)
-
-        # ✅ Store as comprehensive fold data
-        fold_data = {
-            'fold': fold,
-            'model': model,
-            'scaler': scaler,
-            'predictions_df': fold_df
-        }
-        
-        all_test_data.append(fold_data)  # Reuse this list for comprehensive data            
-        print(f"✓ Loaded complete data for fold {fold}")
-
-    # concatenate all predictions DataFrames
-    all_predictions_df = pd.concat(all_predictions_dfs, ignore_index=True)
-    # sort by encounter_id and time
-    all_predictions_df.sort_values(by=['encounter_id', 'time'], inplace=True)
-    all_predictions_df.reset_index(drop=True, inplace=True)
-
-    # check if there are any duplicates of encounter_id and time
-    duplicates = all_predictions_df[all_predictions_df.
-            duplicated(subset=['encounter_id', 'time'], keep=False)]
-    if not duplicates.empty:
-        # raise an error if there are duplicates
-        raise ValueError("Duplicate encounter_id and time found in predictions DataFrame. ")
-       
-    # extract the true labels, predicted labels, and predicted probabilities
-    # Note: y_pred_proba is the continuous prediction for regression, or the probability for classification
-    # For multiclass, y_pred_proba_raw will contain the full probability matrix
-    # For binary classification, y_pred_proba will be the probability of the positive class
-    all_true_labels = all_predictions_df["true_label"].values
-    all_predictions = all_predictions_df["predicted_label"].values
-    all_pred_proba = all_predictions_df["predicted_proba"].values    
-
-    if config.prediction_type == "discharge_mortality":
-        # For multiclass, we need to reconstruct the full probability matrix
-        y_pred_proba_raw = all_predictions_df.filter(like='predicted_proba_class_').values
-        if y_pred_proba_raw.size == 0:
-            y_pred_proba_raw = None
-    else:
-        y_pred_proba_raw = None
-
-    # convert y_pred_proba_raw to health score if 
-    # config.prediction_type == "discharge_mortality" and
-    # config.model_type == "xgbclassifier". For 2 class or 
-    # regression, this is not needed
-    if config.prediction_type == "discharge_mortality" and \
-       config.model_type == "xgbclassifier":
-        
-        # health score is the sum of column probabilities 
-        # multiplied by the ith column index (0, 1, 2) 
-        health_score = np.sum(y_pred_proba_raw * np.arange(y_pred_proba_raw.shape[1]), axis=1)
-        all_predictions_df['health_score'] = health_score
-
-    else:
-        pass
-
-    # save all_predictions_df to a parquet file
-    all_predictions_df.to_parquet(config.experiment_dir / "all_predictions.parquet", 
-                                  engine='pyarrow', index=False)
-    
-    # also save config 
-    with open(config.experiment_dir / "config.pkl", "wb") as f:
-        pickle.dump(config, f)
-
-    # calculate overall metrics
-    overall_metrics = calculate_metrics(all_true_labels, \
-            all_pred_proba, config.model_type, y_pred = all_predictions, y_pred_proba_raw=y_pred_proba_raw)
-    print(f"Overall metrics: {overall_metrics}")
-    
-    with open(config.experiment_dir / "overall_metrics.json", "w") as f:
-        serializable_metrics = {k: float(v) if isinstance(v, (np.floating, np.integer)) else v 
-                            for k, v in overall_metrics.items()}
-        json.dump(serializable_metrics, f, indent=2)
-
-    # plot model results
-    plot_model_results(all_predictions_df, config)
-    
-    # SHAP calculation
-    if config.calculate_shap:
-        print("\n=== Calculating SHAP Values ===")
-        
-        shap_results = calculate_shap_for_aggregated_results(config, all_test_data)
-            
-        shap_save_path = config.experiment_dir / "shap_analysis.pkl"
-        with open(shap_save_path, 'wb') as f:
-            pickle.dump(shap_results, f)
-        print(f"✓ SHAP results saved to {shap_save_path}") 
-
-
-def plot_model_results(all_predictions_df, config):
-
-    all_true_labels = all_predictions_df["true_label"].values
-    all_predictions = all_predictions_df["predicted_label"].values
-    all_pred_proba = all_predictions_df["predicted_proba"].values  
-
-    if config.prediction_type == "discharge_mortality":
-        # For multiclass, we need to reconstruct the full probability matrix
-        y_pred_proba_raw = all_predictions_df.filter(like='predicted_proba_class_').values
-        if y_pred_proba_raw.size == 0:
-            y_pred_proba_raw = None
-    else:
-        y_pred_proba_raw = None
-    
-    n_classes = len(np.unique(all_true_labels))
-    is_classification = config.model_type == "xgbclassifier"
-    
-    if is_classification and n_classes > 2:
-        # You'll need to reconstruct the full probability matrix from your saved data
-        # This depends on how you saved the individual class probabilities
-        
-        create_all_plots(
-            all_true_labels, 
-            all_predictions, 
-            all_pred_proba, 
-            config.experiment_dir,
-            is_classification=is_classification,
-            y_pred_proba_raw=y_pred_proba_raw
+        ###################   HYPERPARAMETER OPTIMIZATION #############################
+        logger.info("Phase 1: Hyperparameter Optimization")
+        best_hyperparameters, training_scores, val_scores, n_epochs = optimize_hyperparameters(
+            train_dataset, config_manager, n_inner_folds=n_inner_folds, 
+            outer_fold=outer_fold
         )
-    else:
-        create_all_plots(
-            all_true_labels, 
-            all_predictions, 
-            all_pred_proba, 
-            config.experiment_dir,
-            is_classification=is_classification
-        )
+        logger.info(f"Best hyperparameters: {best_hyperparameters}")
 
+        # get the max number of epochs used in inner folds
+        n_epochs = max(n_epochs) # for final training
 
-
-def plot_saved_shap_results(shap_results_path):
-    """
-    Load and plot previously saved SHAP results.
-    
-    Args:
-        shap_results_path: Path to the saved SHAP results pickle file
-    """
-    with open(shap_results_path, 'rb') as f:
-        shap_data = pickle.load(f)
-    
-    config = shap_data['config']['config']
-    all_shap_results = shap_data['fold_results']
-    feature_names = shap_data['feature_names']
-    
-    print(f"Loaded SHAP results from {shap_results_path}")
-    print(f"Configuration: {config}")
-    print(f"Number of folds in SHAP results: {len(all_shap_results)}")
-    print(f"Number of features: {len(feature_names)}")
-
-    # Create aggregated SHAP plots
-    print("Creating aggregated SHAP plots...")
-    create_aggregated_shap_plots(config, all_shap_results, feature_names)
-
-
-    
-def calculate_shap_for_aggregated_results(config, all_test_data): 
-    
-    """
-    Calculate SHAP values for all models using the fold_data structure.
-    
-    Args:
-        config: Configuration object
-        all_test_data: List of fold_data dictionaries with 'fold', 'model', 'scaler', 'predictions_df'
-    """
-    import time
-
-    # Get parameters from config - WHAT CONFIG ARE THESE SET IN?
-    max_samples_per_fold = getattr(config, 'shap_max_samples', None)  # None = use all
-    background_samples = getattr(config, 'shap_background_samples', 100)  # Default 100
-    
-    print(f"SHAP Configuration:")
-    print(f"  Max samples per fold: {max_samples_per_fold if max_samples_per_fold else 'All samples'}")
-    print(f"  Background samples: {background_samples if background_samples else 'None'}")
-       
-    dataset = Dataset(config.data_config)
-
-    # Recreate the same CV splits as in training
-    kf_outer = KFold(n_splits=config.cv_config["n_outer_folds"], 
-                     shuffle=True, random_state=config.data_config["seed"])
-
-    # Create mapping of fold -> test_encounters
-    fold_to_encounters = {}
-    fold_to_train_encounters = {}
-    for fold, (train_idx, test_idx) in enumerate(kf_outer.split(dataset.encounter_ids())):
-        fold_to_encounters[fold] = dataset.encounter_ids()[test_idx]
-        fold_to_train_encounters[fold] = dataset.encounter_ids()[train_idx]
-    
-    all_shap_results = []
-    feature_names = None
-    background_data = None
-
-    print(f"Processing SHAP for {len(all_test_data)} folds...")
-    
-    for fold_data in all_test_data:
-        fold = fold_data['fold']
-        model = fold_data['model'] 
-        scaler = fold_data['scaler']
-        predictions_df = fold_data['predictions_df']
+        #################### RETRAIN FINAL MODEL #############################
+        logger.info("Phase 2: Final Model Training & Evaluation")
         
-        print(f"  Processing fold {fold}...")
+        # create train and test processors with shared normalization
+        train_processor, test_processor, norm_params = create_processors(
+                dataset, outer_train_id, outer_test_id, config_manager
+            )        
 
-        test_encounters = fold_to_encounters[fold]
-        X_test, y_test, _ = dataset.modeling_data(test_encounters, split_x_y=True)
+        # Keep only best trajectories if a fraction to keep is specified
+        if config_manager.model_type == "any_percent_bc":
+            logger.info(f"    Selecting best trajectories (frac={config_manager.frac})")
+            select_best_trajectories(train_processor, config_manager)
+            select_best_trajectories(test_processor, config_manager)
+                        
+        final_training_scores, test_scores, n_epochs = train_with_hyperparameters(
+                                                                train_processor, 
+                                                                test_processor, 
+                                                                config_manager, 
+                                                                best_hyperparameters,
+                                                                n_epochs=n_epochs,
+                                                                final_model=True
+                                                            )
         
-        # Get feature names (only need to do this once)
-        if feature_names is None:
-            feature_names = X_test.columns.tolist()
-            print(f"    Found {len(feature_names)} features")
+        # PLOT THE TRAINING AND VALIDATION LOSSES
+        plot_losses(training_scores, val_scores, test_scores, outer_fold, config_manager)
+
+        # if "survival_Q" in test_scores, plot it
+        if "survival_Q" in test_scores:
+            plot_Q_by_mortality(val_scores, test_scores, outer_fold, config_manager)
+
         
-        # ✅ OPTIMIZATION 1: Create background dataset (once per fold)
-        if background_samples and background_samples > 0 and background_data is None:
-            print(f"    Creating background dataset with {background_samples} samples...")
-            train_encounters = fold_to_train_encounters[fold]
-            X_bg, _, _ = dataset.modeling_data(train_encounters, split_x_y=True)
+        # save the configuration_manager
+        with open(config_manager.fold_dir / "config_manager.pkl", "wb") as f:
+            pickle.dump(config_manager, f)  
+
+        # create a dictionary to save the scores
+        all_scores = {
+            "inner_training_scores": training_scores,
+            "inner_val_scores": val_scores,
+            "final_training_scores": final_training_scores,
+            "test_scores": test_scores,
+            "best_hyperparameters": best_hyperparameters,
+            "n_epochs": n_epochs
+        }
+        with open(config_manager.fold_dir / "all_scores.pkl", "wb") as f:
+            pickle.dump(all_scores, f)
+
+        # save the normalization parameters as a pkl file
+        with open(config_manager.fold_dir / "norm_params.pkl", "wb") as f:
+            pickle.dump(norm_params, f)        
             
-            # Sample background data
-            if len(X_bg) > background_samples:
-                bg_indices = np.random.choice(len(X_bg), size=background_samples, replace=False)
-                X_bg_sample = X_bg.iloc[bg_indices]
-            else:
-                X_bg_sample = X_bg
-                
-            # Scale background data using the fold's scaler
-            background_data = scaler.transform(X_bg_sample)
-            print(f"    ✓ Background dataset created: {len(background_data)} samples")
+        # Save results for this outer fold
+        results_path = Path(config_manager.experiment_dir) / f"fold_{outer_fold}_results.json"
+        with open(results_path, 'w') as f:
+            json.dump({
+                'outer_fold': outer_fold,
+                'best_hyperparameters': best_hyperparameters,
+                'final_metrics': test_scores,
+                'config': config_manager.training_config
+            }, f, indent=2)
         
-        # Scale test data using the fold's scaler
-        X_test_scaled = scaler.transform(X_test)
+        logger.info(f"✓ Outer fold {outer_fold} complete. Results saved to {results_path}")
         
-        # Verify data alignment
-        if len(X_test_scaled) != len(predictions_df):
-            raise ValueError(
-                f"Data length mismatch: X_test({len(X_test_scaled)}) vs predictions({len(predictions_df)})"
+        return test_scores
+    
+
+def optimize_hyperparameters(train_dataset, config_manager,
+                                        n_inner_folds=None, 
+                                            norm_params=None, 
+                                                outer_fold=None):
+    """Inner CV loop for hyperparameter optimization."""
+    
+    # loss_metric = config_manager.training_config['loss_metric'] # e.g. actor loss, critic loss etc, depends on algorithm
+
+    ################################ create hyperparameter space ################################
+    # the hyperparameter space to search consists of the parameters that are lists 
+    # in config_manager.training_config
+    hyperparameter_space = {k: v for k, v in 
+            config_manager.training_config.items() if isinstance(v, list)}
+    if not hyperparameter_space:
+        raise ValueError("No hyperparameters to optimize. Ensure that config_manager.training_config contains lists of values to search over.")
+    
+    # and also continuous distributions specified as strings
+    for k, v in config_manager.training_config.items():
+        if isinstance(v, str) and '(' in v and ')' in v:
+            hyperparameter_space[k] = parse_distribution(v)
+
+    ############################ initialize best_val_score #############################
+    # used to select best hyperparameters
+    best_val_loss = float('inf') 
+    
+    ##################### loop through hyperparameter combinations #####################
+    logger.info(f"Starting hyperparameter optimization with {config_manager.n_search_iterations} iterations...")
+    for i in range(config_manager.n_search_iterations):
+        ################# select hyperparameters randomly #################
+        current_params = select_hyperparameters_randomly(
+            hyperparameter_space, config_manager
+        )       
+        logger.info(f"Testing hyperparameters {i+1}/{config_manager.n_search_iterations}: {current_params}")
+        
+        # create storage for validation, training scores, and n_epochs
+        n_inner_folds_to_run = config_manager.cv_config.get('n_inner_to_run', n_inner_folds)
+        inner_training_scores = [None] * n_inner_folds_to_run
+        inner_val_scores = [None] * n_inner_folds_to_run
+        inner_n_epochs = [None] * n_inner_folds_to_run        
+
+        ################# Inner CV evaluation for testing hyperparameters #################       
+        kf_inner = KFold(n_splits=n_inner_folds, shuffle=True, 
+                         random_state=config_manager.data_config["seed"])        
+        
+        for inner_fold, (inner_train_id, inner_val_id) in enumerate(kf_inner.split(train_dataset.encounter_ids())):
+            if inner_fold >= config_manager.cv_config.get('n_inner_to_run', n_inner_folds):
+                logger.info(f"  Skipping inner fold {inner_fold+1} as per n_inner_to_run setting.")
+                continue  # Skip extra inner folds if specified
+            
+            logger.info(f"  Inner fold {inner_fold+1}/{n_inner_folds}")
+            
+            # create train and val processors with shared normalization
+            inner_train_processor, inner_val_processor, _ = create_processors(
+                train_dataset, inner_train_id, inner_val_id, config_manager
             )
-
-        # ✅ OPTIMIZATION 2: Downsample test data
-        n_samples_original = len(X_test_scaled)
-        if max_samples_per_fold and n_samples_original > max_samples_per_fold:
-            print(f"    Downsampling from {n_samples_original} to {max_samples_per_fold} samples")
+           
+            ######################### Train with current hyperparameters ########################
+            inner_training_scores[inner_fold], inner_val_scores[inner_fold], inner_n_epochs[inner_fold] = \
+                train_with_hyperparameters(
+                    inner_train_processor, 
+                    inner_val_processor, 
+                    config_manager, 
+                    current_params
+                )                        
             
-            # Stratified sampling to maintain class distribution
-            sample_indices = np.random.choice(n_samples_original, size=max_samples_per_fold, replace=False)
-            X_test_scaled_sample = X_test_scaled[sample_indices]
-            y_test_sample = y_test.values[sample_indices]
-            n_samples = max_samples_per_fold
+            current_val_loss = min(inner_val_scores[inner_fold][loss_metric])
+            logger.info(f"  Inner fold {inner_fold+1} val loss: {current_val_loss:.4f}")
+        
+        ###################### Evaluate and update best hyperparameters ########################
+        overall_val_loss = np.mean([min(score[loss_metric]) for score in inner_val_scores])
+        logger.info(f" Overall mean validation {loss_metric}: {overall_val_loss:.4f}")
+        if overall_val_loss < best_val_loss:
+            improvement = best_val_loss - overall_val_loss
+            logger.info(f" New best hyperparameters found! (improvement: {improvement:.4f})\n")
+            best_val_loss = overall_val_loss
+            best_hyperparams = current_params.copy()
+            training_scores_best = inner_training_scores
+            val_scores_best = inner_val_scores
+            n_epochs_best = inner_n_epochs
         else:
-            X_test_scaled_sample = X_test_scaled
-            y_test_sample = y_test.values
-            n_samples = n_samples_original
+            logger.info(f"No improvement (current best: {best_val_loss:.4f})\n")
         
-        print(f"    Calculating SHAP for {n_samples} samples...")
+    ############################ Summarize hyperparameter optimization results #############################
+    logger.info(f"Best hyperparameters after {config_manager.n_search_iterations} iterations: {best_hyperparams}")
+    logger.info(f"\n                 Hyperparameter optimization complete!")
 
-        # Calculate SHAP values using TreeExplainer
-        start_time = time.time()
+    return best_hyperparams, training_scores_best, val_scores_best, n_epochs_best
+
+
+def train_with_hyperparameters(
+        train_processor, 
+        val_test_processor, 
+        config_manager, 
+        hyperparams, 
+        n_epochs = None, 
+        final_model=False
+    ):
+    """Train model with specific hyperparameters and return validation score."""
+    
+    if n_epochs is None:
+        n_epochs = config_manager.n_epochs
+
+    batch_size = hyperparams['batch_size']
+    loss_metric = config_manager.training_config['loss_metric']
+
+    # Create replay buffers
+    training_buffer = create_buffer(train_processor, batch_size)
+    val_test_buffer = create_buffer(val_test_processor, batch_size)
+    
+    # get starting state distribution for V0 estimation if we're doing TD3-BC
+    if config_manager.training_config['monitor_v0']:
+        training_starting_states = train_processor.get_start_states()
+        val_starting_states = val_test_processor.get_start_states()
+
+    # create trainer
+    trainer = create_trainer(train_processor, hyperparams, config_manager)
         
-        # Verify data alignment
-        if len(X_test_scaled) != len(predictions_df):
-            print(f"    ⚠️  Data length mismatch: X_test({len(X_test_scaled)}) vs predictions({len(predictions_df)})")
-            # Try to align by encounter_id/time if possible
-            # This is complex, so skip for now
-            continue
-               
-        if background_data is not None:
-            explainer = shap.TreeExplainer(model, background_data)
-            print(f"    Using background dataset with {len(background_data)} samples")
-        else:
-            explainer = shap.TreeExplainer(model)
-            print(f"    Using default TreeExplainer (no background)")
+    # Early stopping configuration 
+    early_stopping = get_early_stopping_config(config_manager)
 
-        shap_values_fold = explainer.shap_values(X_test_scaled_sample)
+    best_val_loss = float('inf')
+    best_model_state = None
 
-        end_time = time.time()
-        print(f"    ✓ Fold {fold} SHAP complete in {end_time - start_time:.1f}s ({n_samples} samples)")
-               
-        # Store results
-        fold_result = {
-            'fold': fold,
-            'shap_values': shap_values_fold,
-            'test_data': X_test_scaled_sample,
-            'true_labels': y_test_sample,
-            'feature_names': feature_names,
-            'explainer_expected_value': explainer.expected_value,
-            'n_samples': n_samples,
-            'n_samples_original': n_samples_original
-        }
+    logger.info(f"Training with early stopping (patience={early_stopping['patience']}, eval_freq={early_stopping['eval_freq']}, min_delta={early_stopping['min_delta']})")
+    
+    # Use defaultdict to automatically create new keys
+    training_losses = defaultdict(list) 
+    
+    if not final_model:
+        val_losses = defaultdict(list)
+    
+    ############################### Training loop #################################
+    for epoch in range(n_epochs):
+        epoch_training_losses = defaultdict(list)
+
+        for batch_idx, batch in enumerate(training_buffer):
+            batch_losses = trainer.train(batch)
+
+            # Automatically append all metrics - creates new keys if needed
+            for key, value in batch_losses.items():
+                epoch_training_losses[key].append(value)
+
+        # Calculate average loss for this epoch and append to training_losses
+        append_epoch_losses(epoch_training_losses, training_losses)
+
+        # optionally, estimate V0 and append to training losses
+        if config_manager.training_config['monitor_v0']:
+            estimate_v0(trainer, training_starting_states, batch_size, training_losses)
+
+        #################### Evaluate during hyperparameter tuning ONLY ####################
+        if not final_model:            
+            # Evaluate periodically
+            if epoch % config_manager.training_config['eval_freq'] == 0 \
+                                                    or epoch == n_epochs - 1:
+                evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_losses)
+                
+                # Determine validation loss for early stopping
+                current_val_loss = val_losses[loss_metric][-1]            
+                logger.info(f"Epoch {epoch}: Train {loss_metric}={training_losses[loss_metric][-1]:.4f}, Val {loss_metric}={current_val_loss:.4f}")
+                                
+                # optionally, estimate V0 and append to validation losses
+                if config_manager.training_config['monitor_v0']:
+                    estimate_v0(trainer, val_starting_states, batch_size, val_losses)
+                    logger.info(f"Epoch {epoch}: Val mean start state values: {val_losses['v0_mean'][-1]:.4f} ± {val_losses['v0_sem'][-1]:.4f}")                 
+                
+                
+                # Check for improvement and copy model parameters if best
+                improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)
+
+                if improvement > 0:
+                    best_model_state = copy_model_parameters(trainer, config_manager)
+                    
+                #  Early stopping - stop training THIS hyperparameter combination
+                if early_stopping['patience_counter'] >= early_stopping['patience']:                
+                    logger.info(f" Early stopping at epoch {epoch}/{n_epochs}")
+                    logger.info(f" Best validation loss: {best_val_loss:.4f}")
+
+                    n_epochs = epoch + 1  # Update n_epochs to actual number run
+
+                    break
+    
+    ######################### return results if hyperparameter tuning ########################
+    if not final_model:
+        # Restore best model state before returning score
+        if best_model_state is not None:
+            restore_model_parameters(trainer, best_model_state, config_manager)
+            logger.info(f"    Restored best model (val_loss={best_val_loss:.4f})")
+
+        return training_losses, val_losses, n_epochs
+
+    ########################## evaluate on test set after training if final model ##########################
+    # note that results df will be None if no targets/predictions were collected during evaluation (i.e.Q learning)
+    test_losses, results_df = \
+            evaluate_final_model(
+            trainer, 
+            val_test_buffer, 
+            val_test_processor, 
+            config_manager
+        )
+    
+    if config_manager.training_config['monitor_v0']:        
+        estimate_v0(trainer, val_starting_states, batch_size, test_losses)
         
-        all_shap_results.append(fold_result)
+    logger.info(f"Final test metrics: {test_losses}")
 
-        
-    # Create aggregated SHAP plots
-    print("Creating aggregated SHAP plots...")
-    create_aggregated_shap_plots(config, all_shap_results, feature_names)
+    # Save final model if this is the final training
+    model_path = Path(config_manager.fold_dir /  "final_model.pt")
+    torch.save(trainer.state_dict(), model_path)
+    logger.info(f" Final model saved to {model_path}")
 
-    total_samples = sum(r['n_samples'] for r in all_shap_results)
-    total_original = sum(r['n_samples_original'] for r in all_shap_results)
-    print(f"✓ SHAP analysis complete: {total_samples} samples processed (out of {total_original} total)")
+    # Save test predictions if available
+    if results_df is not None:
+        results_path = Path(config_manager.fold_dir / "test_predictions.parquet")
+        results_df.to_parquet(results_path)
+        logger.info(f" Test predictions saved to {results_path}\n")       
 
+    return training_losses, test_losses, n_epochs
 
-    return {
-        'fold_results': all_shap_results,
-        'feature_names': feature_names,
-        'n_folds_processed': len(all_shap_results),
-        'total_samples': total_samples,
-        'total_original_samples': total_original,
-        'config': {
-            'max_samples_per_fold': max_samples_per_fold,
-            'background_samples': background_samples,
-            'config': config
-        }
-    }

@@ -17,8 +17,9 @@ import wandb
 
 from ...config_manager import ConfigManager  # Import the config manager
 from ...supervised_learning.dataset import Dataset
-from ...supervised_learning.training import outer_training_loop, \
-    aggregate_results_across_outer_folds, plot_saved_shap_results, plot_model_results
+# from ...supervised_learning.training_scikitlearn import outer_training_loop, \
+#     aggregate_results_across_outer_folds, plot_saved_shap_results, plot_model_results
+
     
 from ...utils.logging_utilities import wandb_init  # Add this import
 
@@ -36,7 +37,7 @@ def parse_arguments():
     
     parser.add_argument('--model_type', 
                         default=None, 
-                        choices=['xgbclassifier', 'xgbregressor', 'deephit'], 
+                        choices=['xgbclassifier', 'xgbregressor', 'dynamic_deephit'], 
                         help='Model type to train (default: xgbclassifier)') 
     
     parser.add_argument('--prediction_type', 
@@ -56,6 +57,13 @@ def parse_arguments():
                         help='Directory for experiment results (required for aggregate mode)')
                         
     # Config file overrides (optional)
+    parser.add_argument('--action_mode', 
+                    type=str, 
+                    default = "continuous_only",   
+                    choices=['continuous_only', 'binary_only', 'mixed'],               
+                    help='Type of action space to use - continuous_only, binary_only, or mixed')
+
+
     parser.add_argument('--experiment_variant', type=str, default='standard',
                        choices=['standard', 'quick_test', 'full_search', 'production'],
                        help='Experiment variant determines config defaults')
@@ -127,6 +135,13 @@ def main():
     # Initialize config manager, it holds paths and environment info
     config_manager = ConfigManager(args)
 
+    if config_manager.model_type == "dynamic_deephit":
+        from ...supervised_learning.training import outer_training_loop
+
+    else:
+        from ...supervised_learning.training_scikitlearn import outer_training_loop, \
+            aggregate_results_across_outer_folds, plot_saved_shap_results, plot_model_results
+
     if args.mode == 'save_dataframe': # this is for post-hoc analysis
         dataset = Dataset(config_manager.data_config, drop_actions=False, transform_target=False)
         dataframe_path = dataset.save_dataframe(config_manager)
@@ -151,7 +166,10 @@ def main():
         print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
             
         # Initialize W&B 
-        wandb_init(config_manager.wandb_config)
+        # wandb_init(config_manager.wandb_config)
+
+        # load training config
+        config_manager.set_training_config() # based on model type 
 
         print(f"Running on {config_manager.environment} environment")
         print(f"Experiment directory: {config_manager.experiment_dir}")
@@ -160,7 +178,7 @@ def main():
         results = outer_training_loop(dataset, config_manager)
 
         # LOG TO W&B in main script
-        log_fold_results_to_wandb(results)
+        # log_fold_results_to_wandb(results)
 
         print(f"Fold {args.fold} completed successfully")
         print(f"Test metrics: {results['test_metrics']}")

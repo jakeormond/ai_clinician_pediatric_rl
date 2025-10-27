@@ -213,7 +213,8 @@ class ConfigManager:
         with open(training_config_path, 'r') as f:
             self.training_config = yaml.safe_load(f)
         # add the action_mode to the training_config
-        self.training_config['action_mode'] = self.action_mode
+        if self.model_type != "dynamic_deephit":
+            self.training_config['action_mode'] = self.action_mode
 
         
     def add_fold(self, fold):

@@ -1,0 +1,16 @@
+    project: "AI_Clininician"
+    "group": "supervised_learning"
+    name: "dynamic_deephit"
+    n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
+    checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
+    horizon: 168 # Prediction horizon in hours - so 1 month
+    device: "cuda"  # Device (cuda or cpu)
+    learning_rate: "loguniform(1e-6, 1e-2)"           #      [1e-6]  # Learning rates to try
+    dropout: "uniform(0.0, 0.5)"
+    batch_size: [256, 512, 1024]  # Batch size for all networks
+    hidden_dim: [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
+
+    # Early stopping parameters (fixed for all combinations)
+    patience: 15        # Stop if no improvement for 15 evaluations
+    eval_freq: 5       # Evaluate every 20 epochs  
+    min_delta: 0.0001   # Minimum improvement threshold

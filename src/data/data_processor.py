@@ -145,6 +145,28 @@ class DataProcessor:
         """
         self.horizon = config_manager.training_config['horizon']
 
+        # get all trajectory lengths
+        traj_lengths = dataset.dataframe.groupby(self.encounter_col).size().to_dict()
+        
+        # calculate n_windows as the traj_length divided by horizon, rounded up
+        n_windows = {k: int(np.ceil(v / self.horizon)) for k, v in traj_lengths.items()}
+        
+        # for each encounter_id, pick n_windows start indices randomly as integers between
+        # 0 and traj_length
+        start_indices = {}
+        for enc_id, n_win in n_windows.items():
+            traj_length = traj_lengths[enc_id]
+            # pick n_win random integers between 0 and traj_length - 1
+            starts = np.random.choice(range(traj_length), size=n_win, replace=False)
+            start_indices[enc_id] = starts
+
+        # 
+
+
+
+
+
+        
         # truncate each patient trajectory (by encounter_id) to the horizon
         truncated_df = dataset.dataframe.groupby(self.encounter_col).tail(self.horizon).reset_index(drop=True)
 
@@ -169,12 +191,8 @@ class DataProcessor:
             zero_rows[self.encounter_col] = enc_id
             # insert the zero rows into the dataframe
             truncated_df = pd.concat([truncated_df.iloc[:first_index], zero_rows, truncated_df.iloc[first_index:]]).reset_index(drop=True)
-
-
-
-
-
-
+           
+        pass
 
 
 

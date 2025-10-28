@@ -137,7 +137,7 @@ class DataProcessor:
             self.action_transformers = None
         
         if normalize_obs:
-            self._normalize_obs()               
+            self._normalize_obs(dataset)               
 
         if transform_actions: # this has to occur before normalization
             self._transform_actions()
@@ -435,7 +435,7 @@ class DataProcessor:
         logger.debug(f"New action array shape: {self.rl_dataset['actions'].shape}")
 
 
-    def _normalize_obs(self):
+    def _normalize_obs(self, dataset):
         # apply min-max normalization to drugs and ordinal features, 
         # leave one hot encoded features as they are, and z-score normalize 
         # the continuous features
@@ -460,14 +460,11 @@ class DataProcessor:
                 # self.obs_norm_dict[feature]['std'] = self.rl_dataset['observations'][:, i].std()
 
                 self.obs_norm_dict[feature] = {}
-                self.obs_norm_dict[feature]['min'] = self.rl_dataset['observations'][:, i].min()
-                self.obs_norm_dict[feature]['max'] = self.rl_dataset['observations'][:, i].max()
-                self.obs_norm_dict[feature]['mean'] = self.rl_dataset['observations'][:, i].mean()
-                self.obs_norm_dict[feature]['std'] = self.rl_dataset['observations'][:, i].std()
-            
-            
-            
-            
+                self.obs_norm_dict[feature]['min'] = dataset.dataframe[feature].min()
+                self.obs_norm_dict[feature]['max'] = dataset.dataframe[feature].max()
+                self.obs_norm_dict[feature]['mean'] = dataset.dataframe[feature].mean()
+                self.obs_norm_dict[feature]['std'] = dataset.dataframe[feature].std()
+                        
             if data_type == 'ordinal' or feature_set == 'infusion' or \
                 feature_set == 'other_meds' or feature_set == 'sedation':
                 
@@ -478,39 +475,56 @@ class DataProcessor:
                 # using the min and max from the training set
                 max_min_diff = self.obs_norm_dict[feature]['max'] - self.obs_norm_dict[feature]['min']
                 if max_min_diff == 0:
-                    self.rl_dataset['observations'][:, i] = 0.0
-                    self.rl_dataset['next_observations'][:, i] = 0.0                
+                    # self.rl_dataset['observations'][:, i] = 0.0
+                    # self.rl_dataset['next_observations'][:, i] = 0.0                
+                    dataset.dataframe[feature] = 0.0                
+                
                 else:
-                    self.rl_dataset['observations'][:, i] = (self.rl_dataset['observations'][:, i] - 
+                    # self.rl_dataset['observations'][:, i] = (self.rl_dataset['observations'][:, i] - 
+                    #     self.obs_norm_dict[feature]['min']) / (self.obs_norm_dict[feature]['max'] 
+                    #                                         - self.obs_norm_dict[feature]['min'])
+
+                    dataset.dataframe[feature] = (dataset.dataframe[feature] - 
                         self.obs_norm_dict[feature]['min']) / (self.obs_norm_dict[feature]['max'] 
                                                             - self.obs_norm_dict[feature]['min'])
-                
+                    
+                    
                     # it is possible here that if both min and max are 0, we will get NaNs;
                     # in this case, we set the normalized value to 0
-                    self.rl_dataset['observations'][:, i] = \
-                        np.nan_to_num(self.rl_dataset['observations'][:, i], nan=0.0)
+                    # self.rl_dataset['observations'][:, i] = \
+                    #     np.nan_to_num(self.rl_dataset['observations'][:, i], nan=0.0)
+                    
+                    dataset.dataframe[feature] = \
+                        np.nan_to_num(dataset.dataframe[feature], nan=0.0)
                 
                     # it is possible to get very large values that are less than inf, set them to zero
-                    self.rl_dataset['observations'][:, i] = \
-                        np.where(np.abs(self.rl_dataset['observations'][:, i]) > 1e6, 0.0, self.rl_dataset['observations'][:, i])                
+                    # self.rl_dataset['observations'][:, i] = \
+                    #     np.where(np.abs(self.rl_dataset['observations'][:, i]) > 1e6, 0.0, self.rl_dataset['observations'][:, i])                
+                    
+                    dataset.dataframe[feature] = \
+                        np.where(np.abs(dataset.dataframe[feature]) > 1e6, 0.0, dataset.dataframe[feature])
+                    
                     
                     # also possible to get Infs if max == min but numerator is non-zero, so we set those to 0 as well
-                    self.rl_dataset['observations'][:, i] = \
-                        np.where(np.isinf(self.rl_dataset['observations'][:, i]), 0.0, self.rl_dataset['observations'][:, i])
+                    # self.rl_dataset['observations'][:, i] = \
+                    #     np.where(np.isinf(self.rl_dataset['observations'][:, i]), 0.0, self.rl_dataset['observations'][:, i])
                     
-                    # also normalize the next_observations
-                    self.rl_dataset['next_observations'][:, i] = (self.rl_dataset['next_observations'][:, i] - 
-                        self.obs_norm_dict[feature]['min']) / (self.obs_norm_dict[feature]['max'] 
-                                                            - self.obs_norm_dict[feature]['min'])    
+                    dataset.dataframe[feature] = \
+                        np.where(np.isinf(dataset.dataframe[feature]), 0.0, dataset.dataframe[feature])
+                    
+                    # also normalize the next_observations - NO LONGER NECESSRY AS WE ARE NORMALIZING THE DATAFRAME DIRECTLY
+                    # self.rl_dataset['next_observations'][:, i] = (self.rl_dataset['next_observations'][:, i] - 
+                    #     self.obs_norm_dict[feature]['min']) / (self.obs_norm_dict[feature]['max'] 
+                    #                                         - self.obs_norm_dict[feature]['min'])                       
 
-                    self.rl_dataset['next_observations'][:, i] = \
-                        np.where(np.abs(self.rl_dataset['next_observations'][:, i]) > 1e6, 0.0, self.rl_dataset['next_observations'][:, i])
+                    # self.rl_dataset['next_observations'][:, i] = \
+                    #     np.where(np.abs(self.rl_dataset['next_observations'][:, i]) > 1e6, 0.0, self.rl_dataset['next_observations'][:, i])
 
-                    self.rl_dataset['next_observations'][:, i] = \
-                        np.nan_to_num(self.rl_dataset['next_observations'][:, i], nan=0.0)   
+                    # self.rl_dataset['next_observations'][:, i] = \
+                    #     np.nan_to_num(self.rl_dataset['next_observations'][:, i], nan=0.0)   
 
-                    self.rl_dataset['next_observations'][:, i] = \
-                        np.where(np.isinf(self.rl_dataset['next_observations'][:, i]), 0.0, self.rl_dataset['next_observations'][:, i])  
+                    # self.rl_dataset['next_observations'][:, i] = \
+                    #     np.where(np.isinf(self.rl_dataset['next_observations'][:, i]), 0.0, self.rl_dataset['next_observations'][:, i])  
 
             elif data_type == 'binary':
                 # binary features are already normalized, so we just store the normalization type

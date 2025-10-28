@@ -46,11 +46,7 @@ class DataProcessor:
             self.normalize_actions = False
             self.transform_actions = False           
 
-        ########### I THINK THERE IS NO REASON TO COPY THE TRAINING CONFIG INTO SELF ####################
-        ############# ONCE THIS IS CONFIRMED, DELETE THE COMMENTED OUT CODE ##############################
-        # # self should also inherit all the key value pairs from the training_config
-        # for key, value in training_config.items():
-        #     setattr(self, key, value)
+
               
         # drop any features in self.features_to_drop
         for feature in self.features_to_drop:
@@ -71,11 +67,27 @@ class DataProcessor:
                                 col != self.reward_col and 
                                 col != self.encounter_col and 
                                 col != self.time_col and 
-                                col != self.terminal_reward_col]
+                                col != self.terminal_reward_col]      
         
+
         for f in self.input_features:
             logger.debug(f"Input feature: {f}")
 
+
+        ##### NOTE, NORMALIZATION WAS PREVIOUSLY OCCURING AFTER CREATING THE DATASETS; NOW IT OCCURS BEFORE #####
+        ####### WILL HAVE TO VERIFY THIS DOESN'T CAUSE ISSUES ##########
+        self.norm_params = norm_params
+
+        if self.normalize_obs or self.normalize_actions or self.transform_actions:
+            self.normalize(dataset)
+
+        if create_binary_actions: # note that this requires zeros to have remained zeros after transformation and normalization
+            self._create_binary_actions(config_manager)
+
+
+
+
+        # create datasets based on model type
         if self.model_type != "dynamic_deephit":
             # split into dymamic deephit dataset
             self.dynamic_deephit_dataset = self._split_into_dynamic_deephit_dataset(dataset, config_manager)
@@ -83,16 +95,13 @@ class DataProcessor:
             # split into the rl_dataset
             self.rl_dataset = self._split_into_rl_dataset(dataset, config_manager)           
                 
-        self.norm_params = norm_params
-        # self.normalize_obs = normalize_obs
-        # self.normalize_actions = normalize_actions
-        # self.transform_actions = transform_actions
+        # self.norm_params = norm_params
 
-        if self.normalize_obs or self.normalize_actions or self.transform_actions:
-            self.normalize()
+        # if self.normalize_obs or self.normalize_actions or self.transform_actions:
+        #     self.normalize()
 
-        if create_binary_actions: # note that this requires zeros to have remained zeros after transformation and normalization
-            self._create_binary_actions(config_manager)
+        # if create_binary_actions: # note that this requires zeros to have remained zeros after transformation and normalization
+        #     self._create_binary_actions(config_manager)
 
     
     def get_start_states(self):
@@ -109,7 +118,7 @@ class DataProcessor:
         return starting_states
 
 
-    def normalize(self, norm_params=None, normalize_obs=True,
+    def normalize(self, dataset, norm_params=None, normalize_obs=True,
                   normalize_actions=True, transform_actions=True):
 
         if self.norm_params is None and norm_params is not None:
@@ -143,56 +152,84 @@ class DataProcessor:
         It will return a dictionary with the following keys:
         - 
         """
-        self.horizon = config_manager.training_config['horizon']
+        np.random.seed(42)
+        
+        self.window_length = config_manager.training_config['window_length']
 
         # get all trajectory lengths
         traj_lengths = dataset.dataframe.groupby(self.encounter_col).size().to_dict()
+
+        # calculate n_windows as the traj_length divided by window_length, rounded up
+        n_windows = {k: int(np.ceil(v / self.window_length)) for k, v in traj_lengths.items()}
         
-        # calculate n_windows as the traj_length divided by horizon, rounded up
-        n_windows = {k: int(np.ceil(v / self.horizon)) for k, v in traj_lengths.items()}
-        
+        # get the total number of windows
+        total_windows = sum(n_windows.values())
+
+        # create data storage
+        feature_array = np.zeros((total_windows, self.window_length, len(self.input_features)))
+        time_to_event_array = np.zeros((total_windows))
+        event_array = np.zeros((total_windows))
+        mask_array = np.zeros((total_windows, self.window_length))
+
         # for each encounter_id, pick n_windows start indices randomly as integers between
         # 0 and traj_length
-        start_indices = {}
+        array_ind = 0
         for enc_id, n_win in n_windows.items():
+            # find start index of traj
             traj_length = traj_lengths[enc_id]
             # pick n_win random integers between 0 and traj_length - 1
-            starts = np.random.choice(range(traj_length), size=n_win, replace=False)
-            start_indices[enc_id] = starts
+            window_ind = np.random.choice(range(traj_length), size=n_win, replace=False)
 
-        # 
+            # get full patient trajectory 
+            full_traj_df = dataset.dataframe[dataset.dataframe[self.encounter_col] == enc_id].reset_index(drop=True)
 
+            if full_traj_df['mortality'].iloc[-1] == 1:
+                event = 2 # death
+            else:
+                event = 1 # discharge
 
+            for i in window_ind:
+                # randomly select 0 or 1 for window starting or ending at si
+                if np.random.rand() < 0.5:
+                    # window starts at si
+                    window_start = i
+                    window_end = min(i + self.window_length, traj_length)
+                else:
+                    # window ends at si
+                    window_end = i + 1
+                    window_start = max(0, i + 1 - self.window_length)
+                
+                # get the dataframe for this window
+                window_df = dataset.dataframe.iloc[window_start:window_end]
+                mask_temp = np.ones(len(window_df))
 
+                if len(window_df) < self.window_length:
+                    # need to pad the window with zeros at the start
+                    rows_to_add = self.window_length - len(window_df)
+                    zero_rows = pd.DataFrame(0, index=np.arange(rows_to_add), columns=window_df.columns)
+                    zero_rows[self.encounter_col] = enc_id
+                    window_df = pd.concat([zero_rows, window_df]).reset_index(drop=True)
 
+                    mask_temp = np.concatenate([np.zeros(rows_to_add), mask_temp])
 
-        
-        # truncate each patient trajectory (by encounter_id) to the horizon
-        truncated_df = dataset.dataframe.groupby(self.encounter_col).tail(self.horizon).reset_index(drop=True)
+                # add to feature_array
+                feature_array[array_ind, :, :] = window_df[self.input_features].to_numpy()
+                # add to mask_array
+                mask_array[array_ind, :] = mask_temp
+                # calculate time_to_event and event
+                time_to_event_array[array_ind] = traj_length - window_end + 1
+                event_array[array_ind] = event
+                array_ind += 1
 
-        # create new column 'mask' and populate with 1s
-        truncated_df['mask'] = 1
+        # create the final dataset
+        final_dataset = {
+            'features': feature_array,
+            'time_to_event': time_to_event_array,
+            'event': event_array,
+            'mask': mask_array
+        }
 
-        # create a time_to_event column that counts from 1 to trajectory length for each patient
-        truncated_df['time_to_event'] = truncated_df.groupby(self.encounter_col).cumcount() + 1
-
-        # get the lengths of each trajectory
-        traj_lengths = truncated_df.groupby(self.encounter_col).size().to_dict()
-
-        # restrict traj_lengths dictionary to only those with length < horizon
-        traj_lengths = {k: v for k, v in traj_lengths.items() if v < self.horizon}
-
-        for enc_id, length in traj_lengths.items():
-            # insert rows of zeros before the first rows to path the trajectory to the horizon
-            rows_to_add = self.horizon - length
-            first_index = truncated_df[truncated_df[self.encounter_col] == enc_id].index[0]
-            zero_rows = pd.DataFrame(0, index=np.arange(rows_to_add), columns=truncated_df.columns)
-            # make the encounter_col = enc_id for these rows
-            zero_rows[self.encounter_col] = enc_id
-            # insert the zero rows into the dataframe
-            truncated_df = pd.concat([truncated_df.iloc[:first_index], zero_rows, truncated_df.iloc[first_index:]]).reset_index(drop=True)
-           
-        pass
+        return final_dataset
 
 
 
@@ -413,12 +450,23 @@ class DataProcessor:
             data_type = feature_row['data_type'].values[0]
             feature_set = feature_row['feature_set'].values[0]
 
+            
+            
             if feature not in self.obs_norm_dict:
+                # self.obs_norm_dict[feature] = {}
+                # self.obs_norm_dict[feature]['min'] = self.rl_dataset['observations'][:, i].min()
+                # self.obs_norm_dict[feature]['max'] = self.rl_dataset['observations'][:, i].max()
+                # self.obs_norm_dict[feature]['mean'] = self.rl_dataset['observations'][:, i].mean()
+                # self.obs_norm_dict[feature]['std'] = self.rl_dataset['observations'][:, i].std()
+
                 self.obs_norm_dict[feature] = {}
                 self.obs_norm_dict[feature]['min'] = self.rl_dataset['observations'][:, i].min()
                 self.obs_norm_dict[feature]['max'] = self.rl_dataset['observations'][:, i].max()
                 self.obs_norm_dict[feature]['mean'] = self.rl_dataset['observations'][:, i].mean()
                 self.obs_norm_dict[feature]['std'] = self.rl_dataset['observations'][:, i].std()
+            
+            
+            
             
             if data_type == 'ordinal' or feature_set == 'infusion' or \
                 feature_set == 'other_meds' or feature_set == 'sedation':

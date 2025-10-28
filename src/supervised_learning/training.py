@@ -376,12 +376,6 @@ def outer_training_loop(dataset, config_manager):
         train_processor, test_processor, norm_params = create_processors(
                 dataset, outer_train_id, outer_test_id, config_manager
             )        
-
-        # Keep only best trajectories if a fraction to keep is specified
-        if config_manager.model_type == "any_percent_bc":
-            logger.info(f"    Selecting best trajectories (frac={config_manager.frac})")
-            select_best_trajectories(train_processor, config_manager)
-            select_best_trajectories(test_processor, config_manager)
                         
         final_training_scores, test_scores, n_epochs = train_with_hyperparameters(
                                                                 train_processor, 

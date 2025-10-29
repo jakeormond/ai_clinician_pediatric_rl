@@ -214,18 +214,17 @@ class DataProcessor:
                 array_ind += 1
 
         # convert time to event to bins based on config_manager.time bins
-        time_to_event_array_binned = np.digitize(time_to_event_array, config_manager.time_bins) - 1
+        time_to_event_array_binned = np.digitize(time_to_event_array, config_manager.time_bins, right = True) - 1
 
         # create the final dataset
         final_dataset = {
             'features': feature_array,
-            'time_to_event': time_to_event_array,
+            'time_to_event': time_to_event_array_binned,
             'event': event_array,
             'mask': mask_array
         }
 
         return final_dataset
-
 
 
     def _split_into_rl_dataset(self, dataset, config_manager):

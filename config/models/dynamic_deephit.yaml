@@ -7,10 +7,11 @@
     device: "cuda"  # Device (cuda or cpu)
     learning_rate: "loguniform(1e-6, 1e-2)"           #      [1e-6]  # Learning rates to try
     dropout: "uniform(0.0, 0.5)"
-    batch_size: [256, 512, 1024]  # Batch size for all networks
-    hidden_dim: [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
+    batch_size: [16]  # Batch size for all networks
+    hidden_dim: [64]  # Hidden dimension for all networks
+    n_layers: [2]
 
-    loss_metric: "unknown_loss"  # Which metric to use for early stopping
+    loss_metric: "deephit_loss"  # Which metric to use for early stopping
 
     # Early stopping parameters (fixed for all combinations)
     patience: 15        # Stop if no improvement for 15 evaluations

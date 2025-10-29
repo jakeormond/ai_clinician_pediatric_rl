@@ -35,8 +35,7 @@ class DataProcessor:
                 else:
                     # Shallow copy is fine for immutable objects (str, int, float, etc.)
                     setattr(self, key, value)
-             
-        
+                   
         if config_manager.action_mode == 'binary_only' or config_manager.action_mode == 'mixed':
             create_binary_actions = True
         else:
@@ -46,8 +45,6 @@ class DataProcessor:
             self.normalize_actions = False
             self.transform_actions = False           
 
-
-              
         # drop any features in self.features_to_drop
         for feature in self.features_to_drop:
             if feature in dataset.dataframe.columns:
@@ -85,8 +82,6 @@ class DataProcessor:
             self._create_binary_actions(config_manager)
 
 
-
-
         # create datasets based on model type
         if self.model_type != "dynamic_deephit":
             # split into dymamic deephit dataset
@@ -119,7 +114,7 @@ class DataProcessor:
 
 
     def normalize(self, dataset, norm_params=None, normalize_obs=True,
-                  normalize_actions=True, transform_actions=True):
+                  normalize_actions=False, transform_actions=False):
 
         if self.norm_params is None and norm_params is not None:
             self.norm_params = norm_params
@@ -136,13 +131,13 @@ class DataProcessor:
             self.action_maximum = None
             self.action_transformers = None
         
-        if normalize_obs:
+        if dataset.normalize_obs:
             self._normalize_obs(dataset)               
 
-        if transform_actions: # this has to occur before normalization
+        if dataset.transform_actions: # this has to occur before normalization
             self._transform_actions()
 
-        if normalize_actions:
+        if dataset.normalize_actions:
             self._normalize_actions() 
             
         
@@ -536,22 +531,33 @@ class DataProcessor:
 
                 # normalize the ith col in self.rl_dataset['observations']
                 # using the mean and std from the training set
-                self.rl_dataset['observations'][:, i] = (self.rl_dataset['observations'][:, i] - 
+                # self.rl_dataset['observations'][:, i] = (self.rl_dataset['observations'][:, i] - 
+                #     self.obs_norm_dict[feature]['mean']) / self.obs_norm_dict[feature]['std']
+                
+                dataset.dataframe[feature] = (dataset.dataframe[feature] - 
                     self.obs_norm_dict[feature]['mean']) / self.obs_norm_dict[feature]['std']
                 
                 # also normalize the next_observations
-                self.rl_dataset['next_observations'][:, i] = (self.rl_dataset['next_observations'][:, i] - 
-                    self.obs_norm_dict[feature]['mean']) / self.obs_norm_dict[feature]['std']
+                # self.rl_dataset['next_observations'][:, i] = (self.rl_dataset['next_observations'][:, i] - 
+                #     self.obs_norm_dict[feature]['mean']) / self.obs_norm_dict[feature]['std']
 
             # check for NaNs in the normalized feature
-            if np.isnan(self.rl_dataset['observations'][:, i]).any() or \
-               np.isnan(self.rl_dataset['next_observations'][:, i]).any():
+            # if np.isnan(self.rl_dataset['observations'][:, i]).any() or \
+            #    np.isnan(self.rl_dataset['next_observations'][:, i]).any():
+            #     raise ValueError(f"NaNs found in normalized feature {feature}")
+
+            # check for NaNs in the normalized feature
+            if np.isnan(dataset.dataframe[feature]).any() :
                 raise ValueError(f"NaNs found in normalized feature {feature}")
 
             # check for Infs in the normalized feature
-            if np.isinf(self.rl_dataset['observations'][:, i]).any() or \
-               np.isinf(self.rl_dataset['next_observations'][:, i]).any():
+            # if np.isinf(self.rl_dataset['observations'][:, i]).any() or \
+            #    np.isinf(self.rl_dataset['next_observations'][:, i]).any():
+            #     raise ValueError(f"Infs found in normalized feature {feature}") 
+            
+            if np.isinf(dataset.dataframe[feature]).any():
                 raise ValueError(f"Infs found in normalized feature {feature}") 
+
 
             logger.debug(f"Normalized feature {feature} with {normalization_type} normalization. "
                 f"Min: {self.obs_norm_dict[feature]['min']}, \

@@ -113,12 +113,9 @@ class DataProcessor:
         return starting_states
 
 
-    def normalize(self, dataset, norm_params=None, normalize_obs=True,
-                  normalize_actions=False, transform_actions=False):
+    def normalize(self, dataset):
 
-        if self.norm_params is None and norm_params is not None:
-            self.norm_params = norm_params
-        
+       
         if self.norm_params is not None:
             # if normalization parameters are provided, use them to normalize the data
             self.obs_norm_dict = self.norm_params['obs_norm_dict']
@@ -215,6 +212,9 @@ class DataProcessor:
                 time_to_event_array[array_ind] = traj_length - window_end + 1
                 event_array[array_ind] = event
                 array_ind += 1
+
+        # convert time to event to bins based on config_manager.time bins
+        time_to_event_array_binned = np.digitize(time_to_event_array, config_manager.time_bins) - 1
 
         # create the final dataset
         final_dataset = {
@@ -564,6 +564,12 @@ class DataProcessor:
                     Max: {self.obs_norm_dict[feature]['max']}, \
                         Mean: {self.obs_norm_dict[feature]['mean']}, \
                             Std: {self.obs_norm_dict[feature]['std']}")
+            
+            if self.obs_norm_dict[feature]['max'] > 5:
+                pass
+
+            if self.obs_norm_dict[feature]['min'] < -5:
+                pass
 
         logger.debug("Observation normalization complete.")                        
 

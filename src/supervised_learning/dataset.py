@@ -16,8 +16,8 @@ class Dataset:
         
         # Dataset should store all the key value pairs from the config
         for key, value in config.items():
-            setattr(self, key, value)
-        
+            setattr(self, key, value)   
+
         self._load_dataset(drop_actions)
         
         if config['model_type'] == 'supervised_learning' and transform_target: # this is generally used for supervised learning, so gets
@@ -50,6 +50,17 @@ class Dataset:
         self.encounter_col = "encounter_id"
         self.time_col = "time"
         
+        # get encounter lengths and remove any longer than self.max_encounter_length
+        encounter_lengths = self.dataframe.groupby(self.encounter_col).size()
+
+        # get ids of long encounters
+        long_encounter_ids = encounter_lengths[encounter_lengths > self.max_encounter_length]
+        # drop these from the dataframe
+        print(f"Dropping {len(long_encounter_ids)} encounter IDs longer than {self.max_encounter_length} timepoints.")
+        print(f"length of dataframe before dropping long encounters: {self.dataframe.shape[0]} rows.")
+        self.dataframe = self.dataframe[~self.dataframe[self.encounter_col].isin(long_encounter_ids.index)].reset_index(drop=True)
+        print(f"length of dataframe after dropping long encounters: {self.dataframe.shape[0]} rows.")
+
         self.features_to_use = pd.read_csv(self.features_to_use_path)
 
          # drop any rows where "do not use" is 1

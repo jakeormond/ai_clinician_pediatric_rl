@@ -29,6 +29,7 @@ import torch.nn.functional as F
 from ..utils.logging_utilities import wandb_init
 from ..data.data_processor import DataProcessor
 # from .dataset import Dataset
+from ..rl.replay_buffer import DynamicDeepHitDataset
 
 from ..utils.utilities import set_seed
 # from .plotting import plot_losses, plot_Q_by_mortality
@@ -97,21 +98,23 @@ def create_processors(dataset, train_id, val_id, config_manager):
     return train_processor, val_processor, norm_params
 
 
+def create_buffer(processor, batch_size):
+    dataset = DynamicDeepHitDataset(processor.rl_dataset)
+    buffer = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    return buffer
+
 
 def create_trainer(train_processor, hyperparams, config_manager):
 
-    state_dim = train_processor.rl_dataset["observations"].shape[1]
-    action_dim = train_processor.rl_dataset["actions"].shape[1]
-    max_action = np.max(np.abs(train_processor.rl_dataset["actions"]))
+    feature_dim = train_processor.dyn_deephit_dataset["features"].shape[1]
+    num_risks = 2 # hardcode for now
 
     model_type = config_manager.model_type
     module = importlib.import_module(MODEL_MODULES[model_type])
     
     return module.get_trainer(
         config_manager,
-        state_dim,
-        action_dim,
-        max_action,
+        feature_dim,
         hyperparams
     )
 
@@ -143,70 +146,7 @@ def append_epoch_losses(
     for key, value in epoch_avg_losses.items():
         training_losses[key].append(value)     
 
-    # add q stats if available
-    if 'q_stats' in locals():
-        training_losses.update(q_stats)
 
-
-def estimate_v0(trainer, starting_states, batch_size, losses_dict):
-    # we store the estimates in losses_dict
-    # optionally, estimate V0 and append to training losses
-        v0_mean, v0_sem = trainer.estimate_v0(starting_states, batch_size = batch_size)
-        # print(f"Epoch {epoch}: Train mean start state values: {train_v0_mean:.4f} ± {train_v0_sem:.4f}")
-        losses_dict['v0_mean'].append(float(v0_mean))
-        losses_dict['v0_sem'].append(float(v0_sem))
-
-
-
-def calculate_q_stats(losses_dict):
-    # calculate q value stats if available
-    mean_Qs = losses_dict["mean_Q"]
-    variance_Qs = losses_dict["variance_Q"]
-    counts_all = losses_dict["batch_n"]
-
-    overall_mean_Q = np.sum(np.array(mean_Qs) * np.array(counts_all)) / np.sum(counts_all)
-    overall_variance_Q = np.sum(counts_all * (variance_Qs + np.array(mean_Qs - overall_mean_Q)**2)) / np.sum(counts_all)
-    overall_std_Q = np.sqrt(overall_variance_Q)
-
-    mean_survival_Qs = losses_dict["survival_Q"]
-    variance_survival_Qs = losses_dict["survival_variance_Q"]
-    counts_survival = losses_dict["survival_n"]
-
-    overall_mean_survival_Q = np.sum(np.array(mean_survival_Qs) * np.array(counts_survival)) / np.sum(counts_survival)
-    overall_variance_survival_Q = np.sum(counts_survival * (variance_survival_Qs + np.array(mean_survival_Qs - overall_mean_survival_Q)**2)) / np.sum(counts_survival)
-    overall_std_survival_Q = np.sqrt(overall_variance_survival_Q)
-
-    mean_non_survival_Qs = losses_dict["non_survival_Q"]
-    variance_non_survival_Qs = losses_dict["non_survival_variance_Q"]
-    counts_non_survival = losses_dict["non_survival_n"]
-
-    overall_mean_non_survival_Q = np.sum(np.array(mean_non_survival_Qs) * np.array(counts_non_survival)) / np.sum(counts_non_survival)
-    overall_variance_non_survival_Q = np.sum(counts_non_survival * (variance_non_survival_Qs + np.array(mean_non_survival_Qs - overall_mean_non_survival_Q)**2)) / np.sum(counts_non_survival)
-    overall_std_non_survival_Q = np.sqrt(overall_variance_non_survival_Q)
-
-    survival_non_survival_diff = overall_mean_survival_Q - overall_mean_non_survival_Q
-    survival_non_survival_snr = survival_non_survival_diff**2/(0.5*(overall_variance_survival_Q + overall_variance_non_survival_Q))
-
-    # create a dictionary of these values 
-    q_stats = {
-        "mean_Q": overall_mean_Q,
-        "std_Q": overall_std_Q,
-        "mean_survival_Q": overall_mean_survival_Q,
-        "std_survival_Q": overall_std_survival_Q,
-        "mean_non_survival_Q": overall_mean_non_survival_Q,
-        "std_non_survival_Q": overall_std_non_survival_Q,
-        "survival_non_survival_diff": survival_non_survival_diff,
-        "survival_non_survival_snr": survival_non_survival_snr
-    }
-
-    # drop q keys from losses
-    for key in ["mean_Q", "variance_Q", "batch_n",
-                "survival_Q", "survival_variance_Q", "survival_n",
-                "non_survival_Q", "non_survival_variance_Q", "non_survival_n"]:
-        losses_dict.pop(key, None)
-
-
-    return q_stats, losses_dict
 
 
 def evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_losses):
@@ -538,11 +478,6 @@ def train_with_hyperparameters(
     training_buffer = create_buffer(train_processor, batch_size)
     val_test_buffer = create_buffer(val_test_processor, batch_size)
     
-    # get starting state distribution for V0 estimation if we're doing TD3-BC
-    if config_manager.training_config['monitor_v0']:
-        training_starting_states = train_processor.get_start_states()
-        val_starting_states = val_test_processor.get_start_states()
-
     # create trainer
     trainer = create_trainer(train_processor, hyperparams, config_manager)
         

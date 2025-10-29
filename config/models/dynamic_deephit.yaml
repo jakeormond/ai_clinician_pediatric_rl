@@ -10,6 +10,8 @@
     batch_size: [256, 512, 1024]  # Batch size for all networks
     hidden_dim: [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
 
+    loss_metric: "unknown_loss"  # Which metric to use for early stopping
+
     # Early stopping parameters (fixed for all combinations)
     patience: 15        # Stop if no improvement for 15 evaluations
     eval_freq: 5       # Evaluate every 20 epochs  

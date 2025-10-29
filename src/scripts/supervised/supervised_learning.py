@@ -19,6 +19,9 @@ from ...config_manager import ConfigManager  # Import the config manager
 from ...supervised_learning.dataset import Dataset
 # from ...supervised_learning.training_scikitlearn import outer_training_loop, \
 #     aggregate_results_across_outer_folds, plot_saved_shap_results, plot_model_results
+# from ...supervised_learning.models.dynamic_deephit import make_mixed_resolution_time_bins
+# from ...supervised_learning.training import outer_training_loop, \
+#     aggregate_results_across_outer_folds, plot_saved_shap_results, plot_model_results
 
     
 from ...utils.logging_utilities import wandb_init  # Add this import
@@ -137,6 +140,7 @@ def main():
 
     if config_manager.model_type == "dynamic_deephit":
         from ...supervised_learning.training import outer_training_loop
+        from ...supervised_learning.models.dynamic_deephit import make_mixed_resolution_time_bins
 
     else:
         from ...supervised_learning.training_scikitlearn import outer_training_loop, \
@@ -164,8 +168,21 @@ def main():
         # load data
         dataset = Dataset(config_manager.data_config)
         print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
-            
-        # Initialize W&B 
+
+        # if model type is deep hit, we need to make the time bins and add to the configuration
+        if config_manager.model_type == "dynamic_deephit":
+            # get lengths of trajectories in dataset.dataframe (by encounter_id)
+            encounter_lengths = dataset.dataframe.groupby("encounter_id").size()
+            max_encounter_length = encounter_lengths.max()
+            print(f"Max encounter length: {max_encounter_length}")
+
+            time_bins = make_mixed_resolution_time_bins(
+                max_time_hours=max_encounter_length,
+                base=1.2
+            )
+            config_manager.time_bins = time_bins
+
+        # Initialize W&B
         # wandb_init(config_manager.wandb_config)
 
         # load training config

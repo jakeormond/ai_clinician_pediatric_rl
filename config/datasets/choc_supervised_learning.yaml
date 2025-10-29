@@ -6,6 +6,8 @@ seed: 42
 
 proportion_w_data: 0.80
 
+max_encounter_length: 2880  # in hours, 4 months
+
 target_col: "mortality"
 
 action_feature_sets: ["vasoactive_inotropic_infusion", "input_output"]

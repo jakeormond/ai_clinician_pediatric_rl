@@ -67,6 +67,7 @@
                 "--prediction_type", "discharge_mortality_tte",
                 "--mode", "single_fold", 
                 "--fold", "0",
+                "--testing",
                 "--experiment_variant", "quick_test",                
                 "--search_variant", "random_search",
                 "--n_search_iterations", "1"

@@ -1,6 +1,6 @@
     project: "AI_Clininician"
     "group": "supervised_learning"
-    name: "dynamic_deephit"
+    name: "dynamic_deephit_loss"
     n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
     window_length: 168 # Prediction horizon in hours - so 1 month
@@ -9,6 +9,7 @@
     dropout: "uniform(0.0, 0.5)"
     batch_size: [16]  # Batch size for all networks
     hidden_dim: [64]  # Hidden dimension for all networks
+    attn_hidden_dim: [64]
     n_layers: [2]
 
     loss_metric: "deephit_loss"  # Which metric to use for early stopping

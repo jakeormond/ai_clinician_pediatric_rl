@@ -16,6 +16,7 @@ class DynamicDeepHitMulti(nn.Module):
         self,
         feature_dim: int,
         hidden_dim: int,
+        attn_hidden_dim: int,
         num_layers: int,
         num_time_bins: int,
         num_risks: int,
@@ -33,6 +34,12 @@ class DynamicDeepHitMulti(nn.Module):
             rnn_type: 'GRU' or 'LSTM'
         """
         super().__init__()
+        self.feature_dim = feature_dim
+        self.hidden_size = hidden_dim
+        self.attn_hidden_dim = attn_hidden_dim
+        self.num_layers = num_layers
+        self.num_time_bins = num_time_bins
+        self.num_risks = num_risks
 
         # --- Temporal encoder ---
         if rnn_type.upper() == "LSTM":
@@ -52,6 +59,9 @@ class DynamicDeepHitMulti(nn.Module):
                 dropout=dropout if num_layers > 1 else 0.0,
             )
 
+        # temporal attention
+        self.attn = TemporalAttention(hidden_size=self.hidden_size, attn_size=attn_hidden_dim)
+
         # --- Event-specific heads ---
         self.heads = nn.ModuleList([
             nn.Sequential(
@@ -62,45 +72,97 @@ class DynamicDeepHitMulti(nn.Module):
             )
             for _ in range(num_risks)
         ])
-
-        self.num_risks = num_risks
-
-        def forward(self, x, mask=None):
-            """
-            Args:
-                x: [batch, seq_len, input_dim]
-                mask: [batch, seq_len] with 1 for valid timesteps, 0 for padding
-            Returns:
-                out: list of [batch, num_time_bins] tensors, one per risk
-            """
-            # --- Pack padded sequences if mask provided ---
-            if mask is not None:
-                lengths = mask.sum(dim=1).cpu()
-                packed = nn.utils.rnn.pack_padded_sequence(
-                    x, lengths, batch_first=True, enforce_sorted=False
-                )
-                h_packed, _ = self.rnn(packed)
-                h, _ = nn.utils.rnn.pad_packed_sequence(h_packed, batch_first=True)
-            else:
-                h, _ = self.rnn(x)
-
-            # --- Extract last valid hidden state per sequence ---
-            if mask is not None:
-                idx = (mask.sum(dim=1) - 1).long().unsqueeze(1).unsqueeze(2)
-                idx = idx.expand(-1, 1, h.size(2))
-                h_last = h.gather(1, idx).squeeze(1)
-            else:
-                h_last = h[:, -1, :]
-
-            # --- Event-specific hazard outputs ---
-            outputs = []
-            for head in self.heads:
-                logits = head(h_last)             # [batch, num_time_bins]
-                probs = F.softmax(logits, dim=-1) # per-risk discrete-time probabilities
-                outputs.append(probs)
-
-            return outputs  # list of tensors, len=num_risks
         
+
+    def forward(self, x, mask=None):
+        """
+        Args:
+            x: [batch, seq_len, input_dim]
+            mask: [batch, seq_len] with 1 for valid timesteps, 0 for padding
+        Returns:
+            out: list of [batch, num_time_bins] tensors, one per risk
+        """
+        # --- Pack padded sequences if mask provided ---
+        if mask is not None:
+            lengths = mask.sum(dim=1).cpu()
+            packed = nn.utils.rnn.pack_padded_sequence(
+                x, lengths, batch_first=True, enforce_sorted=False
+            )
+            h_packed, _ = self.rnn(packed)
+            h, _ = nn.utils.rnn.pad_packed_sequence(h_packed, batch_first=True)
+        else:
+            h, _ = self.rnn(x)
+
+        # # --- Extract last valid hidden state per sequence ---
+        # if mask is not None:
+        #     idx = (mask.sum(dim=1) - 1).long().unsqueeze(1).unsqueeze(2)
+        #     idx = idx.expand(-1, 1, h.size(2))
+        #     h_last = h.gather(1, idx).squeeze(1)
+        # else:
+        #     h_last = h[:, -1, :]
+
+        # pass hidden states through temporal attention
+        device = h.device
+        batch_size, max_len, _ = h.shape
+        lengths = lengths.to(device)
+        new_mask = torch.arange(max_len, device=device).expand(batch_size, max_len) < lengths.unsqueeze(1)
+        h_last, attn_weights = self.attn(h, new_mask)  # [batch_size, hidden_dim]
+
+        # --- Event-specific hazard outputs ---
+        outputs = []
+        for head in self.heads:
+            logits = head(h_last)             # [batch, num_time_bins]
+            probs = F.softmax(logits, dim=-1) # per-risk discrete-time probabilities
+            outputs.append(probs)
+
+        return outputs  # list of tensors, len=num_risks
+        
+
+class TemporalAttention(nn.Module):
+    """
+    Simple temporal attention over RNN hidden states.
+    Computes scalar score for each time step and returns:
+      - context: [B, H]  (weighted sum of h over time)
+      - attn_weights: [B, T]
+    Masking ensures padded timesteps receive zero weight.
+    """
+    def __init__(self, hidden_size: int, attn_size: int = None):
+        super().__init__()
+        self.hidden_size = hidden_size
+        if attn_size is None:
+            attn_size = self.hidden_size // 2 if self.hidden_size >= 4 else self.hidden_size
+        self.attn_size = attn_size
+        self.W = nn.Linear(self.hidden_size, self.attn_size, bias=True)
+        self.v = nn.Linear(self.attn_size, 1, bias=False)  #
+        # optionally add dropout / layernorm if desired
+
+    def forward(self, h: torch.Tensor, mask: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        h: [B, T, H] RNN outputs / hidden states (batch_first)
+        mask: [B, T] boolean or float (1 for valid, 0 for pad)
+        returns: context [B, H], attn_weights [B, T]
+        """
+        # compute intermediate: [B, T, attn_hidden]
+        u = torch.tanh(self.W(h))                # [B, T, A]
+        scores = self.v(u).squeeze(-1)           # [B, T]
+
+        # mask: convert to float (1.0 valid, 0.0 pad)
+        if mask.dtype != torch.bool:
+            mask_bool = mask.bool()
+        else:
+            mask_bool = mask
+        
+        # set scores of padded positions to a large negative number before softmax
+        # numerical stable softmax: subtract max per row
+        scores_masked = scores.masked_fill(~mask_bool, float("-1e9"))
+        # compute normalized attention
+        attn_weights = F.softmax(scores_masked, dim=-1)   # [B, T], padded positions ~0
+
+        # weighted sum => context
+        attn_weights_unsq = attn_weights.unsqueeze(-1)    # [B, T, 1]
+        context = torch.sum(attn_weights_unsq * h, dim=1) # [B, H]
+
+        return context, attn_weights
 
 
 class DynamicDeepHitTrainer:
@@ -108,9 +170,9 @@ class DynamicDeepHitTrainer:
         self,
         model,
         optimizer,
-        device,
-        num_risks,
-        num_time_bins,
+        device = "CUDA" if torch.cuda.is_available() else "CPU",
+        num_risks = 2,
+        num_time_bins = 100,
         loss_fn=None,
         grad_clip=None,
         scheduler=None,
@@ -138,43 +200,81 @@ class DynamicDeepHitTrainer:
         self.scheduler = scheduler
         self.verbose = verbose
 
-        self.time_bins = self.make_mixed_resolution_time_bins(
-            max_time_hours=3000,
-            num_bins=num_time_bins
-        )
 
 
-    def train_epoch(self, batch: TensorBatch):
+    def train(self, batch: TensorBatch):
+        # unpack batch
+        X = batch[0].to(self.device)      # [batch_size, n_ts, n_features]
+        T = batch[1].to(self.device)      # [batch_size]
+        E = batch[2].to(self.device)      # [batch_size]
+        mask = batch[3].to(self.device) 
 
-        pass
+        # Zero gradients
+        self.optimizer.zero_grad()
 
+        # Forward pass
+        # Model should output: [batch_size, num_risks, num_time_bins]
+        outputs = self.model(X, mask)
 
+        # Compute loss
+        loss = self.loss_fn(outputs, T, E, mask)
 
-
-    def get_trainer(config_manager, feature_dim, hyperparams):
-
-        learning_rate = float(hyperparams['learning_rate'])
-
-        dynamic_deephit_model = DynamicDeepHitMulti(feature_dim, action_dim).to(config_manager.training_config['device'])
-
-        critic_optimizer = torch.optim.Adam(
-            critic.parameters(),
-            lr=learning_rate
-        )
-
-        trainer = Q_Learner(
-                critic=critic,
-                critic_optimizer=critic_optimizer,
-                discount=config_manager.training_config['discount'],
-                device=config_manager.training_config['device'],
-                tau=config_manager.training_config['tau'],	
+        # Gradient clipping if specified
+        if self.grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), 
+                self.grad_clip
             )
 
-        return trainer
+        # Update weights
+        self.optimizer.step()
+
+        log_dict = {"dynamic_deephit_loss": loss.item()}
+
+        return log_dict
 
 
 
-def deephit_loss(preds, y_time, y_event, mask=None, alpha=0.1, eps=1e-8):
+def get_trainer(config_manager, feature_dim, hyperparams):
+
+    learning_rate = float(hyperparams['learning_rate'])
+    n_time_bins = len(config_manager.time_bins)
+
+    num_risks = 2 # hardcoded for death vs discharge
+
+    dynamic_deephit_model = DynamicDeepHitMulti(
+        feature_dim,
+        hyperparams['hidden_dim'],
+        hyperparams['attn_hidden_dim'],
+        hyperparams['n_layers'],
+        n_time_bins,
+        num_risks,
+        dropout=hyperparams['dropout'],
+        rnn_type="GRU",
+    ).to(config_manager.training_config['device'])
+
+    deephit_optimizer = torch.optim.Adam(
+        dynamic_deephit_model.parameters(),
+        lr=learning_rate
+    )
+
+    trainer = DynamicDeepHitTrainer(
+            dynamic_deephit_model,
+            deephit_optimizer,
+            device=config_manager.training_config['device'],
+            num_risks=num_risks,
+            num_time_bins=n_time_bins,
+            loss_fn=dynamic_deephit_loss,
+            grad_clip = None,
+            scheduler=None,
+            verbose=True                
+        )
+
+    return trainer
+
+
+
+def dynamic_deephit_loss(preds, y_time, y_event, mask=None, alpha=0.1, eps=1e-8):
     """
     Dynamic-DeepHit loss for competing risks (multi-risk, discrete-time)
 

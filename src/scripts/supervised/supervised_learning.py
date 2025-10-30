@@ -161,14 +161,18 @@ def main():
         
         # create the name and directory for this fold
         config_manager.set_fold_name()
-        
-        # update config with the search space
-        config_manager.set_search_grid()      
-       
+
+        # # update config with the search space
+        # config_manager.set_search_grid()      
+
         # load data
         dataset = Dataset(config_manager.data_config)
         print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
 
+        if config_manager.testing:
+            dataset = dataset.subsample_dataset(0.1)
+            print(f"Subsampled dataset to {len(dataset.dataframe)} rows for testing")   
+        
         # if model type is deep hit, we need to make the time bins and add to the configuration
         if config_manager.model_type == "dynamic_deephit":
             # get lengths of trajectories in dataset.dataframe (by encounter_id)

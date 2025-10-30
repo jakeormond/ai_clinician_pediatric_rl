@@ -213,7 +213,6 @@ class DataProcessor:
                 event_array[array_ind] = event
                 array_ind += 1
 
-        # convert time to event to bins based on config_manager.time bins
         time_to_event_array_binned = np.digitize(time_to_event_array, config_manager.time_bins, right = True) - 1
 
         # create the final dataset

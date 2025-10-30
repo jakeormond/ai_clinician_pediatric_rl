@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 MODEL_MODULES = {
-    "dynamic_deephit": "src.supervised.models.dynamic_deephit",
+    "dynamic_deephit": "src.supervised_learning.models.dynamic_deephit",
 }
 
 DISTRIBUTIONS = {
@@ -99,14 +99,14 @@ def create_processors(dataset, train_id, val_id, config_manager):
 
 
 def create_buffer(processor, batch_size):
-    dataset = DynamicDeepHitDataset(processor.rl_dataset)
+    dataset = DynamicDeepHitDataset(processor.dynamic_deephit_dataset)
     buffer = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     return buffer
 
 
 def create_trainer(train_processor, hyperparams, config_manager):
 
-    feature_dim = train_processor.dyn_deephit_dataset["features"].shape[1]
+    feature_dim = train_processor.dynamic_deephit_dataset["features"].shape[2]
     num_risks = 2 # hardcode for now
 
     model_type = config_manager.model_type

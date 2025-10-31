@@ -65,7 +65,7 @@ class DynamicDeepHitMulti(nn.Module):
         # --- Event-specific heads ---
         self.heads = nn.ModuleList([
             nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim),
+                nn.Linear(hidden_dim + feature_dim, hidden_dim),
                 nn.ReLU(),
                 nn.Dropout(dropout),
                 nn.Linear(hidden_dim, num_time_bins)
@@ -106,16 +106,21 @@ class DynamicDeepHitMulti(nn.Module):
         batch_size, max_len, _ = h.shape
         lengths = lengths.to(device)
         new_mask = torch.arange(max_len, device=device).expand(batch_size, max_len) < lengths.unsqueeze(1)
-        h_last, attn_weights = self.attn(h, new_mask)  # [batch_size, hidden_dim]
+        context, attn_weights = self.attn(h, new_mask)  # [batch_size, hidden_dim]
 
         # --- Event-specific hazard outputs ---
-        outputs = []
-        for head in self.heads:
-            logits = head(h_last)             # [batch, num_time_bins]
-            probs = F.softmax(logits, dim=-1) # per-risk discrete-time probabilities
-            outputs.append(probs)
+        last_measurement = x[:, -1, :]      # [batch, 80] - just the last timestep
 
-        return outputs  # list of tensors, len=num_risks
+        # Input to cause-specific subnetworks
+        subnetwork_input = torch.cat([context, last_measurement], dim=-1)
+        
+        logits = torch.stack([head(subnetwork_input) for head in self.heads], dim=1)
+        B, K, T = logits.shape
+        logits_flat = logits.view(B, -1)                # [B, K*T]
+        probs_flat = F.softmax(logits_flat, dim=-1)     # each row sums to 1
+        probs = probs_flat.view(B, K, T)   
+
+        return logits, probs  # [B, K, T], [B, K, T]
         
 
 class TemporalAttention(nn.Module):
@@ -205,8 +210,8 @@ class DynamicDeepHitTrainer:
     def train(self, batch: TensorBatch):
         # unpack batch
         X = batch[0].to(self.device)      # [batch_size, n_ts, n_features]
-        T = batch[1].to(self.device)      # [batch_size]
-        E = batch[2].to(self.device)      # [batch_size]
+        time_to_event = batch[1].to(self.device)      # [batch_size]
+        event_label = batch[2].to(self.device)      # [batch_size]
         mask = batch[3].to(self.device) 
 
         # Zero gradients
@@ -214,10 +219,10 @@ class DynamicDeepHitTrainer:
 
         # Forward pass
         # Model should output: [batch_size, num_risks, num_time_bins]
-        outputs = self.model(X, mask)
+        logits, _ = self.model(X, mask)
 
         # Compute loss
-        loss = self.loss_fn(outputs, T, E, mask)
+        loss = self.loss_fn(logits, time_to_event, event_label, mask)
 
         # Gradient clipping if specified
         if self.grad_clip is not None:
@@ -274,14 +279,22 @@ def get_trainer(config_manager, feature_dim, hyperparams):
 
 
 
-def dynamic_deephit_loss(preds, y_time, y_event, mask=None, alpha=0.1, eps=1e-8):
+def dynamic_deephit_loss(
+        logits, 
+        time_to_event, 
+        event_label, 
+        mask, 
+        no_censoring=True,
+        alpha=0.1, 
+        eps=1e-8
+        ):
     """
     Dynamic-DeepHit loss for competing risks (multi-risk, discrete-time)
 
     Args:
-        preds: list of tensors [batch, num_bins] per risk (hazard probabilities, already softmaxed)
-        y_time: [batch] integer time bin of event/censoring (0-based)
-        y_event: [batch] risk label (0=censored, 1..R)
+        logits: tensor (B, K, T)  -- raw model outputs
+        time_to_event: [batch] integer time bin of event/censoring (0-based)
+        event_label: [batch] risk label (0=censored, 1..R)
         mask: optional [batch] or [batch, seq_len] for padded sequences (1=valid, 0=padded)
         alpha: weight for ranking loss
         eps: numerical stability
@@ -289,6 +302,119 @@ def dynamic_deephit_loss(preds, y_time, y_event, mask=None, alpha=0.1, eps=1e-8)
     Returns:
         scalar loss tensor
     """
+    B, K, T = logits.shape
+    device = logits.device
+
+    # subtract 1 from event_label if no censoring
+    event_label = event_label -1 if no_censoring else event_label   
+
+    # --- 1) Likelihood loss (use log_softmax over flattened K*T) ----------------
+    logits_flat = logits.view(B, K * T)                # (B, K*T)
+    logp_flat = F.log_softmax(logits_flat, dim=1)      # (B, K*T)
+    logp = logp_flat.view(B, K, T)                     # (B, K, T)
+    # gather log probability for observed (k_obs, t_obs)
+    idx = (event_label * T + time_to_event).unsqueeze(1) # (B,1) - this gives the index of the actual event label - time combination
+    logp_flat_sel = logp_flat.gather(1, idx.long()).squeeze(1) # (B,) - take the log prob for the actual event label - time combination
+    lik_loss = - logp_flat_sel.mean() # the negative of which can be used as the loss (log prob close to 0 mean highs high prob, 
+    # log prob very negative means low prob   
+
+    # --- 2) Ranking loss --------------------------------------------------------
+    # compute cumulative incidence S_k(t) = sum_{s<=t} p_k(s)
+    p = logp.exp()                                     # (B,K,T) - probabilities
+    S = torch.cumsum(p, dim=2)                         # (B,K,T) - cumulative incidence for each event class
+
+    # We'll form pairwise differences only for pairs where i has event k and t_i < t_j
+    # Create index tensors for pairwise operations
+    # We vectorize by creating all pairs (i,j) in batch: shape (B,B)
+    # mask_ij_k: True where pair (i,j) is comparable for cause k.
+    # To limit complexity, we optionally sample pairs randomly.
+    # Build matrices for t and k comparisons:
+    t_i = time_to_event.view(B, 1)   # (B,1)
+    t_j = time_to_event.view(1, B)   # (1,B)
+    k_i = event_label.view(B, 1)   # (B,1)
+    k_j = event_label.view(1, B)   # (1,B)
+
+    # comparable if k_i == k (i experienced cause k), and t_i < t_j (i earlier than j)
+    # We'll loop over causes to get S_k at t_i for i and at t_i for j (note: compare at time t_i)
+    rank_loss = torch.tensor(0.0, device=device)
+    total_pairs = 0
+
+    for k in range(K):
+        # mask of i samples with event==k
+        mask_i_k = (k_obs == k)                 # (B,)
+        if mask_i_k.sum() == 0:
+            continue
+
+        # For cause k, build pair mask: i in mask_i_k AND t_i < t_j
+        # Broadcasting:
+        mask_i_k_mat = mask_i_k.view(B, 1)      # (B,1)
+        mask_time = (t_i < t_j)                 # (B,B)
+        pair_mask = mask_i_k_mat & mask_time    # (B,B) -- candidate pairs (i,j)
+
+        # Optionally sample a subset of pairs
+        if pair_sample_frac < 1.0:
+            # get indices of true entries
+            i_idx, j_idx = torch.nonzero(pair_mask, as_tuple=True)
+            n_pairs = i_idx.shape[0]
+            if n_pairs == 0:
+                continue
+            n_sample = max(1, int(n_pairs * pair_sample_frac))
+            perm = torch.randperm(n_pairs, device=device)[:n_sample]
+            i_idx_s = i_idx[perm]; j_idx_s = j_idx[perm]
+            # compute differences using these index lists
+            S_i = S[i_idx_s, k, t_obs[i_idx_s]]           # S_k(t_i | x_i)
+            S_j = S[j_idx_s, k, t_obs[i_idx_s]]           # S_k(t_i | x_j)  note same t_i
+            diff = S_i - S_j
+            # logistic pairwise loss: log(1 + exp(-diff))
+            rank_loss += torch.log1p(torch.exp(-diff)).sum()
+            total_pairs += n_sample
+        else:
+            # vectorized over all pairs
+            # we need S_k(t_i | x_i) and S_k(t_i | x_j) for all (i,j)
+            # build S_i matrix: (B,B) with row i giving S_k(t_i | x_i)
+            t_i_idx = t_obs.view(B, 1).expand(B, B)     # (B,B)
+            # S_k at times for all samples: S[:,k,:] shape (B, T)
+            S_k = S[:, k, :]                            # (B, T)
+            # gather S_k(t_i | x_i) as matrix: S_k[i, t_i] repeated across columns
+            S_i_vals = S_k.gather(1, t_obs.view(B,1)).expand(B, B)  # (B,B)
+            # gather S_k(t_i | x_j): for each row i, we want S_k[j, t_i]
+            # create index matrix t_i_idx and use gather on S_k.transpose?
+            # easiest: S_k_ti_for_all_j = S_k[:, t_i] but we need per-column different t_i.
+            # We'll use advanced indexing:
+            # For pair (i,j): S_k[j, t_i] -> S_k[ j_idx, t_i[i] ]
+            i_idx, j_idx = torch.nonzero(pair_mask, as_tuple=True)
+            if i_idx.numel() == 0:
+                continue
+            S_i = S_k[i_idx, t_obs[i_idx]]              # (n_pairs,)
+            S_j = S_k[j_idx, t_obs[i_idx]]              # (n_pairs,)  # note t_i used
+            diff = S_i - S_j
+            rank_loss += torch.log1p(torch.exp(-diff)).sum()
+            total_pairs += i_idx.shape[0]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     device = y_time.device
     batch_size = y_time.size(0)

@@ -60,7 +60,11 @@ class DynamicDeepHitMulti(nn.Module):
             )
 
         # temporal attention
-        self.attn = TemporalAttention(hidden_size=self.hidden_size, attn_size=attn_hidden_dim)
+        self.attn = TemporalAttention(
+            hidden_size=self.hidden_size, 
+            feature_size=self.feature_dim, 
+            attn_size=attn_hidden_dim
+            )
 
         # --- Event-specific heads ---
         self.heads = nn.ModuleList([
@@ -131,24 +135,31 @@ class TemporalAttention(nn.Module):
       - attn_weights: [B, T]
     Masking ensures padded timesteps receive zero weight.
     """
-    def __init__(self, hidden_size: int, attn_size: int = None):
+    def __init__(self, hidden_size: int, feature_size: int, attn_size: int = None):
         super().__init__()
         self.hidden_size = hidden_size
         if attn_size is None:
             attn_size = self.hidden_size // 2 if self.hidden_size >= 4 else self.hidden_size
         self.attn_size = attn_size
-        self.W = nn.Linear(self.hidden_size, self.attn_size, bias=True)
+        self.feature_size = feature_size
+        
+        self.W_h = nn.Linear(self.hidden_size, self.attn_size, bias=False)
+        self.W_x = nn.Linear(self.feature_size, self.attn_size, bias=False)
         self.v = nn.Linear(self.attn_size, 1, bias=False)  #
+        self.b = nn.Parameter(torch.zeros(attn_size))
         # optionally add dropout / layernorm if desired
 
-    def forward(self, h: torch.Tensor, mask: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, h: torch.Tensor, x: torch.Tensor, mask: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         h: [B, T, H] RNN outputs / hidden states (batch_first)
         mask: [B, T] boolean or float (1 for valid, 0 for pad)
         returns: context [B, H], attn_weights [B, T]
         """
         # compute intermediate: [B, T, attn_hidden]
-        u = torch.tanh(self.W(h))                # [B, T, A]
+        Wh = self.W_h(h)    # [B, T, A]
+        Wx = self.W_x(x)    # [B, T, A]
+        
+        u = torch.tanh(Wh + Wx + self.b)                # [B, T, A]
         scores = self.v(u).squeeze(-1)           # [B, T]
 
         # mask: convert to float (1.0 valid, 0.0 pad)

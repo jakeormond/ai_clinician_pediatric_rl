@@ -22,6 +22,7 @@ class DynamicDeepHitMulti(nn.Module):
         num_risks: int,
         dropout: float = 0.3,
         rnn_type: str = "GRU",
+        predict_covariates: list = None
     ):
         """
         Args:
@@ -31,7 +32,8 @@ class DynamicDeepHitMulti(nn.Module):
             num_time_bins: number of discrete time bins
             num_risks: number of competing risks (e.g. 2 for death, discharge)
             dropout: dropout rate
-            rnn_type: 'GRU' or 'LSTM'
+            rnn_type: 'GRU' or 'LSTM',
+            predict_covariates: list of indices of covariates to predict for regularization
         """
         super().__init__()
         self.feature_dim = feature_dim
@@ -40,6 +42,7 @@ class DynamicDeepHitMulti(nn.Module):
         self.num_layers = num_layers
         self.num_time_bins = num_time_bins
         self.num_risks = num_risks
+        self.predict_covariates = predict_covariates if predict_covariates else []
 
         # --- Temporal encoder ---
         if rnn_type.upper() == "LSTM":
@@ -58,6 +61,18 @@ class DynamicDeepHitMulti(nn.Module):
                 batch_first=True,
                 dropout=dropout if num_layers > 1 else 0.0,
             )
+
+        # prediction head for step-ahead covariate prediction 
+        if len(self.predict_covariates) > 0:
+            self.covariate_predictor = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, len(self.predict_covariates))
+            )
+        else:
+            self.covariate_predictor = None
+
 
         # temporal attention
         self.attn = TemporalAttention(
@@ -78,7 +93,7 @@ class DynamicDeepHitMulti(nn.Module):
         ])
         
 
-    def forward(self, x, mask=None):
+    def forward(self, x, mask=None, return_predictions=False):
         """
         Args:
             x: [batch, seq_len, input_dim]
@@ -97,15 +112,16 @@ class DynamicDeepHitMulti(nn.Module):
         else:
             h, _ = self.rnn(x)
 
-        # # --- Extract last valid hidden state per sequence ---
-        # if mask is not None:
-        #     idx = (mask.sum(dim=1) - 1).long().unsqueeze(1).unsqueeze(2)
-        #     idx = idx.expand(-1, 1, h.size(2))
-        #     h_last = h.gather(1, idx).squeeze(1)
-        # else:
-        #     h_last = h[:, -1, :]
-
-        # pass hidden states through temporal attention
+        # --- NEW: Generate step-ahead predictions from GRU hidden states ---
+        predictions = None
+        if self.prediction_head is not None and return_predictions:
+            # Use hidden states from timesteps 0 to seq_len-2 to predict timesteps 1 to seq_len-1
+            # h: [batch, seq_len, hidden_dim]
+            h_for_pred = h[:, :-1, :]  # [batch, seq_len-1, hidden_dim]
+            predictions = self.prediction_head(h_for_pred)  # [batch, seq_len-1, num_predict_covariates]
+        
+        # ----temporal attention--------
+        #  pass hidden states through temporal attention
         device = h.device
         batch_size, max_len, _ = h.shape
         lengths = lengths.to(device)
@@ -124,7 +140,10 @@ class DynamicDeepHitMulti(nn.Module):
         probs_flat = F.softmax(logits_flat, dim=-1)     # each row sums to 1
         probs = probs_flat.view(B, K, T)   
 
-        return logits, probs  # [B, K, T], [B, K, T]
+        if return_predictions:
+            return logits, probs, predictions  # [B, K, T], [B, K, T], [B, seq_len-1, num_predict_covariates]
+        else:
+            return logits, probs  # [B, K, T], [B, K, T]
         
 
 class TemporalAttention(nn.Module):
@@ -403,30 +422,6 @@ def dynamic_deephit_loss(
             total_pairs += i_idx.shape[0]
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     device = y_time.device
     batch_size = y_time.size(0)
     num_risks = len(preds)
@@ -474,6 +469,62 @@ def dynamic_deephit_loss(
     loss = ll.mean() + alpha * ranking
     return loss
 
+
+def predition_loss(predictions, x, mask, predict_covariates, continuous_indices=None):
+    """
+    Compute the step-ahead prediction loss (L3 in DeepHit paper).
+    
+    Args:
+        predictions: [batch, seq_len-1, num_predict_covariates] - predicted next-step values
+        x: [batch, seq_len, feature_dim] - original input sequences
+        mask: [batch, seq_len] - 1 for valid timesteps, 0 for padding
+        predict_covariates: list of covariate indices being predicted
+        continuous_indices: list of indices (within predict_covariates) that are continuous
+                          (if None, assumes all are continuous)
+    
+    Returns:
+        loss: scalar prediction loss
+    """
+    batch_size, seq_len_minus_1, num_pred = predictions.shape
+
+    # Extract the actual next-step values
+    x_next = x[:, 1:, :]  # [batch, seq_len-1, feature_dim]
+    x_next_pred_covs = x_next[:, :, predict_covariates]  # [batch, seq_len-1, num_predict_covariates]
+    
+    # Mask for valid predictions (both current and next timestep must be valid)
+    # mask: [batch, seq_len]
+    mask_current = mask[:, :-1]  # [batch, seq_len-1]
+    mask_next = mask[:, 1:]      # [batch, seq_len-1]
+    valid_mask = mask_current * mask_next  # [batch, seq_len-1]
+    valid_mask = valid_mask.unsqueeze(-1)  # [batch, seq_len-1, 1]
+
+    # Compute loss based on covariate type
+    if continuous_indices is None:
+        # All continuous - MSE
+        loss = F.mse_loss(predictions, x_next_pred_covs, reduction='none')  # [batch, seq_len-1, num_pred]
+    else:
+        # Mixed continuous and binary
+        loss = torch.zeros_like(predictions)
+        
+        # Continuous covariates - MSE
+        for i in continuous_indices:
+            loss[:, :, i] = (predictions[:, :, i] - x_next_pred_covs[:, :, i]) ** 2
+        
+        # Binary covariates - Binary cross-entropy
+        binary_indices = [i for i in range(num_pred) if i not in continuous_indices]
+        for i in binary_indices:
+            pred_i = torch.sigmoid(predictions[:, :, i])  # Apply sigmoid for binary
+            target_i = x_next_pred_covs[:, :, i]
+            # Binary cross-entropy: -[y*log(p) + (1-y)*log(1-p)]
+            loss[:, :, i] = -(target_i * torch.log(pred_i + 1e-8) + 
+                             (1 - target_i) * torch.log(1 - pred_i + 1e-8))
+    
+    # Apply mask and compute mean
+    masked_loss = loss * valid_mask
+    total_loss = masked_loss.sum()
+    num_valid = valid_mask.sum()
+    
+    return total_loss / (num_valid + 1e-8)
 
 
 def make_mixed_resolution_time_bins(max_time_hours=3000, base=1.2):

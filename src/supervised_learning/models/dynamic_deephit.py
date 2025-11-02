@@ -383,7 +383,6 @@ def dynamic_deephit_loss(
 
 def log_likelihood_loss(logits, time_to_event, event_label, no_censoring=True):
     B, K, T = logits.shape
-    device = logits.device
 
     # subtract 1 from event_label if no censoring
     event_label = event_label -1 if no_censoring else event_label   
@@ -391,8 +390,6 @@ def log_likelihood_loss(logits, time_to_event, event_label, no_censoring=True):
     # --- 1) Likelihood loss (use log_softmax over flattened K*T) ----------------
     logits_flat = logits.view(B, K * T)                # (B, K*T)
     logp_flat = F.log_softmax(logits_flat, dim=1)      # (B, K*T)
-    logp = logp_flat.view(B, K, T)                     # (B, K, T)
-    # gather log probability for observed (k_obs, t_obs)
     idx = (event_label * T + time_to_event).unsqueeze(1) # (B,1) - this gives the index of the actual event label - time combination
     logp_flat_sel = logp_flat.gather(1, idx.long()).squeeze(1) # (B,) - take the log prob for the actual event label - time combination
     lik_loss = - logp_flat_sel.mean() # the negative of which can be used as the loss (log prob close to 0 mean highs high prob, 
@@ -404,6 +401,9 @@ def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=0.
 
     B, K, T = logits.shape
     device = logits.device
+
+    # subtract 1 from event_label if no censoring
+    event_label = event_label -1 if no_censoring else event_label   
     
     # --- 2) Ranking loss --------------------------------------------------------
     # compute cumulative incidence S_k(t) = sum_{s<=t} p_k(s)

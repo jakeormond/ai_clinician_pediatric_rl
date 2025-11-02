@@ -257,6 +257,7 @@ class DynamicDeepHitTrainer:
             predictions, 
             time_to_event, 
             event_label, 
+            X,
             mask,
             predict_covariates=self.model.predict_covariates,
             physiological_feature_type=self.physiological_feature_type
@@ -472,7 +473,7 @@ def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=0.
     return rank_loss
 
 
-def prediction_loss(predictions, x, mask, predict_covariates, continuous_indices=None):
+def prediction_loss(X, predictions, mask, predict_covariates, continuous_indices=None):
     """
     Compute the step-ahead prediction loss (L3 in DeepHit paper).
     
@@ -490,36 +491,28 @@ def prediction_loss(predictions, x, mask, predict_covariates, continuous_indices
     batch_size, seq_len_minus_1, num_pred = predictions.shape
 
     # Extract the actual next-step values
-    x_next = x[:, 1:, :]  # [batch, seq_len-1, feature_dim]
-    x_next_pred_covs = x_next[:, :, predict_covariates]  # [batch, seq_len-1, num_predict_covariates]
-    
-    # Mask for valid predictions (both current and next timestep must be valid)
-    # mask: [batch, seq_len]
-    mask_current = mask[:, :-1]  # [batch, seq_len-1]
+    x_next = X[:, 1:, predict_covariates]  # [batch, seq_len-1, feature_dim]
     mask_next = mask[:, 1:]      # [batch, seq_len-1]
-    valid_mask = mask_current * mask_next  # [batch, seq_len-1]
-    valid_mask = valid_mask.unsqueeze(-1)  # [batch, seq_len-1, 1]
+    valid_mask = mask_next.unsqueeze(-1)  # [batch, seq_len-1, 1]
 
     # Compute loss based on covariate type
-    if continuous_indices is None:
-        # All continuous - MSE
-        loss = F.mse_loss(predictions, x_next_pred_covs, reduction='none')  # [batch, seq_len-1, num_pred]
-    else:
-        # Mixed continuous and binary
-        loss = torch.zeros_like(predictions)
-        
-        # Continuous covariates - MSE
-        for i in continuous_indices:
-            loss[:, :, i] = (predictions[:, :, i] - x_next_pred_covs[:, :, i]) ** 2
-        
-        # Binary covariates - Binary cross-entropy
-        binary_indices = [i for i in range(num_pred) if i not in continuous_indices]
-        for i in binary_indices:
-            pred_i = torch.sigmoid(predictions[:, :, i])  # Apply sigmoid for binary
-            target_i = x_next_pred_covs[:, :, i]
-            # Binary cross-entropy: -[y*log(p) + (1-y)*log(1-p)]
-            loss[:, :, i] = -(target_i * torch.log(pred_i + 1e-8) + 
-                             (1 - target_i) * torch.log(1 - pred_i + 1e-8))
+    binary_indices = [i for i, val in enumerate(continuous_indices) if val == 'binary']
+    continuous_indices = [i for i, val in enumerate(continuous_indices) if val == 'continuous']
+
+    if continuous_indices:
+        # continuous - MSE
+        continuous_loss = F.mse_loss(
+            predictions[:,:,continuous_indices], 
+            x_next[:,:,continuous_indices], reduction='none')  # [batch, seq_len-1, num_pred]
+    if binary_indices:
+        # cross-entropy for binary
+        pred_binary = torch.sigmoid(predictions[:,:,binary_indices])  # [batch, seq_len-1, num_binary]
+        target_binary = x_next[:,:,binary_indices]
+        binary_loss = F.binary_cross_entropy(
+            pred_binary, 
+            target_binary, reduction='none')  # [batch, seq_len-1, num
+
+    
     
     # Apply mask and compute mean
     masked_loss = loss * valid_mask

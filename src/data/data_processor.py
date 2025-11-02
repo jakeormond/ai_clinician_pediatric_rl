@@ -58,6 +58,8 @@ class DataProcessor:
                                 col != self.time_col and 
                                 col != 'mortality' and 
                                 col != 'discharge']
+            
+
         else:
             self.input_features = [col for col in dataset.dataframe.columns
                                 if col not in dataset.actions and 
@@ -432,6 +434,10 @@ class DataProcessor:
         # apply min-max normalization to drugs and ordinal features, 
         # leave one hot encoded features as they are, and z-score normalize 
         # the continuous features
+        self.physiological_feature_ind = [] # for dynamic deephit model, which tries to predict next physiological features
+        self.physiological_feature_type = []
+
+        physiological_feature_sets = ['blood_gas', 'labs', 'neuro', 'vitals']
 
         if self.obs_norm_dict is None:
             self.obs_norm_dict = {}
@@ -443,7 +449,9 @@ class DataProcessor:
             data_type = feature_row['data_type'].values[0]
             feature_set = feature_row['feature_set'].values[0]
 
-            
+            if feature_set in physiological_feature_sets:
+                self.physiological_feature_ind.append(i)    
+                self.physiological_feature_type.append(data_type)        
             
             if feature not in self.obs_norm_dict:
                 # self.obs_norm_dict[feature] = {}
@@ -569,7 +577,7 @@ class DataProcessor:
             if self.obs_norm_dict[feature]['min'] < -5:
                 pass
 
-        logger.debug("Observation normalization complete.")                        
+        logger.debug("Observation normalization complete.")                    
 
     
     def _normalize_actions(self):

@@ -115,7 +115,8 @@ def create_trainer(train_processor, hyperparams, config_manager):
     return module.get_trainer(
         config_manager,
         feature_dim,
-        hyperparams
+        hyperparams,
+        train_processor
     )
 
 

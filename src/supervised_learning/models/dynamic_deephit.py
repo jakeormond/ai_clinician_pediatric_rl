@@ -114,11 +114,11 @@ class DynamicDeepHitMulti(nn.Module):
 
         # --- NEW: Generate step-ahead predictions from GRU hidden states ---
         predictions = None
-        if self.prediction_head is not None and return_predictions:
+        if self.covariate_predictor is not None and return_predictions:
             # Use hidden states from timesteps 0 to seq_len-2 to predict timesteps 1 to seq_len-1
             # h: [batch, seq_len, hidden_dim]
             h_for_pred = h[:, :-1, :]  # [batch, seq_len-1, hidden_dim]
-            predictions = self.prediction_head(h_for_pred)  # [batch, seq_len-1, num_predict_covariates]
+            predictions = self.covariate_predictor(h_for_pred)  # [batch, seq_len-1, num_predict_covariates]
         
         # ----temporal attention--------
         #  pass hidden states through temporal attention
@@ -126,7 +126,7 @@ class DynamicDeepHitMulti(nn.Module):
         batch_size, max_len, _ = h.shape
         lengths = lengths.to(device)
         new_mask = torch.arange(max_len, device=device).expand(batch_size, max_len) < lengths.unsqueeze(1)
-        context, attn_weights = self.attn(h, new_mask)  # [batch_size, hidden_dim]
+        context, attn_weights = self.attn(h, x, new_mask)  # [batch_size, hidden_dim]
 
         # --- Event-specific hazard outputs ---
         last_measurement = x[:, -1, :]      # [batch, 80] - just the last timestep
@@ -212,6 +212,7 @@ class DynamicDeepHitTrainer:
         grad_clip=None,
         scheduler=None,
         verbose=True,
+        physiological_feature_type = None
     ):
         """
         Args:
@@ -234,8 +235,7 @@ class DynamicDeepHitTrainer:
         self.grad_clip = grad_clip
         self.scheduler = scheduler
         self.verbose = verbose
-
-
+        self.physiological_feature_type = physiological_feature_type
 
     def train(self, batch: TensorBatch):
         # unpack batch
@@ -249,7 +249,7 @@ class DynamicDeepHitTrainer:
 
         # Forward pass
         # Model should output: [batch_size, num_risks, num_time_bins]
-        logits, _ = self.model(X, mask)
+        logits, _, predictions = self.model(X, mask=mask, return_predictions=True)
 
         # Compute loss
         loss = self.loss_fn(logits, time_to_event, event_label, mask)
@@ -269,8 +269,7 @@ class DynamicDeepHitTrainer:
         return log_dict
 
 
-
-def get_trainer(config_manager, feature_dim, hyperparams):
+def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
 
     learning_rate = float(hyperparams['learning_rate'])
     n_time_bins = len(config_manager.time_bins)
@@ -286,6 +285,7 @@ def get_trainer(config_manager, feature_dim, hyperparams):
         num_risks,
         dropout=hyperparams['dropout'],
         rnn_type="GRU",
+        predict_covariates=train_processor.physiological_feature_ind,
     ).to(config_manager.training_config['device'])
 
     deephit_optimizer = torch.optim.Adam(
@@ -302,7 +302,8 @@ def get_trainer(config_manager, feature_dim, hyperparams):
             loss_fn=dynamic_deephit_loss,
             grad_clip = None,
             scheduler=None,
-            verbose=True                
+            verbose=True, 
+            physiological_feature_type = train_processor.physiological_feature_type                
         )
 
     return trainer
@@ -371,14 +372,14 @@ def dynamic_deephit_loss(
 
     for k in range(K):
         # mask of i samples with event==k
-        mask_i_k = (k_obs == k)                 # (B,)
+        mask_i_k = (event_label == k)                 # (B,)
         if mask_i_k.sum() == 0:
             continue
 
         # For cause k, build pair mask: i in mask_i_k AND t_i < t_j
         # Broadcasting:
         mask_i_k_mat = mask_i_k.view(B, 1)      # (B,1)
-        mask_time = (t_i < t_j)                 # (B,B)
+        mask_time = (t_i < t_j)                 # (B,B) -- true where t_i < t_j
         pair_mask = mask_i_k_mat & mask_time    # (B,B) -- candidate pairs (i,j)
 
         # Optionally sample a subset of pairs
@@ -470,7 +471,7 @@ def dynamic_deephit_loss(
     return loss
 
 
-def predition_loss(predictions, x, mask, predict_covariates, continuous_indices=None):
+def prediction_loss(predictions, x, mask, predict_covariates, continuous_indices=None):
     """
     Compute the step-ahead prediction loss (L3 in DeepHit paper).
     

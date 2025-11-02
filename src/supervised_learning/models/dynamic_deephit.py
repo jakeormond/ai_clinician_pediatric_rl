@@ -112,6 +112,8 @@ class DynamicDeepHitMulti(nn.Module):
         else:
             h, _ = self.rnn(x)
 
+        # ------ note that h comes out padded at the end not the beginning for shorter windows -------
+
         # --- NEW: Generate step-ahead predictions from GRU hidden states ---
         predictions = None
         if self.covariate_predictor is not None and return_predictions:
@@ -126,9 +128,19 @@ class DynamicDeepHitMulti(nn.Module):
         batch_size, max_len, _ = h.shape
         lengths = lengths.to(device)
         new_mask = torch.arange(max_len, device=device).expand(batch_size, max_len) < lengths.unsqueeze(1)
-        context, attn_weights = self.attn(h, x, new_mask)  # [batch_size, hidden_dim]
+        
+        # move padding from left to right for x
+        feature_dim = x.shape[2]
+        x_right_padded = torch.zeros((batch_size, max_len, feature_dim), device=device, dtype=x.dtype)
+        for i in range(batch_size):
+            L = lengths[i].long()
+            # Copy the last L timesteps (the valid ones) to the front of the new array
+            x_right_padded[i, :L] = x[i, -L:]        
+        
+        context, attn_weights = self.attn(h, x_right_padded, new_mask)  # [batch_size, hidden_dim]
 
         # --- Event-specific hazard outputs ---
+        # Note that here we use the left padded data so the last measurement corresponds to the last time step
         last_measurement = x[:, -1, :]      # [batch, 80] - just the last timestep
 
         # Input to cause-specific subnetworks
@@ -141,9 +153,9 @@ class DynamicDeepHitMulti(nn.Module):
         probs = probs_flat.view(B, K, T)   
 
         if return_predictions:
-            return logits, probs, predictions  # [B, K, T], [B, K, T], [B, seq_len-1, num_predict_covariates]
+            return logits, probs, predictions, x_right_padded, new_mask  # [B, K, T], [B, K, T], [B, seq_len-1, num_predict_covariates]
         else:
-            return logits, probs  # [B, K, T], [B, K, T]
+            return logits, probs, _, x_right_padded, new_mask  # [B, K, T], [B, K, T]
         
 
 class TemporalAttention(nn.Module):
@@ -249,7 +261,7 @@ class DynamicDeepHitTrainer:
 
         # Forward pass
         # Model should output: [batch_size, num_risks, num_time_bins]
-        logits, _, predictions = self.model(X, mask=mask, return_predictions=True)
+        logits, _, predictions, x_right_padded , new_mask = self.model(X, mask=mask, return_predictions=True)
 
         # Compute log loss and ranking loss
         loss = self.loss_fn(
@@ -257,16 +269,11 @@ class DynamicDeepHitTrainer:
             predictions, 
             time_to_event, 
             event_label, 
-            X,
-            mask,
+            x_right_padded,
+            new_mask,
             predict_covariates=self.model.predict_covariates,
             physiological_feature_type=self.physiological_feature_type
             )
-
-        # compute prediction loss
-        prediction_loss_value = prediction_loss(
-            X,
-            predictions) 
 
 
         # Gradient clipping if specified
@@ -330,8 +337,8 @@ def dynamic_deephit_loss(
         predictions,
         time_to_event, 
         event_label,
-        X, 
-        mask, 
+        x_right_padded, 
+        mask, # right padded
         predict_covariates: list = [],
         physiological_feature_type: list = [],
         no_censoring=True,
@@ -359,7 +366,7 @@ def dynamic_deephit_loss(
     rank_loss = ranking_loss(logits, time_to_event, event_label, no_censoring, sigma)
     
     pred_loss = prediction_loss(
-            X,
+            x_right_padded,
             predictions, 
             mask, 
             predict_covariates, 
@@ -499,20 +506,20 @@ def prediction_loss(X, predictions, mask, predict_covariates, continuous_indices
     binary_indices = [i for i, val in enumerate(continuous_indices) if val == 'binary']
     continuous_indices = [i for i, val in enumerate(continuous_indices) if val == 'continuous']
 
-    if continuous_indices:
-        # continuous - MSE
-        continuous_loss = F.mse_loss(
-            predictions[:,:,continuous_indices], 
-            x_next[:,:,continuous_indices], reduction='none')  # [batch, seq_len-1, num_pred]
-    if binary_indices:
-        # cross-entropy for binary
-        pred_binary = torch.sigmoid(predictions[:,:,binary_indices])  # [batch, seq_len-1, num_binary]
-        target_binary = x_next[:,:,binary_indices]
-        binary_loss = F.binary_cross_entropy(
-            pred_binary, 
-            target_binary, reduction='none')  # [batch, seq_len-1, num
+    # continuous - MSE
+    continuous_loss = F.mse_loss(
+        predictions[:,:,continuous_indices], 
+        x_next[:,:,continuous_indices], reduction='none')  # [batch, seq_len-1, num_pred]
 
-    
+    # cross-entropy for binary
+    pred_binary = torch.sigmoid(predictions[:,:,binary_indices])  # [batch, seq_len-1, num_binary]
+    target_binary = x_next[:,:,binary_indices]
+    binary_loss = F.binary_cross_entropy(
+        pred_binary, 
+        target_binary, reduction='none')  # [batch, seq_len-1, num
+
+    # Combine losses
+    loss = continuous_loss + binary_loss  # [batch, seq_len-1, num_pred]
     
     # Apply mask and compute mean
     masked_loss = loss * valid_mask

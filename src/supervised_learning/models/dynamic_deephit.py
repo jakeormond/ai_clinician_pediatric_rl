@@ -347,7 +347,8 @@ def dynamic_deephit_loss(
         physiological_feature_type: list = [],
         no_censoring=True,
         pair_sample_frac = 1.0,
-        alpha=0.1, 
+        alpha_rank=0.1, 
+        alpha_pred = 0.1,
         sigma=0.1,
         eps=1e-8
         ):
@@ -376,12 +377,9 @@ def dynamic_deephit_loss(
             predict_covariates, 
             physiological_feature_type
             ) 
-    
-    
-   
-   
+      
     # --- Combine ---
-    loss = lik_loss + alpha * rank_loss + pred_loss
+    loss = lik_loss + alpha_rank * rank_loss + alpha_pred * pred_loss
     return loss, lik_loss, rank_loss, pred_loss
 
 
@@ -522,12 +520,12 @@ def prediction_loss(X, predictions, mask, predict_covariates, continuous_indices
         target_binary, reduction='none')  # [batch, seq_len-1, num
 
     # Combine losses
-    loss = continuous_loss + binary_loss  # [batch, seq_len-1, num_pred]
+    loss = torch.cat([continuous_loss, binary_loss], dim=2)  
     
     # Apply mask and compute mean
     masked_loss = loss * valid_mask
     total_loss = masked_loss.sum()
-    num_valid = valid_mask.sum()
+    num_valid = valid_mask.sum() * loss.shape[2]  # multiply by num_pred
     
     return total_loss / (num_valid + 1e-8)
 

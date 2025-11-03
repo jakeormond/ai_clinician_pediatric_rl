@@ -113,7 +113,12 @@ class DynamicDeepHitMulti(nn.Module):
             h, _ = self.rnn(x)
 
         # ------ note that h comes out padded at the end not the beginning for shorter windows -------
-
+        # generate right-padded mask
+        device = h.device
+        batch_size, max_len, _ = h.shape
+        lengths = lengths.to(device)
+        new_mask = torch.arange(max_len, device=device).expand(batch_size, max_len) < lengths.unsqueeze(1)  
+        
         # --- NEW: Generate step-ahead predictions from GRU hidden states ---
         predictions = None
         if self.covariate_predictor is not None and return_predictions:
@@ -121,13 +126,12 @@ class DynamicDeepHitMulti(nn.Module):
             # h: [batch, seq_len, hidden_dim]
             h_for_pred = h[:, :-1, :]  # [batch, seq_len-1, hidden_dim]
             predictions = self.covariate_predictor(h_for_pred)  # [batch, seq_len-1, num_predict_covariates]
-        
+            # apply mask to predictions
+            pred_mask = new_mask[:, 1:] # need to remove as many predictions as zeros in the mask  
+            predictions = predictions * pred_mask.unsqueeze(-1).float()  # Zero out padded predictions
+
         # ----temporal attention--------
         #  pass hidden states through temporal attention
-        device = h.device
-        batch_size, max_len, _ = h.shape
-        lengths = lengths.to(device)
-        new_mask = torch.arange(max_len, device=device).expand(batch_size, max_len) < lengths.unsqueeze(1)
         
         # move padding from left to right for x
         feature_dim = x.shape[2]
@@ -377,8 +381,8 @@ def dynamic_deephit_loss(
    
    
     # --- Combine ---
-    loss = lik_loss + alpha * rank_loss
-    return loss, lik_loss, rank_loss
+    loss = lik_loss + alpha * rank_loss + pred_loss
+    return loss, lik_loss, rank_loss, pred_loss
 
 
 def log_likelihood_loss(logits, time_to_event, event_label, no_censoring=True):
@@ -512,10 +516,9 @@ def prediction_loss(X, predictions, mask, predict_covariates, continuous_indices
         x_next[:,:,continuous_indices], reduction='none')  # [batch, seq_len-1, num_pred]
 
     # cross-entropy for binary
-    pred_binary = torch.sigmoid(predictions[:,:,binary_indices])  # [batch, seq_len-1, num_binary]
     target_binary = x_next[:,:,binary_indices]
-    binary_loss = F.binary_cross_entropy(
-        pred_binary, 
+    binary_loss = F.binary_cross_entropy_with_logits(
+        predictions[:,:,binary_indices], 
         target_binary, reduction='none')  # [batch, seq_len-1, num
 
     # Combine losses

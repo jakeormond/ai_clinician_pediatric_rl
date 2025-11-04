@@ -13,6 +13,7 @@
     n_layers: [2]
 
     loss_metric: "deephit_loss"  # Which metric to use for early stopping
+    max_val_samples: 5000  # Max samples to use for validation during training
 
     alpha_rank: "loguniform(5e-1, 1.5)"   # Weight for ranking loss
     alpha_pred: "loguniform(5e-1, 1.5)"

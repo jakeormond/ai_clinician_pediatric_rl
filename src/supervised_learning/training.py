@@ -20,6 +20,12 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, GridSearchCV, GroupKFold, RandomizedSearchCV
 from scipy.stats import uniform, randint, loguniform
+from scipy.special import softmax
+from sksurv.metrics import (
+    concordance_index_censored,
+    brier_score,
+    integrated_brier_score
+)
 import xgboost as xgb
 import torch
 from torch.utils.data import DataLoader
@@ -32,7 +38,7 @@ from ..data.data_processor import DataProcessor
 from ..rl.replay_buffer import DynamicDeepHitDataset
 
 from ..utils.utilities import set_seed
-# from .plotting import plot_losses, plot_Q_by_mortality
+from ..rl.plotting import plot_losses
 
 import logging
 logger = logging.getLogger(__name__)
@@ -131,17 +137,140 @@ def get_early_stopping_config(config_manager):
     return early_stopping
 
 
+
+def compute_survival_metrics(
+    logits: np.ndarray,
+    time_to_event: np.ndarray,
+    event_label: np.ndarray,
+    time_bins: np.ndarray
+) -> Dict[str, float]:
+    """
+    Compute survival analysis metrics.
+    
+    Args:
+        predictions: [batch_size, num_risks, num_time_bins] - predicted probabilities
+        time_to_event: [batch_size] - actual time to event
+        event_label: [batch_size] - event type (0=censored, 1=event1, 2=event2, etc.)
+        time_bins: array of time bin edges
+        
+    Returns:
+        Dictionary of survival metrics
+    """
+    metrics = {}
+
+    # Convert logits to probabilities using softmax over time dimension
+    # Shape: [batch_size, num_risks, num_time_bins]
+    probs = softmax(logits, axis=-1)  # softmax over time bins    
+    
+    # Convert to structured array format required by scikit-survival
+    # event_indicator: True if event occurred, False if censored
+    event_indicator = event_label > 0
+    
+    # Create structured array
+    y_true = np.array(
+        [(bool(e), float(t)) for e, t in zip(event_indicator, time_to_event)],
+        dtype=[('event', bool), ('time', float)]
+    )
+    
+    # For C-index, we need a risk score (higher = higher risk)
+    # Use predicted probability of event by the actual event time
+    # Sum over all risks and time bins up to observed time
+    risk_scores = []
+    for i, t in enumerate(time_to_event):
+        # Find the time bin index
+        bin_idx = np.searchsorted(time_bins, t, side='right') - 1
+        bin_idx = np.clip(bin_idx, 0, probs.shape[2] - 1)
+
+        risk_type = event_label[i]
+
+        if risk_type == 0:
+            # Censored - use overall event probability (sum across all risks)
+            cif = probs[i, :, :bin_idx+1].sum() # check, this may be wrong!!!! if prob greater than 1!!!!
+        else:
+            # Event occurred - use CIF for the specific risk that occurred
+            # CIF for risk k at time t = sum of probabilities for risk k up to time t
+            cif = probs[i, risk_type-1, :bin_idx+1].sum()  # -1 because risk labels are 1-indexed
+        
+        
+        # Sum probabilities across risks up to this time
+        cif = probs[i, :, :bin_idx+1].sum()
+        risk_scores.append(cif)
+    
+    risk_scores = np.array(risk_scores)
+    
+    # Compute C-index
+    try:
+        c_index = concordance_index_censored(
+            event_indicator,
+            time_to_event,
+            risk_scores
+        )
+        metrics['c_index'] = c_index[0]  # Returns (c_index, concordant, discordant, tied)
+    except Exception as e:
+        logger.warning(f"Could not compute C-index: {e}")
+        metrics['c_index'] = np.nan
+    
+    # Compute survival probabilities
+    # S(t) = 1 - CIF(t) = 1 - sum over all risks of cumulative probabilities
+    cumulative_incidence = np.cumsum(probs.sum(axis=1), axis=1)  # [batch, time_bins]
+    survival_probs = 1 - cumulative_incidence
+
+    # Compute Brier score at specific time points
+    # Use the middle time bins as evaluation points
+    eval_times = time_bins[::max(1, len(time_bins)//5)]  # Sample ~5 time points
+    
+    try:
+        # Compute Brier score at each evaluation time
+        brier_scores = []
+        for eval_time in eval_times:
+            if eval_time > time_to_event.max() or eval_time <= time_to_event.min():
+                continue
+                
+            bin_idx = np.searchsorted(time_bins, eval_time, side='right') - 1
+            if bin_idx >= survival_probs.shape[1] or bin_idx < 0:
+                continue
+                
+            surv_prob_at_t = survival_probs[:, bin_idx]
+            
+            # Compute Brier score for this time point
+            bs = brier_score(
+                y_true,
+                y_true,  # training data for IPCW estimation
+                surv_prob_at_t,
+                eval_time
+            )
+            brier_scores.append(bs[1])  # Returns (times, scores)
+        
+        if brier_scores:
+            metrics['brier_score_mean'] = np.mean(brier_scores)
+            metrics['brier_score_std'] = np.std(brier_scores)
+        else:
+            metrics['brier_score_mean'] = np.nan
+            metrics['brier_score_std'] = np.nan
+        
+        # Integrated Brier Score over all time bins
+        ibs = integrated_brier_score(
+            y_true,
+            y_true,  # training data for IPCW estimation
+            survival_probs,
+            time_bins[:survival_probs.shape[1]]
+        )
+        metrics['integrated_brier_score'] = ibs
+        
+    except Exception as e:
+        logger.warning(f"Could not compute Brier scores: {e}")
+        metrics['brier_score_mean'] = np.nan
+        metrics['brier_score_std'] = np.nan
+        metrics['integrated_brier_score'] = np.nan
+    
+    return metrics
+
+
 def append_epoch_losses(
         epoch_training_losses, 
         training_losses
     ):
-    """Calculates average losses for the epoch and appends to training_losses."""    
-    
-    # calculate q value stats if available
-    if "mean_Q" in epoch_training_losses:
-        with torch.no_grad():
-            q_stats, epoch_training_losses = calculate_q_stats(epoch_training_losses)
-    
+    """Calculates average losses for the epoch and appends to training_losses."""      
     epoch_avg_losses = {key: np.mean(values) for key, values in epoch_training_losses.items()}
     # Append epoch averages to training_losses
     for key, value in epoch_avg_losses.items():
@@ -149,98 +278,112 @@ def append_epoch_losses(
 
 
 
-
-def evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_losses):
+def evaluate_model(
+    trainer, 
+    dataloader, 
+    config_manager,
+    max_samples=None,
+    compute_survival_metrics_flag=True
+):
+    """
+    Evaluate model on a dataset.
     
-    epoch_val_losses = defaultdict(list)
-
-    for batch_idx, batch in enumerate(val_test_buffer):      
-        if batch_idx * batch_size >= 5000:  # Limit validation to 5000 samples for speed, make this a variable
+    Args:
+        trainer: Model trainer instance
+        dataloader: DataLoader for evaluation data
+        config_manager: Configuration manager
+        max_samples: Maximum number of samples to evaluate (None for all)
+        compute_survival_metrics_flag: Whether to compute survival metrics
+        
+    Returns:
+        dict: Dictionary of evaluation metrics
+    """
+    eval_losses = defaultdict(list)
+    all_logits = []
+    all_time_to_event = []
+    all_event_labels = []
+    
+    num_samples = 0
+    
+    for batch_idx, batch in enumerate(dataloader):
+        # Check if we've reached max samples
+        if max_samples is not None and num_samples >= max_samples:
             break
-       
-        batch_losses, _, _ = trainer.evaluate(batch)
         
-        # Automatically append all validation metrics
+        batch_losses, logits = trainer.evaluate(batch)
+        
+        # Collect batch losses
         for key, value in batch_losses.items():
-            epoch_val_losses[key].append(value)
-                     
-    # calculate q value stats if available
-    if "mean_Q" in epoch_val_losses:
-        with torch.no_grad():
-            q_stats, epoch_val_losses = calculate_q_stats(epoch_val_losses)
-
-    # Calculate average validation losses for this epoch
-    epoch_val_avg = {key: np.mean(values) for key, values in epoch_val_losses.items()}
-    if len(epoch_val_avg) > 1:
-        logger.info(f"Epoch {epoch}: Validation metrics: {epoch_val_avg}")
-
-    # add a key for epoch number
-    epoch_val_avg['epoch'] = epoch
-
-    # add q stats if available
-    if 'q_stats' in locals():
-        epoch_val_avg.update(q_stats)
-
-    # Append to val_losses with epoch as key
-    for key, value in epoch_val_avg.items():
-        val_losses[key].append(value)  
-    
-
-def evaluate_final_model(trainer, test_buffer, test_processor, config_manager):
-    test_losses = defaultdict(list)
-    all_targets = []
-    all_predictions = []
-
-    # Final evaluation on test set
-    for batch_idx, batch in enumerate(test_buffer):
+            eval_losses[key].append(value)
         
-        batch_losses, targets, predictions = trainer.evaluate(batch)
-
-        # Automatically append all validation metrics
-        for key, value in batch_losses.items():
-            test_losses[key].append(value)
-
-        if targets is not None and predictions is not None:
-            all_targets.append(targets.cpu())
-            all_predictions.append(predictions.cpu())
+        # Collect data for survival metrics
+        if logits is not None and compute_survival_metrics_flag:
+            all_logits.append(logits.cpu().numpy())
+            all_time_to_event.append(batch[1].cpu().numpy())
+            all_event_labels.append(batch[2].cpu().numpy())
         
-    # calculate q value stats if available
-    if "mean_Q" in test_losses:
-        with torch.no_grad():
-            q_stats, test_losses = calculate_q_stats(test_losses)
+        num_samples += batch[0].size(0)
     
-    # Calculate average test losses across all batches
-    test_losses = {key: np.mean(values) for key, values in test_losses.items()}
+    # Calculate average losses
+    avg_losses = {key: np.mean(values) for key, values in eval_losses.items()}
     
-    # add q stats if available
-    if 'q_stats' in locals():
-        test_losses.update(q_stats)
+    # Compute survival metrics if requested and data is available
+    if all_logits and compute_survival_metrics_flag:
+        logits = np.vstack(all_logits)
+        time_to_event = np.concatenate(all_time_to_event)
+        event_labels = np.concatenate(all_event_labels)
         
-    ##### make a dataframe of targets and predictions ####
-    # columns are config_manager.data_config['action_cols']
-    if not all_targets or not all_predictions:
-        logger.info("No targets or predictions were collected during final evaluation.")
-        return test_losses, None
-
-    else:
-        action_cols = test_processor.actions
-
-        pred_cols = [col + "_pred" for col in action_cols]
-
-        # create dataframe using all_targets and all_predictions
-        all_targets = np.vstack(all_targets)
-        all_predictions = np.vstack(all_predictions)
-
-        results_df = pd.DataFrame(
-            data=np.hstack([all_targets, all_predictions]),
-            columns=action_cols + pred_cols
+        survival_metrics = compute_survival_metrics(
+            logits,
+            time_to_event,
+            event_labels,
+            config_manager.time_bins
         )
+        avg_losses.update(survival_metrics)
+    
+    return avg_losses
 
-        results_path = Path(config_manager.fold_dir / "test_predictions.parquet")
-        results_df.to_parquet(results_path)
-        logger.info(f" Test predictions saved to {results_path}\n")       
 
-    return test_losses, results_df
+def evaluate_during_training(trainer, epoch, val_buffer, val_losses, config_manager):
+    """Evaluate model during training and log results."""
+    
+    # Evaluate with sample limit for speed
+    max_samples = config_manager.training_config.get('max_val_samples', 1000)
+    epoch_val_metrics = evaluate_model(
+        trainer, 
+        val_buffer, 
+        config_manager,
+        max_samples=max_samples,
+        compute_survival_metrics_flag=True
+    )
+    
+    # Log metrics
+    if len(epoch_val_metrics) > 1:
+        logger.info(f"Epoch {epoch}: Validation metrics: {epoch_val_metrics}")
+    
+    # Add epoch number
+    epoch_val_metrics['epoch'] = epoch
+    
+    # Append to validation losses
+    for key, value in epoch_val_metrics.items():
+        val_losses[key].append(value)
+
+
+def evaluate_final_model(trainer, test_buffer, config_manager):
+    """Evaluate final model on test set."""
+    
+    # Evaluate on full test set (no sample limit)
+    test_metrics = evaluate_model(
+        trainer,
+        test_buffer,
+        config_manager,
+        max_samples=None,
+        compute_survival_metrics_flag=True
+    )
+    
+    logger.info(f"Final test metrics: {test_metrics}")
+    
+    return test_metrics
 
 
 
@@ -329,10 +472,6 @@ def outer_training_loop(dataset, config_manager):
         
         # PLOT THE TRAINING AND VALIDATION LOSSES
         plot_losses(training_scores, val_scores, test_scores, outer_fold, config_manager)
-
-        # if "survival_Q" in test_scores, plot it
-        if "survival_Q" in test_scores:
-            plot_Q_by_mortality(val_scores, test_scores, outer_fold, config_manager)
 
         
         # save the configuration_manager
@@ -501,7 +640,7 @@ def train_with_hyperparameters(
         epoch_training_losses = defaultdict(list)
 
         for batch_idx, batch in enumerate(training_buffer):
-            batch_losses = trainer.train(batch)
+            batch_losses, _ = trainer.train(batch)
 
             # Automatically append all metrics - creates new keys if needed
             for key, value in batch_losses.items():
@@ -510,26 +649,17 @@ def train_with_hyperparameters(
         # Calculate average loss for this epoch and append to training_losses
         append_epoch_losses(epoch_training_losses, training_losses)
 
-        # optionally, estimate V0 and append to training losses
-        if config_manager.training_config['monitor_v0']:
-            estimate_v0(trainer, training_starting_states, batch_size, training_losses)
-
         #################### Evaluate during hyperparameter tuning ONLY ####################
         if not final_model:            
             # Evaluate periodically
             if epoch % config_manager.training_config['eval_freq'] == 0 \
                                                     or epoch == n_epochs - 1:
-                evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_losses)
+                evaluate_during_training(trainer, epoch, val_test_buffer, val_losses, config_manager)
                 
                 # Determine validation loss for early stopping
                 current_val_loss = val_losses[loss_metric][-1]            
                 logger.info(f"Epoch {epoch}: Train {loss_metric}={training_losses[loss_metric][-1]:.4f}, Val {loss_metric}={current_val_loss:.4f}")
                                 
-                # optionally, estimate V0 and append to validation losses
-                if config_manager.training_config['monitor_v0']:
-                    estimate_v0(trainer, val_starting_states, batch_size, val_losses)
-                    logger.info(f"Epoch {epoch}: Val mean start state values: {val_losses['v0_mean'][-1]:.4f} ± {val_losses['v0_sem'][-1]:.4f}")                 
-                
                 
                 # Check for improvement and copy model parameters if best
                 improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)
@@ -565,9 +695,6 @@ def train_with_hyperparameters(
             config_manager
         )
     
-    if config_manager.training_config['monitor_v0']:        
-        estimate_v0(trainer, val_starting_states, batch_size, test_losses)
-        
     logger.info(f"Final test metrics: {test_losses}")
 
     # Save final model if this is the final training

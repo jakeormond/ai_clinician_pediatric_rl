@@ -225,7 +225,7 @@ class DynamicDeepHitTrainer:
         num_risks = 2,
         num_time_bins = 100,
         loss_fn=None,
-        grad_clip=None,
+        grad_clip=1.0,
         scheduler=None,
         verbose=True,
         physiological_feature_type = None
@@ -253,6 +253,7 @@ class DynamicDeepHitTrainer:
         self.verbose = verbose
         self.physiological_feature_type = physiological_feature_type
 
+
     def train(self, batch: TensorBatch):
         # unpack batch
         X = batch[0].to(self.device)      # [batch_size, n_ts, n_features]
@@ -268,7 +269,7 @@ class DynamicDeepHitTrainer:
         logits, _, predictions, x_right_padded , new_mask = self.model(X, mask=mask, return_predictions=True)
 
         # Compute log loss and ranking loss
-        loss = self.loss_fn(
+        loss, lik_loss, rank_loss, pred_loss = self.loss_fn(
             logits, 
             predictions, 
             time_to_event, 
@@ -279,6 +280,8 @@ class DynamicDeepHitTrainer:
             physiological_feature_type=self.physiological_feature_type
             )
 
+        # Backward pass - compute gradients
+        loss.backward()
 
         # Gradient clipping if specified
         if self.grad_clip is not None:
@@ -290,9 +293,49 @@ class DynamicDeepHitTrainer:
         # Update weights
         self.optimizer.step()
 
-        log_dict = {"dynamic_deephit_loss": loss.item()}
+        loss_dict = {
+            "combined_loss": loss.item(),
+            "likelihood_loss": lik_loss.item(),
+            "ranking_loss": rank_loss.item(),
+            "prediction_loss": pred_loss.item()
+            }
 
-        return log_dict
+        return loss_dict, logits
+    
+
+    def evaluate(self, batch: TensorBatch):
+        self.model.eval()  # set model to eval mode
+        
+        # unpack batch
+        X = batch[0].to(self.device)      # [batch_size, n_ts, n_features]
+        time_to_event = batch[1].to(self.device)      # [batch_size]
+        event_label = batch[2].to(self.device)      # [batch_size]
+        mask = batch[3].to(self.device) 
+
+        # Forward pass
+        with torch.no_grad():
+            logits, _, predictions, x_right_padded , new_mask = self.model(X, mask=mask, return_predictions=True)
+
+            # Compute log loss and ranking loss
+            loss, lik_loss, rank_loss, pred_loss = self.loss_fn(
+                logits, 
+                predictions, 
+                time_to_event, 
+                event_label, 
+                x_right_padded,
+                new_mask,
+                predict_covariates=self.model.predict_covariates,
+                physiological_feature_type=self.physiological_feature_type
+                )
+
+        loss_dict = {
+            "combined_loss": loss.item(),
+            "likelihood_loss": lik_loss.item(),
+            "ranking_loss": rank_loss.item(),
+            "prediction_loss": pred_loss.item()
+            }
+
+        return loss_dict, logits
 
 
 def get_trainer(config_manager, feature_dim, hyperparams, train_processor):

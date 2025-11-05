@@ -145,7 +145,8 @@ def compute_survival_metrics(
     time_bins: np.ndarray
 ) -> Dict[str, float]:
     """
-    Compute survival analysis metrics.
+    Compute survival analysis metrics. # Note that we have no censoring, and that 
+    is assumed in the code below.
     
     Args:
         predictions: [batch_size, num_risks, num_time_bins] - predicted probabilities
@@ -161,109 +162,107 @@ def compute_survival_metrics(
     # Convert logits to probabilities using softmax over time dimension
     # Shape: [batch_size, num_risks, num_time_bins]
     probs = softmax(logits, axis=-1)  # softmax over time bins    
-    
-    # Convert to structured array format required by scikit-survival
-    # event_indicator: True if event occurred, False if censored
-    event_indicator = event_label > 0
-    
-    # Create structured array
-    y_true = np.array(
-        [(bool(e), float(t)) for e, t in zip(event_indicator, time_to_event)],
-        dtype=[('event', bool), ('time', float)]
-    )
-    
+        
+
+    # ---------------------- C-index Calculation ----------------------
     # For C-index, we need a risk score (higher = higher risk)
     # Use predicted probability of event by the actual event time
     # Sum over all risks and time bins up to observed time
-    risk_scores = []
-    for i, t in enumerate(time_to_event):
-        # Find the time bin index
-        bin_idx = np.searchsorted(time_bins, t, side='right') - 1
-        bin_idx = np.clip(bin_idx, 0, probs.shape[2] - 1)
 
-        risk_type = event_label[i]
+    horizons = [1, 5, 10, 50, 100, 200] # in hours
+    horizon_bin_ind = [np.searchsorted(time_bins, h, side='right') - 1 for h in horizons]
 
-        if risk_type == 0:
-            # Censored - use overall event probability (sum across all risks)
-            cif = probs[i, :, :bin_idx+1].sum() # check, this may be wrong!!!! if prob greater than 1!!!!
-        else:
-            # Event occurred - use CIF for the specific risk that occurred
-            # CIF for risk k at time t = sum of probabilities for risk k up to time t
-            cif = probs[i, risk_type-1, :bin_idx+1].sum()  # -1 because risk labels are 1-indexed
+    cif = torch.cumsum(torch.tensor(probs), dim=2).numpy()  # cumulative incidence function
+    cif_horizon = cif[:, :, horizon_bin_ind]
+
+    events = np.sort(np.unique(event_label))
+    _, event_counts = np.unique(event_label, return_counts=True)
+
+    c_index = np.zeros((len(events), len(horizons)))
+
+    for i, risk_type in enumerate(events):
+        cif_event = cif_horizon[:, i, :]  # -1 because risk labels are 1-indexed
+        event_indicator = event_label == risk_type
         
-        
-        # Sum probabilities across risks up to this time
-        cif = probs[i, :, :bin_idx+1].sum()
-        risk_scores.append(cif)
-    
-    risk_scores = np.array(risk_scores)
-    
-    # Compute C-index
-    try:
-        c_index = concordance_index_censored(
-            event_indicator,
-            time_to_event,
-            risk_scores
-        )
-        metrics['c_index'] = c_index[0]  # Returns (c_index, concordant, discordant, tied)
-    except Exception as e:
-        logger.warning(f"Could not compute C-index: {e}")
-        metrics['c_index'] = np.nan
-    
-    # Compute survival probabilities
-    # S(t) = 1 - CIF(t) = 1 - sum over all risks of cumulative probabilities
-    cumulative_incidence = np.cumsum(probs.sum(axis=1), axis=1)  # [batch, time_bins]
-    survival_probs = 1 - cumulative_incidence
+        for j, horizon in enumerate(horizon_bin_ind):
+            # Find the time bin index for the horizon
+            risk_scores_horizon = cif_event[:, j]
 
+            c_index[i, j], *_ = concordance_index_censored(event_indicator, time_to_event, risk_scores_horizon)
+
+     # calculate a single c-index for reporting during training
+    def integrated_C_per_event(times, C_k_t):
+        # times: shape (T,), C_k_t: shape (T,)
+        # returns scalar integrated C (normalized by time range)
+        t0, t1 = times[0], times[-1]
+        area = np.trapz(C_k_t, times)
+        return area / (t1 - t0)
+
+    def integrated_C_matrix(times, C_matrix):
+        # C_matrix: shape (K, T)
+        K = C_matrix.shape[0]
+        return np.array([integrated_C_per_event(times, C_matrix[k]) for k in range(K)])
+
+    def event_weighted_IC(times, C_matrix, n_per_event):
+        K = C_matrix.shape[0]
+        ic = integrated_C_matrix(times, C_matrix)  # shape (K,)
+        weights = n_per_event / n_per_event.sum()
+        return (weights * ic).sum()
+
+    weighted_IC = event_weighted_IC(horizon_bin_ind, c_index, n_per_event=event_counts)
+
+    # ----------------------- Brier Score Calculation ----------------------
     # Compute Brier score at specific time points
-    # Use the middle time bins as evaluation points
-    eval_times = time_bins[::max(1, len(time_bins)//5)]  # Sample ~5 time points
+    # evaluate at every 5th time bin
+    time_bins_brier = list(range(0, len(time_bins), 5))  # [0, 5, 10, 15, ..., 90]
+    eval_times = time_bins[time_bins_brier] + 1  # Get time values at those indices
+
+    pred_cif = cif[:, :, time_bins_brier]
     
-    try:
-        # Compute Brier score at each evaluation time
-        brier_scores = []
-        for eval_time in eval_times:
-            if eval_time > time_to_event.max() or eval_time <= time_to_event.min():
-                continue
-                
-            bin_idx = np.searchsorted(time_bins, eval_time, side='right') - 1
-            if bin_idx >= survival_probs.shape[1] or bin_idx < 0:
-                continue
-                
-            surv_prob_at_t = survival_probs[:, bin_idx]
-            
-            # Compute Brier score for this time point
-            bs = brier_score(
-                y_true,
-                y_true,  # training data for IPCW estimation
-                surv_prob_at_t,
-                eval_time
-            )
-            brier_scores.append(bs[1])  # Returns (times, scores)
+    n_patients = logits.shape[0]
+    n_t = len(eval_times)  # number of time intervals
+    n_labels = len(events)
+
+    brier_per_event = np.zeros((n_labels, n_t), dtype=float)
+    brier_multiclass = np.zeros(n_t, dtype=float)
+
+    for ti_idx, t in enumerate(time_bins_brier):
+        # true matrix Y: shape (n, K)
+        Y = np.zeros((n_patients, n_labels), dtype=float)
+        occurred_by_t = time_to_event <= t
+        if np.any(occurred_by_t):
+            # set Y[i,k] = 1 for subjects that experienced event k by t
+            for k in range(n_labels):
+                Y[:, k] = ((event_label == k+1) & occurred_by_t).astype(float)
+        # predicted CIFs at this t: shape (n, K)
+        P = pred_cif[:, :, ti_idx]
         
-        if brier_scores:
-            metrics['brier_score_mean'] = np.mean(brier_scores)
-            metrics['brier_score_std'] = np.std(brier_scores)
-        else:
-            metrics['brier_score_mean'] = np.nan
-            metrics['brier_score_std'] = np.nan
+        # Brier per event k
+        for k in range(n_labels):
+            diffsq = (Y[:, k] - P[:, k])**2
+            brier_per_event[k, ti_idx] = diffsq.mean()
         
-        # Integrated Brier Score over all time bins
-        ibs = integrated_brier_score(
-            y_true,
-            y_true,  # training data for IPCW estimation
-            survival_probs,
-            time_bins[:survival_probs.shape[1]]
-        )
-        metrics['integrated_brier_score'] = ibs
-        
-    except Exception as e:
-        logger.warning(f"Could not compute Brier scores: {e}")
-        metrics['brier_score_mean'] = np.nan
-        metrics['brier_score_std'] = np.nan
-        metrics['integrated_brier_score'] = np.nan
+        # multiclass (average over events) Brier at time t
+        brier_multiclass[ti_idx] = brier_per_event[:, ti_idx].mean()
     
-    return metrics
+    # Integrated Brier (trapezoidal integration over times_grid)
+    # We integrate for each event separately and for multiclass
+    ibs_per_event = np.zeros(n_labels, dtype=float)
+    for k in range(n_labels):
+        ibs_per_event[k] = np.trapz(brier_per_event[k, :], time_bins_brier) / (time_bins_brier[-1] - time_bins_brier[0])
+    ibs_multiclass = np.trapz(brier_multiclass, time_bins_brier) / (time_bins_brier[-1] - time_bins_brier[0])
+    
+    brier_results = {
+        'times': time_bins_brier,
+        'brier_per_event': brier_per_event,
+        'brier_multiclass': brier_multiclass,
+        'ibs_per_event': ibs_per_event,
+        'ibs_multiclass': ibs_multiclass
+    }
+
+    return {'weighted_C_index': weighted_IC,
+            'ibs_multiclass': ibs_multiclass}
+
 
 
 def append_epoch_losses(
@@ -339,6 +338,7 @@ def evaluate_model(
             event_labels,
             config_manager.time_bins
         )
+        
         avg_losses.update(survival_metrics)
     
     return avg_losses
@@ -401,16 +401,11 @@ def check_improvement(best_val_loss, current_val_loss, early_stopping):
 
 
 def copy_model_parameters(trainer, config_manager):
-    if config_manager.model_type in ['basic_q']:
-        return trainer.critic.state_dict().copy()
-    else:
-        return trainer.actor.state_dict().copy()
+    return trainer.model.state_dict().copy()
     
+
 def restore_model_parameters(trainer, best_model_state, config_manager):
-    if config_manager.model_type in ['basic_q']:
-        trainer.critic.load_state_dict(best_model_state)
-    else:
-        trainer.actor.load_state_dict(best_model_state) # for td3-bc I imagine we need both models!!!!!! SO FIX!!!!!!
+    trainer.model.load_state_dict(best_model_state) 
     
 
 def outer_training_loop(dataset, config_manager): 
@@ -515,7 +510,7 @@ def optimize_hyperparameters(train_dataset, config_manager,
                                                 outer_fold=None):
     """Inner CV loop for hyperparameter optimization."""
     
-    # loss_metric = config_manager.training_config['loss_metric'] # e.g. actor loss, critic loss etc, depends on algorithm
+    loss_metric = config_manager.training_config['loss_metric'] # e.g. actor loss, critic loss etc, depends on algorithm
 
     ################################ create hyperparameter space ################################
     # the hyperparameter space to search consists of the parameters that are lists 

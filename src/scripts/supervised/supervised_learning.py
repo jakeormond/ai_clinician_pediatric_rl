@@ -14,6 +14,9 @@ import pandas as pd
 import numpy as np
 import time
 import wandb
+import logging
+import sys
+
 
 from ...config_manager import ConfigManager  # Import the config manager
 from ...supervised_learning.dataset import Dataset
@@ -25,6 +28,22 @@ from ...supervised_learning.dataset import Dataset
 
     
 from ...utils.logging_utilities import wandb_init  # Add this import
+
+logger = logging.getLogger(__name__)
+
+def setup_logger(verbose=False):
+    """Configure root logging to print to stdout at INFO/DEBUG level.
+
+    Uses force=True to override any prior configuration from imported libs.
+    """
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s | %(levelname)s | %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        handlers=[logging.StreamHandler(sys.stdout)],
+        force=True,
+    )
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Supervised learning')
@@ -131,8 +150,10 @@ def log_fold_results_to_wandb(results):
 
 
 def main():
-
     args = parse_arguments()
+    # Configure logging before other modules potentially emit logs
+    setup_logger(verbose=args.verbose)
+    logger.info("Logging configured (level=%s)", logging.getLevelName(logging.getLogger().getEffectiveLevel()))
     validate_arguments(args)
 
     # Initialize config manager, it holds paths and environment info

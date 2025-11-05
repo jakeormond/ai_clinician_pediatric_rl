@@ -255,6 +255,9 @@ class DynamicDeepHitTrainer:
 
 
     def train(self, batch: TensorBatch):
+
+        self.model.train() # set model to train mode
+
         # unpack batch
         X = batch[0].to(self.device)      # [batch_size, n_ts, n_features]
         time_to_event = batch[1].to(self.device)      # [batch_size]

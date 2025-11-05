@@ -12,7 +12,7 @@
     attn_hidden_dim: [64]
     n_layers: [2]
 
-    loss_metric: "deephit_loss"  # Which metric to use for early stopping
+    loss_metric: "combined_loss"  # Which metric to use for early stopping
     max_val_samples: 5000  # Max samples to use for validation during training
 
     alpha_rank: "loguniform(5e-1, 1.5)"   # Weight for ranking loss

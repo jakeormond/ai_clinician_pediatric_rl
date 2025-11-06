@@ -588,21 +588,31 @@ def make_mixed_resolution_time_bins(max_time_hours=3000, base=1.2):
         bin_edges: np.array of length (num_bins + 1)
         bin_centers: np.array of length (num_bins)
     """
-    # create hourly time bins from 0 to 71 hours
-    early_bins = np.arange(0, 72)  # 0 to 71 hours, we start the late bins from 72 hours
+    # # create hourly time bins from 0 to 71 hours
+    # early_bins = np.arange(0, 72)  # 0 to 71 hours, we start the late bins from 72 hours
 
-    # make logarithmically spaced bins from 72 hours to max_time_hours
-    late_bins = []
-    current_edge = 72.0
-    while True:
-        late_bins.append(current_edge)
-        if current_edge >= max_time_hours:
-            break
-        current_edge *= base
+    # # make logarithmically spaced bins from 72 hours to max_time_hours
+    # late_bins = []
+    # current_edge = 72.0
+    # while True:
+    #     late_bins.append(current_edge)
+    #     if current_edge >= max_time_hours:
+    #         break
+    #     current_edge *= base
     
-    late_bins = np.array(late_bins)
+    # late_bins = np.array(late_bins)
 
-    # combine early and late bins
-    all_bins = np.unique(np.concatenate((early_bins, late_bins)))
+    # # combine early and late bins
+    # all_bins = np.unique(np.concatenate((early_bins, late_bins)))
+
+    first_day = np.arange(0, 25, 6) 
+    first_2_days = np.arange(24, 1+ 48, 12) 
+    first_2days_to_week = np.arange(48, 1+ 24*7, 24) 
+    week1_to_week2 = np.arange(168, 1 + 168*2.2, 48)
+    week2_to_rest = np.array((360, 3000))
+
+    time_indices = np.concatenate((first_day, first_2_days, first_2days_to_week, week1_to_week2, week2_to_rest))
+    all_bins = np.sort(np.unique(time_indices))
+
 
     return all_bins

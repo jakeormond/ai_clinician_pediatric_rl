@@ -143,6 +143,18 @@ class DataProcessor:
     def _split_into_dynamic_deephit_dataset(self, dataset, config_manager):
         """
         This function will split the dataframe into the format needed for dynamic deephit
+
+        Note that, in addition to full length windows, we need a number of 
+        shorter windows from the trajectory starts. This will allow the model 
+        how to predict survival time near the start of the trajectory - this
+        could be something like 10 windows with ends randomly sampled from the 
+        first window_length timesteps of the trajectories. The rest of the windows
+        can be full size - there is no reason to sample partial windows anywhere 
+        else in the trajectory (as we will always have full windows at those 
+        locations).
+
+        Window indices will determine window END
+
         It will return a dictionary with the following keys:
         - 
         """
@@ -153,8 +165,42 @@ class DataProcessor:
         # get all trajectory lengths
         traj_lengths = dataset.dataframe.groupby(self.encounter_col).size().to_dict()
 
-        # calculate n_windows as the traj_length divided by window_length, rounded up
-        n_windows = {k: int(np.ceil(v / self.window_length)) for k, v in traj_lengths.items()}
+        # calculate number of windows per trajectory
+        # we need to sample some short windows from the start of each trajectory
+        # and then more windows depending on trajectory lenght
+        # so we will loop throught the traj_lengths and calculate n_windows for each traj
+        window_indices = {}
+        for k, v in traj_lengths.items():
+            window_ind = []
+            if v > 10:
+                window_ind += np.random.choice(range(10), size=5, replace=False).tolist()
+            else:
+                window_ind += np.random.choice(range(v), size=5, replace=False).tolist()
+                window_indices[k] = window_ind
+                continue
+
+            if v > 100:
+                window_ind += np.random.choice(range(10, 100), size=5, replace=False).tolist()
+            else:
+                window_ind += np.random.choice(range(10, v), size=5, replace=False).tolist()
+                window_indices[k] = window_ind
+                continue
+
+            if v > self.window_length - 1:
+                window_ind += np.random.choice(range(100, self.window_length - 1), size=5, replace=False).tolist()
+            else:
+                window_ind += np.random.choice(range(100, v), size=5, replace=False).tolist()
+                window_indices[k] = window_ind
+                continue
+
+            n_additional_windows = v // self.window_length
+            window_ind += np.random.choice(range(self.window_length - 1, v), size=n_additional_windows, replace=False).tolist()
+            window_indices[k] = window_ind
+
+        n_windows = {}
+        for k, v in window_indices.items():
+            window_indices[k] = sorted(v)
+            n_windows[k] = len(v)
         
         # get the total number of windows
         total_windows = sum(n_windows.values())
@@ -171,27 +217,31 @@ class DataProcessor:
         for enc_id, n_win in n_windows.items():
             # find start index of traj
             traj_length = traj_lengths[enc_id]
-            # pick n_win random integers between 0 and traj_length - 1
-            window_ind = np.random.choice(range(traj_length), size=n_win, replace=False)
+            
+            # start indices should be n_partial_windows random integers between 0 and min(traj_length, window_length) - 1
+            start_indices1 = np.random.choice(range(min(traj_length, int(self.window_length/10))), size=n_partial_windows, replace=False)
+
+            
+            
+            
+            # end indices should be the rest of the windows, random integers between window_length - 1 and traj_length - 1
+            end_indices = np.random.choice(range(self.window_length - 1, traj_length), size=n_win - n_partial_windows, replace=False)
+
+            # concatenate start_indices and end_indices
+            window_ind = np.concatenate([start_indices, end_indices])
 
             # get full patient trajectory 
             full_traj_df = dataset.dataframe[dataset.dataframe[self.encounter_col] == enc_id].reset_index(drop=True)
 
             if full_traj_df['mortality'].iloc[-1] == 1:
-                event = 2 # death
+                event = 2  # death
             else:
-                event = 1 # discharge
+                event = 1  # discharge
 
             for i in window_ind:
-                # randomly select 0 or 1 for window starting or ending at si
-                if np.random.rand() < 0.5:
-                    # window starts at si
-                    window_start = i
-                    window_end = min(i + self.window_length, traj_length)
-                else:
-                    # window ends at si
-                    window_end = i + 1
-                    window_start = max(0, i + 1 - self.window_length)
+                # determine window start and end
+                window_end = i + 1
+                window_start = max(0, i + 1 - self.window_length)
                 
                 # get the dataframe for this window
                 window_df = dataset.dataframe.iloc[window_start:window_end]

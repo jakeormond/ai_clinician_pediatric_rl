@@ -22,7 +22,7 @@ class DynamicDeepHitMulti(nn.Module):
         num_risks: int,
         dropout: float = 0.3,
         rnn_type: str = "GRU",
-        predict_covariates: list = None
+        predict_covariates: list = None,
     ):
         """
         Args:
@@ -331,6 +331,9 @@ class DynamicDeepHitTrainer:
                 physiological_feature_type=self.physiological_feature_type
                 )
 
+        # set model back to train mode
+        self.model.train()
+
         loss_dict = {
             "combined_loss": loss.item(),
             "likelihood_loss": lik_loss.item(),
@@ -372,7 +375,7 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
             num_risks=num_risks,
             num_time_bins=n_time_bins,
             loss_fn=dynamic_deephit_loss,
-            grad_clip = None,
+            grad_clip = hyperparams['grad_clip'],
             scheduler=None,
             verbose=True, 
             physiological_feature_type = train_processor.physiological_feature_type                
@@ -576,7 +579,7 @@ def prediction_loss(X, predictions, mask, predict_covariates, continuous_indices
     return total_loss / (num_valid + 1e-8)
 
 
-def make_mixed_resolution_time_bins(max_time_hours=3000, base=1.2):
+def make_mixed_resolution_time_bins(max_time_hours=3000):
     """
     Create non-uniform time bins spaced approximately logarithmically.
 
@@ -588,31 +591,18 @@ def make_mixed_resolution_time_bins(max_time_hours=3000, base=1.2):
         bin_edges: np.array of length (num_bins + 1)
         bin_centers: np.array of length (num_bins)
     """
-    # # create hourly time bins from 0 to 71 hours
-    # early_bins = np.arange(0, 72)  # 0 to 71 hours, we start the late bins from 72 hours
-
-    # # make logarithmically spaced bins from 72 hours to max_time_hours
-    # late_bins = []
-    # current_edge = 72.0
-    # while True:
-    #     late_bins.append(current_edge)
-    #     if current_edge >= max_time_hours:
-    #         break
-    #     current_edge *= base
+    # create hourly time bins from 0 to 72 hours
     
-    # late_bins = np.array(late_bins)
+    # first_day = np.arange(0, 25, 6) 
+    # first_2_days = np.arange(24, 1+ 48, 12) 
+    # first_2days_to_week = np.arange(48, 1+ 24*7, 24) 
+    # week1_to_week2 = np.arange(168, 1 + 168*2.2, 48)
+    # week2_to_rest = np.array((360, max_time_hours))
 
-    # # combine early and late bins
-    # all_bins = np.unique(np.concatenate((early_bins, late_bins)))
+    # time_indices = np.concatenate((first_day, first_2_days, first_2days_to_week, week1_to_week2, week2_to_rest))
+    # all_bins = np.sort(np.unique(time_indices))
 
-    first_day = np.arange(0, 25, 6) 
-    first_2_days = np.arange(24, 1+ 48, 12) 
-    first_2days_to_week = np.arange(48, 1+ 24*7, 24) 
-    week1_to_week2 = np.arange(168, 1 + 168*2.2, 48)
-    week2_to_rest = np.array((360, 3000))
-
-    time_indices = np.concatenate((first_day, first_2_days, first_2days_to_week, week1_to_week2, week2_to_rest))
-    all_bins = np.sort(np.unique(time_indices))
-
+    # create every 4 hour bins from 0 to 72 hours
+    all_bins = np.arange(0, 73, 4)
 
     return all_bins

@@ -66,6 +66,54 @@
                 "--model_type", "dynamic_deephit", 
                 "--prediction_type", "discharge_mortality_tte",
                 "--mode", "single_fold", 
+                "--testing",
+                "--fold", "0",
+                "--experiment_variant", "standard",                
+                "--search_variant", "random_search",
+                "--n_epochs", "200",
+                "--n_search_iterations", "1"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
+            "name": "DynamicDeepHit_artificial",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "artificial", 
+                "--action_mode", "continuous_only",
+                "--experiment_type", "supervised_learning",
+                "--model_type", "dynamic_deephit", 
+                "--prediction_type", "discharge_mortality_tte",
+                "--mode", "single_fold", 
+                "--testing",
+                "--fold", "0",
+                "--experiment_variant", "standard",                
+                "--search_variant", "random_search",
+                "--n_epochs", "200",
+                "--n_search_iterations", "1"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
+            "name": "DynamicDeepHit_testing",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--action_mode", "continuous_only",
+                "--experiment_type", "supervised_learning",
+                "--model_type", "dynamic_deephit", 
+                "--prediction_type", "discharge_mortality_tte",
+                "--mode", "single_fold", 
                 "--fold", "0",
                 "--testing",
                 "--experiment_variant", "quick_test",                

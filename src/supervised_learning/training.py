@@ -501,7 +501,7 @@ def outer_training_loop(dataset, config_manager):
         
         logger.info(f"✓ Outer fold {outer_fold} complete. Results saved to {results_path}")
         
-        return test_scores
+        return all_scores
     
 
 def optimize_hyperparameters(train_dataset, config_manager,
@@ -682,11 +682,10 @@ def train_with_hyperparameters(
 
     ########################## evaluate on test set after training if final model ##########################
     # note that results df will be None if no targets/predictions were collected during evaluation (i.e.Q learning)
-    test_losses, results_df = \
+    test_losses = \
             evaluate_final_model(
             trainer, 
             val_test_buffer, 
-            val_test_processor, 
             config_manager
         )
     
@@ -694,14 +693,14 @@ def train_with_hyperparameters(
 
     # Save final model if this is the final training
     model_path = Path(config_manager.fold_dir /  "final_model.pt")
-    torch.save(trainer.state_dict(), model_path)
+    torch.save(trainer.model.state_dict(), model_path)
     logger.info(f" Final model saved to {model_path}")
 
     # Save test predictions if available
-    if results_df is not None:
-        results_path = Path(config_manager.fold_dir / "test_predictions.parquet")
-        results_df.to_parquet(results_path)
-        logger.info(f" Test predictions saved to {results_path}\n")       
+    # if results_df is not None:
+    #     results_path = Path(config_manager.fold_dir / "test_predictions.parquet")
+    #     results_df.to_parquet(results_path)
+    #     logger.info(f" Test predictions saved to {results_path}\n")       
 
     return training_losses, test_losses, n_epochs
 

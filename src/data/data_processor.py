@@ -21,6 +21,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 import logging
+
+from src import config_manager
 logger = logging.getLogger(__name__)
 
 class DataProcessor:
@@ -162,60 +164,59 @@ class DataProcessor:
         
         self.window_length = config_manager.training_config['window_length']
 
-        # get all trajectory lengths
-        traj_lengths = dataset.dataframe.groupby(self.encounter_col).size().to_dict()
+        # Pre-group the dataframe and convert to dict of arrays (much faster)
+        grouped = dataset.dataframe.groupby(self.encounter_col)
+        traj_data = {}
+        traj_lengths = {}
+
+        for encounter_id, group_df in grouped:
+            traj_lengths[encounter_id] = len(group_df)
+            # Store as numpy array immediately - avoid repeated DataFrame operations
+            traj_data[encounter_id] = {
+                'features': group_df[self.input_features].to_numpy(),
+                'mortality': group_df['mortality'].iloc[-1]
+            }
 
         # calculate number of windows per trajectory
         # we need to sample some short windows from the start of each trajectory
         # and then more windows depending on trajectory lenght
         # so we will loop throught the traj_lengths and calculate n_windows for each traj
         window_indices = {}
-        for k, v in traj_lengths.items():
-            window_ind = []
-            # we need denser sampling at the start of the trajectory to learn how to predict
-            # with many columns of the window being zero-padded
-            if v > 10:
-                window_ind += np.random.choice(range(10), size=5, replace=False).tolist()
-            else:
-                window_ind += np.random.choice(range(v), size=5, replace=False).tolist()
-                window_indices[k] = window_ind
-                continue
-
-            if v > 100:
-                window_ind += np.random.choice(range(10, 100), size=5, replace=False).tolist()
-            else:
-                window_ind += np.random.choice(range(10, v), size=5, replace=False).tolist()
-                window_indices[k] = window_ind
-                continue
-
-            if v > self.window_length - 1:
-                window_ind += np.random.choice(range(100, self.window_length - 1), size=5, replace=False).tolist()
-            else:
-                window_ind += np.random.choice(range(100, v), size=5, replace=False).tolist()
-                window_indices[k] = window_ind
-                continue
-
-            # we also need to densely sample the end of the trajectories to learn how to predict survival 
-            # times close to the event
-            if v - self.window_length + 1 > 100:
-                window_ind += np.random.choice(range(v - 100, v), size=5, replace=False).tolist()
-            else:
-                window_ind += np.random.choice(range(self.window_length - 1, v), size=10, replace=False).tolist()
-                window_indices[k] = window_ind
-                continue
-
-            if v - self.window_length + 1 > 250:
-                window_ind += np.random.choice(range(v -  250, v - 100), size=5, replace=False).tolist()
-
-            n_additional_windows = v // self.window_length
-            window_ind += np.random.choice(range(self.window_length - 1, v), size=n_additional_windows, replace=False).tolist()
-            window_indices[k] = window_ind
-
         n_windows = {}
-        for k, v in window_indices.items():
-            window_indices[k] = sorted(v)
-            n_windows[k] = len(v)
-        
+        n_windows_per_bin = 2
+        n_early_windows = 10
+
+        for encounter_id, traj_length in traj_lengths.items():
+            window_ind = []
+
+            time_to_event = np.arange(traj_length, 0, -1)
+
+            for i in range(len(config_manager.time_bins) - 1):
+                lower_bound = config_manager.time_bins[i]
+                upper_bound = config_manager.time_bins[i + 1]
+                                           
+                # find all indices where time_to_event is in this bin
+                indices_in_bin = np.where((time_to_event <= upper_bound) & 
+                                          (time_to_event > lower_bound))[0]
+                if len(indices_in_bin) > 0:
+                    n_to_sample = min(n_windows_per_bin, len(indices_in_bin))
+                    sampled_indices = np.random.choice(indices_in_bin, size=n_to_sample, replace=False).tolist()
+                    window_ind += sampled_indices
+
+            # # additonally, we need to train on partial windows from the start of the trajectory
+            # if traj_length > self.window_length: # then we need to sample additional partial windows from trajectory start
+            #     early_window_end_indices = np.random.choice(
+            #         np.arange(0, self.window_length), 
+            #         size=min(n_early_windows, self.window_length), 
+            #         replace=False).tolist()
+            #     window_ind += early_window_end_indices
+
+            window_ind = list(set(window_ind))  # remove duplicates
+            window_ind = sorted(window_ind)
+
+            window_indices[encounter_id] = window_ind
+            n_windows[encounter_id] = len(window_ind)
+              
         # get the total number of windows
         total_windows = sum(n_windows.values())
 
@@ -228,49 +229,40 @@ class DataProcessor:
         # for each encounter_id, pick n_windows start indices randomly as integers between
         # 0 and traj_length
         array_ind = 0
-        for enc_id, n_win in n_windows.items():
+        for encounter_id, window_ind_list in window_indices.items():
             # find start index of traj
-            traj_length = traj_lengths[enc_id]
-            
-            window_indices_list = window_indices[enc_id]
-            
-            # get full patient trajectory 
-            full_traj_df = dataset.dataframe[dataset.dataframe[self.encounter_col] == enc_id].reset_index(drop=True)
+            traj_length = traj_lengths[encounter_id]
+            features = traj_data[encounter_id]['features']
+            event = 2 if traj_data[encounter_id]['mortality'] == 1 else 1
 
-            if full_traj_df['mortality'].iloc[-1] == 1:
-                event = 2  # death
-            else:
-                event = 1  # discharge
-
-            for i in window_ind:
-                # determine window start and end
+            for i in window_ind_list:
                 window_end = i + 1
                 window_start = max(0, i + 1 - self.window_length)
                 
-                # get the dataframe for this window
-                window_df = dataset.dataframe.iloc[window_start:window_end]
-                mask_temp = np.ones(len(window_df))
-
-                if len(window_df) < self.window_length:
-                    # need to pad the window with zeros at the start
-                    rows_to_add = self.window_length - len(window_df)
-                    zero_rows = pd.DataFrame(0, index=np.arange(rows_to_add), columns=window_df.columns)
-                    zero_rows[self.encounter_col] = enc_id
-                    window_df = pd.concat([zero_rows, window_df]).reset_index(drop=True)
-
-                    mask_temp = np.concatenate([np.zeros(rows_to_add), mask_temp])
-
-                # add to feature_array
-                feature_array[array_ind, :, :] = window_df[self.input_features].to_numpy()
-                # add to mask_array
-                mask_array[array_ind, :] = mask_temp
-                # calculate time_to_event and event
+                # Extract window directly from numpy array
+                window_features = features[window_start:window_end]
+                window_len = len(window_features)
+                
+                # Pad if necessary using numpy operations
+                if window_len < self.window_length:
+                    pad_width = self.window_length - window_len
+                    window_features = np.pad(window_features, 
+                                            ((pad_width, 0), (0, 0)), 
+                                            mode='constant', 
+                                            constant_values=0)
+                    mask_array[array_ind, pad_width:] = 1
+                else:
+                    mask_array[array_ind, :] = 1
+                
+                feature_array[array_ind] = window_features
                 time_to_event_array[array_ind] = traj_length - window_end + 1
                 event_array[array_ind] = event
                 array_ind += 1
-
-        time_to_event_array_binned = np.digitize(time_to_event_array, config_manager.time_bins, right = True) - 1
-
+    
+        time_to_event_array_binned = np.digitize(time_to_event_array, 
+                                             config_manager.time_bins, 
+                                             right=True) - 1
+            
         # create the final dataset
         final_dataset = {
             'features': feature_array,

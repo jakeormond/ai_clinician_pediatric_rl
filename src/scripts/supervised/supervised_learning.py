@@ -190,9 +190,20 @@ def main():
         dataset = Dataset(config_manager.data_config)
         print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
 
+
+
+        # Initialize W&B
+        # wandb_init(config_manager.wandb_config)
+
+        # load training config
+        config_manager.set_training_config() # based on model type 
+
+
+
         if config_manager.testing:
-            dataset = dataset.subsample_dataset(0.1)
-            print(f"Subsampled dataset to {len(dataset.dataframe)} rows for testing")   
+            # dataset = dataset.subsample_dataset(0.1)
+            # print(f"Subsampled dataset to {len(dataset.dataframe)} rows for testing")   
+            dataset = dataset.truncate_trajectories(max_length = 72, window_length=config_manager.training_config['window_length']) # hours
         
         # if model type is deep hit, we need to make the time bins and add to the configuration
         if config_manager.model_type == "dynamic_deephit":
@@ -201,17 +212,10 @@ def main():
             max_encounter_length = encounter_lengths.max()
             print(f"Max encounter length: {max_encounter_length}")
 
-            time_bins = make_mixed_resolution_time_bins(
-                max_time_hours=max_encounter_length,
-                base=1.2
-            )
+            time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
             config_manager.time_bins = time_bins
 
-        # Initialize W&B
-        # wandb_init(config_manager.wandb_config)
 
-        # load training config
-        config_manager.set_training_config() # based on model type 
 
         print(f"Running on {config_manager.environment} environment")
         print(f"Experiment directory: {config_manager.experiment_dir}")
@@ -223,10 +227,10 @@ def main():
         # log_fold_results_to_wandb(results)
 
         print(f"Fold {args.fold} completed successfully")
-        print(f"Test metrics: {results['test_metrics']}")
+        # print(f"Test metrics: {results['test_metrics']}")
         
-        if wandb.run is not None:
-            wandb.finish()
+        # if wandb.run is not None:
+        #     wandb.finish()
 
     elif args.mode == "aggregate":
         # aggregate results from all folds

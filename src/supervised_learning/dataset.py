@@ -326,3 +326,44 @@ class Dataset:
         sampled_encounter_ids = np.random.default_rng(seed=random_seed).choice(encounter_ids, size=n_to_sample, replace=False)
         self = self.create_subset(sampled_encounter_ids)
         return self
+    
+    def truncate_trajectories(self, max_length = 72, window_length = 72):
+        """
+        Truncates all trajectories to the specified maximum length max_length = 72 + (window_length-1)
+        """
+        window_length = max_length + (window_length - 1)
+
+        # get number of mortality encounter IDs before truncating
+        n_mortality_encounter_ids_before = self.dataframe[self.dataframe['mortality'] == 1][self.encounter_col].nunique()
+        logger.info(f"Number of mortality encounter IDs before truncating: {n_mortality_encounter_ids_before}")
+
+        # total number of encounter IDs before truncating
+        n_encounter_ids_before = self.dataframe[self.encounter_col].nunique()
+        logger.info(f"Total number of encounter IDs before truncating: {n_encounter_ids_before}")
+
+        # remove any trajectories shorter than window_length
+        traj_lengths = self.dataframe.groupby(self.encounter_col).size()
+        valid_encounter_ids = traj_lengths[traj_lengths >= window_length].index
+        print(f"Removing {len(traj_lengths) - len(valid_encounter_ids)} encounter IDs shorter than {window_length} timepoints.")
+        print(f"length of dataframe before removing short trajectories: {self.dataframe.shape[0]} rows.")
+        df_limited = self.dataframe[self.dataframe[self.encounter_col].isin(valid_encounter_ids)].reset_index(drop=True)
+        self.dataframe = df_limited.copy()
+        print(f"length of dataframe after removing short trajectories: {self.dataframe.shape[0]} rows.")
+
+        # truncate each trajectory (identified by encounter_id) to max_length from the end
+        print(f"Truncating all trajectories to a maximum length of {window_length} timepoints.")
+        print(f"length of dataframe before truncating: {self.dataframe.shape[0]} rows.")
+        df_limited = self.dataframe.groupby(self.encounter_col).tail(window_length).reset_index(drop=True)
+        self.dataframe = df_limited.copy()
+        print(f"length of dataframe after truncating: {self.dataframe.shape[0]} rows.")
+
+        
+        # get number of mortality encounter IDs after truncating
+        n_mortality_encounter_ids_after = self.dataframe[self.dataframe['mortality'] == 1][self.encounter_col].nunique()
+        logger.info(f"Number of mortality encounter IDs after truncating: {n_mortality_encounter_ids_after}")
+
+        # total number of encounter IDs after truncating
+        n_encounter_ids_after = self.dataframe[self.encounter_col].nunique()
+        logger.info(f"Total number of encounter IDs after truncating: {n_encounter_ids_after}")
+
+        return self

@@ -66,7 +66,8 @@ def plot_losses(training_scores, val_scores, test_scores, outer_fold, config_man
         test_loss = test_scores[key]
         # plot test loss as horizontal line
         plt.axhline(y=test_loss, color='green', linestyle='--', linewidth=2, label='Test ' + key)
-        plt.xlabel('Epochs')
+        if i == len(loss_keys) - 1:
+            plt.xlabel('Epochs')
         plt.ylabel(key)
         plt.xticks(np.arange(1, epochs_range[-1] + 1, step=5))
         plt.xlim(0.5, np.max(epochs_range))

@@ -172,6 +172,8 @@ class DataProcessor:
         window_indices = {}
         for k, v in traj_lengths.items():
             window_ind = []
+            # we need denser sampling at the start of the trajectory to learn how to predict
+            # with many columns of the window being zero-padded
             if v > 10:
                 window_ind += np.random.choice(range(10), size=5, replace=False).tolist()
             else:
@@ -192,6 +194,18 @@ class DataProcessor:
                 window_ind += np.random.choice(range(100, v), size=5, replace=False).tolist()
                 window_indices[k] = window_ind
                 continue
+
+            # we also need to densely sample the end of the trajectories to learn how to predict survival 
+            # times close to the event
+            if v - self.window_length + 1 > 100:
+                window_ind += np.random.choice(range(v - 100, v), size=5, replace=False).tolist()
+            else:
+                window_ind += np.random.choice(range(self.window_length - 1, v), size=10, replace=False).tolist()
+                window_indices[k] = window_ind
+                continue
+
+            if v - self.window_length + 1 > 250:
+                window_ind += np.random.choice(range(v -  250, v - 100), size=5, replace=False).tolist()
 
             n_additional_windows = v // self.window_length
             window_ind += np.random.choice(range(self.window_length - 1, v), size=n_additional_windows, replace=False).tolist()
@@ -218,18 +232,8 @@ class DataProcessor:
             # find start index of traj
             traj_length = traj_lengths[enc_id]
             
-            # start indices should be n_partial_windows random integers between 0 and min(traj_length, window_length) - 1
-            start_indices1 = np.random.choice(range(min(traj_length, int(self.window_length/10))), size=n_partial_windows, replace=False)
-
+            window_indices_list = window_indices[enc_id]
             
-            
-            
-            # end indices should be the rest of the windows, random integers between window_length - 1 and traj_length - 1
-            end_indices = np.random.choice(range(self.window_length - 1, traj_length), size=n_win - n_partial_windows, replace=False)
-
-            # concatenate start_indices and end_indices
-            window_ind = np.concatenate([start_indices, end_indices])
-
             # get full patient trajectory 
             full_traj_df = dataset.dataframe[dataset.dataframe[self.encounter_col] == enc_id].reset_index(drop=True)
 

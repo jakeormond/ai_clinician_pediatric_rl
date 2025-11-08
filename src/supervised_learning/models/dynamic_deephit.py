@@ -396,7 +396,7 @@ def dynamic_deephit_loss(
         physiological_feature_type: list = [],
         no_censoring=True,
         pair_sample_frac = 1.0,
-        alpha_rank=0.1, 
+        alpha_rank=5., 
         alpha_pred = 0.1,
         sigma=0.1,
         eps=1e-8
@@ -411,6 +411,9 @@ def dynamic_deephit_loss(
         mask: optional [batch] or [batch, seq_len] for padded sequences (1=valid, 0=padded)
         alpha: weight for ranking loss
         eps: numerical stability
+
+        NOTES: SIGMA of 0.01 leads to all NaNs in predictions - why?
+
 
     Returns:
         scalar loss tensor
@@ -448,7 +451,7 @@ def log_likelihood_loss(logits, time_to_event, event_label, no_censoring=True):
     return lik_loss
 
 
-def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=0.):
+def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=0.2):
 
     B, K, T = logits.shape
     device = logits.device
@@ -486,9 +489,10 @@ def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=0.
 
         # For cause k, build pair mask: i in mask_i_k AND t_i < t_j
         # Broadcasting:
-        mask_i_k_mat = mask_i_k.view(B, 1)      # (B,1)
+        mask_i_k_row = mask_i_k.view(B, 1)      # (B,1) - for rows
+        mask_i_k_col = mask_i_k.view(1, B)           
         mask_time = (t_i < t_j)                 # (B,B) -- true where t_i < t_j
-        pair_mask = mask_i_k_mat & mask_time    # (B,B) -- candidate pairs (i,j)
+        pair_mask = mask_i_k_row & mask_i_k_col & mask_time    # (B,B) -- candidate pairs (i,j)
 
         num_pairs = pair_mask.sum().item()
         if num_pairs == 0:

@@ -49,7 +49,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Supervised learning')
     parser.add_argument('--hospital', 
                         default='choc', 
-                        choices=['choc', 'mimic'], 
+                        choices=['choc', 'mimic', 'artificial'], 
                         help='Hospital dataset to use (default: choc)')
     
     parser.add_argument('--experiment_type', 

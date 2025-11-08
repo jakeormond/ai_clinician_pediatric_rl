@@ -61,26 +61,33 @@ class Dataset:
         self.dataframe = self.dataframe[~self.dataframe[self.encounter_col].isin(long_encounter_ids.index)].reset_index(drop=True)
         print(f"length of dataframe after dropping long encounters: {self.dataframe.shape[0]} rows.")
 
-        self.features_to_use = pd.read_csv(self.features_to_use_path)
-
-         # drop any rows where "do not use" is 1
-        self.features_to_use = self.features_to_use[self.features_to_use['do not use'] != 1]
-
-        # if this is supervised learning, we need to drop the action features,
-        # but if this is reinforcement learning, we need to keep them
-        if self.model_type == "supervised_learning" and drop_actions:
-            # get rid of actions
-            self.features_to_use = self.features_to_use[self.features_to_use['state_or_action'] != 'action']
         
-        # drop any rows where "proportion_sepsis" is less than proportion_w_data and
-        # imputation_method is "interpolation"
-        self.features_to_use = self.features_to_use[
-            (self.features_to_use['proportion_sepsis'] >= self.proportion_w_data) |   
-            (self.features_to_use['imputation_method'] != 'interpolation')
-        ]
+        if hasattr(self, 'features_to_use_path'): 
+            self.features_to_use = pd.read_csv(self.features_to_use_path)
 
-        # make list of features
-        features = self.features_to_use['feature'].tolist()
+            # drop any rows where "do not use" is 1
+            self.features_to_use = self.features_to_use[self.features_to_use['do not use'] != 1]
+
+            # if this is supervised learning, we need to drop the action features,
+            # but if this is reinforcement learning, we need to keep them
+            if self.model_type == "supervised_learning" and drop_actions:
+                # get rid of actions
+                self.features_to_use = self.features_to_use[self.features_to_use['state_or_action'] != 'action']
+            
+            # drop any rows where "proportion_sepsis" is less than proportion_w_data and
+            # imputation_method is "interpolation"
+            self.features_to_use = self.features_to_use[
+                (self.features_to_use['proportion_sepsis'] >= self.proportion_w_data) |   
+                (self.features_to_use['imputation_method'] != 'interpolation')
+            ]
+
+            # make list of features
+            features = self.features_to_use['feature'].tolist()
+
+        else: 
+            # features equals column names except encounter_col, time_col, mortality
+            features = [col for col in self.dataframe.columns 
+                        if col not in [self.encounter_col, self.time_col]]
 
         ################# WE ACTUALLY NEED TO KEEP MORTALITY FOR ONLINE ANALYSIS DURING TRAINING!!!!!!!!!!!! ################
         # make sure to handle it correctly in data_processor.py

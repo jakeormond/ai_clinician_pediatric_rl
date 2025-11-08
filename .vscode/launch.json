@@ -94,7 +94,7 @@
                 "--fold", "0",
                 "--experiment_variant", "standard",                
                 "--search_variant", "random_search",
-                "--n_epochs", "200",
+                "--n_epochs", "500",
                 "--n_search_iterations", "1"
             ],
             "console": "integratedTerminal",

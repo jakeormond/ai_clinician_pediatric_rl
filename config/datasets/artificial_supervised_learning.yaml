@@ -1,5 +1,5 @@
 dataframe_path: "combined_data/hourly/artificial_tte_dataset.parquet"
-features_to_use_path: "dataframes/features_to_use.csv"
+# features_to_use_path: "dataframes/features_to_use.csv"
 model_type: "supervised_learning"
 
 seed: 42

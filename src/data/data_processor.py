@@ -488,9 +488,19 @@ class DataProcessor:
         if self.obs_norm_dict is None:
             self.obs_norm_dict = {}
 
+        # get the features row in self.features_to_use
+        if not hasattr(self, 'features_to_use'):
+            # create features_to_use dataframe with self.input_features as 'feature' col,
+            # feature_set as 'other', and data_type as 'continuous'
+            self.features_to_use = pd.DataFrame({
+                'feature': self.input_features,
+                'feature_set': ['vitals'] * len(self.input_features),
+                'data_type': ['continuous'] * len(self.input_features)
+            })        
+        
+        
         for i, feature in enumerate(self.input_features):
-                    
-            # get the features row in self.features_to_use
+
             feature_row = self.features_to_use[self.features_to_use['feature'] == feature]
             data_type = feature_row['data_type'].values[0]
             feature_set = feature_row['feature_set'].values[0]

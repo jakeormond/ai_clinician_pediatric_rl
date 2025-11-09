@@ -171,6 +171,31 @@ def main():
         dataset = Dataset(config_manager.data_config, drop_actions=False, transform_target=False)
         dataframe_path = dataset.save_dataframe(config_manager)
      
+    
+    elif args.mode == 'single_split':
+    
+        config_manager.create_single_split_dir()
+    
+        # load data
+        dataset = Dataset(config_manager.data_config)
+        print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
+
+        if config_manager.testing:
+            # dataset = dataset.subsample_dataset(0.1)
+            # print(f"Subsampled dataset to {len(dataset.dataframe)} rows for testing")   
+            dataset = dataset.truncate_trajectories(max_length = 72, window_length=config_manager.training_config['window_length']) # hours
+        
+        if config_manager.model_type == "dynamic_deephit":
+            # get lengths of trajectories in dataset.dataframe (by encounter_id)
+            encounter_lengths = dataset.dataframe.groupby("encounter_id").size()
+            max_encounter_length = encounter_lengths.max()
+            print(f"Max encounter length: {max_encounter_length}")
+
+            time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
+            config_manager.time_bins = time_bins
+
+    
+    
     elif args.mode == "single_fold":        
         # set base experiment name and make directory, if it doesn't exist (it will 
         # already if another folder was run)

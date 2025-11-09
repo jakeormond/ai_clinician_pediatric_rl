@@ -269,6 +269,11 @@ class ConfigManager:
         """Create and return experiment directory path."""
         self.fold_dir = Path(self.get_experiments_dir) / self.experiment_name / self.fold_name
         self.fold_dir.mkdir(parents=True, exist_ok=True)
+
+    def create_single_split_dir(self):
+        """Create and return single split experiment directory path."""
+        self.single_split_dir = Path(self.get_experiments_dir) / self.experiment_name
+        self.single_split_dir.mkdir(parents=True, exist_ok=True)
     
     
     

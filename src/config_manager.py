@@ -272,6 +272,7 @@ class ConfigManager:
 
     def create_single_split_dir(self):
         """Create and return single split experiment directory path."""
+        self.set_experiment_name()        
         self.single_split_dir = Path(self.get_experiments_dir) / self.experiment_name
         self.single_split_dir.mkdir(parents=True, exist_ok=True)
     

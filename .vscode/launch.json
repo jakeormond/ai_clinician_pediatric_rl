@@ -89,6 +89,28 @@
                 "--experiment_type", "supervised_learning",
                 "--model_type", "dynamic_deephit", 
                 "--prediction_type", "discharge_mortality_tte",
+                "--mode", "single_split", 
+                "--testing",
+                "--fold", "0",
+                "--experiment_variant", "standard",                
+                "--n_epochs", "40",
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
+            "name": "DynamicDeepHit_artificial_cv",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "artificial", 
+                "--action_mode", "continuous_only",
+                "--experiment_type", "supervised_learning",
+                "--model_type", "dynamic_deephit", 
+                "--prediction_type", "discharge_mortality_tte",
                 "--mode", "single_fold", 
                 "--testing",
                 "--fold", "0",

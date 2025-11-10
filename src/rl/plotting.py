@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 
 
-def plot_losses(training_scores, val_scores, test_scores, outer_fold, config_manager):    
+def plot_losses(training_scores, val_scores, test_scores, outer_fold, config_manager, development=False):    
 
     n_folds = len(training_scores)
     loss_keys = list(training_scores[0].keys())
@@ -63,9 +63,11 @@ def plot_losses(training_scores, val_scores, test_scores, outer_fold, config_man
         plt.fill_between(val_epochs_range, val_min, val_max, color=plt.cm.Oranges(0.6), alpha=0.25, edgecolor=None)
         plt.plot(val_epochs_range, val_mean, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss - Mean')      
         
-        test_loss = test_scores[key]
-        # plot test loss as horizontal line
-        plt.axhline(y=test_loss, color='green', linestyle='--', linewidth=2, label='Test ' + key)
+        
+        if test_scores is not None:
+            test_loss = test_scores[key]
+            # plot test loss as horizontal line
+            plt.axhline(y=test_loss, color='green', linestyle='--', linewidth=2, label='Test ' + key)
         if i == len(loss_keys) - 1:
             plt.xlabel('Epochs')
         plt.ylabel(key)
@@ -83,7 +85,10 @@ def plot_losses(training_scores, val_scores, test_scores, outer_fold, config_man
         )         
 
     # Save the plot
-    plots_path = Path(config_manager.fold_dir) / f"fold_{outer_fold}_loss_plot.png"
+    if development:
+        plots_path = Path(config_manager.fold_dir) / f"loss_plot.png"
+    else:
+        plots_path = Path(config_manager.fold_dir) / f"fold_{outer_fold}_loss_plot.png"
     plt.savefig(plots_path)
     plt.close()
 

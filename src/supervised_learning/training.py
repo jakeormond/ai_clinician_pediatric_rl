@@ -408,6 +408,55 @@ def restore_model_parameters(trainer, best_model_state, config_manager):
     trainer.model.load_state_dict(best_model_state) 
     
 
+
+def development_training_loop(dataset, config_manager):
+    """Runs a simplified training loop with 80-20 train/test split for development purposes."""
+    
+    logger.info("Starting development training loop...")
+
+    # Create train/val/test split (80/10/10)
+    n_samples = len(dataset.encounter_ids())
+    indices = np.arange(n_samples)
+    np.random.shuffle(indices)
+
+    train_end = int(0.8 * n_samples)
+    
+    train_id = indices[:train_end]
+    test_id = indices[train_end:]
+
+    # Create processors
+    train_processor, test_processor, norm_params = create_processors(
+        dataset, train_id, test_id, config_manager
+    )
+
+    # train 
+    hyperparameter_space = get_hyperparameter_space(config_manager)
+    current_params = select_hyperparameters_randomly(
+            hyperparameter_space, config_manager
+        )    
+    training_scores, test_scores, n_epochs = train_with_hyperparameters(
+                                                                train_processor, 
+                                                                test_processor, 
+                                                                config_manager, 
+                                                                current_params,
+                                                                n_epochs=config_manager.n_epochs,
+                                                                final_model=False
+                                                            )
+
+    # plot losses
+    plot_losses(training_scores, test_scores, None, config_manager, development = True)
+
+    logger.info("Development training loop complete.")
+    logger.info(f"Test scores: {test_scores}")
+
+    return {
+        "training_scores": training_scores,
+        "test_scores": test_scores,
+            }
+
+
+
+
 def outer_training_loop(dataset, config_manager): 
     """Runs single outer fold - designed for HPC job array."""
     
@@ -417,7 +466,9 @@ def outer_training_loop(dataset, config_manager):
     n_outer_folds = config_manager.cv_config["n_outer_folds"]
     n_inner_folds = config_manager.cv_config["n_inner_folds"]
     target_fold = config_manager.cv_config['fold']  # This comes from job array index when running on HPC
-    
+    current_params = select_hyperparameters_randomly(
+            hyperparameter_space, config_manager
+        )    
     if target_fold is None:
         raise ValueError("target_fold must be specified")
     
@@ -503,6 +554,19 @@ def outer_training_loop(dataset, config_manager):
         
         return all_scores
     
+
+def get_hyperparameter_space(config_manager):
+    """Creates hyperparameter space from config_manager."""
+    hyperparameter_space = {k: v for k, v in 
+            config_manager.training_config.items() if isinstance(v, list)}
+    
+    # and also continuous distributions specified as strings
+    for k, v in config_manager.training_config.items():
+        if isinstance(v, str) and '(' in v and ')' in v:
+            hyperparameter_space[k] = parse_distribution(v)
+    
+    return hyperparameter_space
+
 
 def optimize_hyperparameters(train_dataset, config_manager,
                                         n_inner_folds=None, 

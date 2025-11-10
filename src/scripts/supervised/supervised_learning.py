@@ -68,11 +68,11 @@ def parse_arguments():
                         help='type of prediction to make (default: mortality_all)') 
 
     parser.add_argument('--mode', type=str, default='single_fold',
-                        choices=['save_dataframe', 'single_fold', 'aggregate', 'plot_shap', 'plot_model_results'],
+                        choices=['save_dataframe', 'single_fold', 'aggregate', 'plot_shap', 'plot_model_results', 'single_split'],
                         help='Mode of training: single_fold or aggregate (default: single_fold)')
     
     # mode-specific arguments    
-    parser.add_argument('--fold', type=int,
+    parser.add_argument('--fold', type=int, default=None,
                        help='Fold number to train (required for single_fold mode)')
     
     parser.add_argument('--experiment_folder', type=str, default=None,
@@ -160,7 +160,7 @@ def main():
     config_manager = ConfigManager(args)
 
     if config_manager.model_type == "dynamic_deephit":
-        from ...supervised_learning.training import outer_training_loop
+        from ...supervised_learning.training import outer_training_loop, development_training_loop
         from ...supervised_learning.models.dynamic_deephit import make_mixed_resolution_time_bins
 
     else:
@@ -180,6 +180,9 @@ def main():
         dataset = Dataset(config_manager.data_config)
         print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
 
+        # set training config
+        config_manager.set_training_config()
+
         if config_manager.testing:
             # dataset = dataset.subsample_dataset(0.1)
             # print(f"Subsampled dataset to {len(dataset.dataframe)} rows for testing")   
@@ -193,6 +196,11 @@ def main():
 
             time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
             config_manager.time_bins = time_bins
+
+        print(f"Running on {config_manager.environment} environment")
+        print(f"Experiment directory: {config_manager.experiment_dir}")
+
+        results = development_training_loop(dataset, config_manager)
 
     
     

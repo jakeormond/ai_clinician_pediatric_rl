@@ -63,7 +63,7 @@ echo "========================================="
 # Run the training script for this specific fold
 echo "Starting training..."
 
-python -m src.scripts.rl.reinforcement_learning \
+python -m src.scripts.supervised.supervised_learning \
     --hospital choc \
     --experiment_type supervised_learning \
     --model_type dynamic_deephit \

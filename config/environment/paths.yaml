@@ -4,6 +4,6 @@ local:
   code_dir: "/home/jake/Documents/AI_Clinician/choc_code"
   
 hpc:
-  experiments_dir: "/home/a-faisal/jakeormond/experiments"
+  experiments_dir: "/groups/a-faisal/jakeormond/experiments"
   data_dir: "/groups/a-faisal/jakeormond/data/choc_data"
-  code_dir: "/home/a-faisal/jakeormond/code/choc_code"
+  code_dir: "/groups/a-faisal/jakeormond/code/choc_code"

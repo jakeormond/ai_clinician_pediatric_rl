@@ -38,7 +38,7 @@ from ..data.data_processor import DataProcessor
 from ..rl.replay_buffer import DynamicDeepHitDataset
 
 from ..utils.utilities import set_seed
-from ..rl.plotting import plot_losses
+from ..rl.plotting import plot_losses,plot_losses_cv
 
 import logging
 logger = logging.getLogger(__name__)
@@ -444,17 +444,44 @@ def development_training_loop(dataset, config_manager):
                                                             )
 
     # plot losses
-    plot_losses(training_scores, test_scores, None, config_manager, development = True)
+    plot_losses(training_scores, test_scores, None, config_manager)
 
     logger.info("Development training loop complete.")
     logger.info(f"Test scores: {test_scores}")
 
+    # save the configuration_manager
+    with open(config_manager.experiment_dir / "config_manager.pkl", "wb") as f:
+        pickle.dump(config_manager, f)  
+
+    # create a dictionary to save the scores
+    all_scores = {
+        "training_scores": training_scores,
+        "test_scores": test_scores,
+        "hyperparameters": current_params,
+        "n_epochs": n_epochs
+    }
+    with open(config_manager.experiment_dir / "all_scores.pkl", "wb") as f:
+        pickle.dump(all_scores, f)
+
+    # save the normalization parameters as a pkl file
+    with open(config_manager.experiment_dir / "norm_params.pkl", "wb") as f:
+        pickle.dump(norm_params, f)        
+        
+    # Save results for this outer fold
+    results_path = Path(config_manager.experiment_dir) / f"results.json"
+    with open(results_path, 'w') as f:
+        json.dump({
+            'hyperparameters': current_params,
+            'final_metrics': test_scores,
+            'config': config_manager.training_config
+        }, f, indent=2)
+        
+        logger.info(f"Training complete. Results saved to {results_path}")
+          
     return {
         "training_scores": training_scores,
         "test_scores": test_scores,
             }
-
-
 
 
 def outer_training_loop(dataset, config_manager): 
@@ -466,9 +493,7 @@ def outer_training_loop(dataset, config_manager):
     n_outer_folds = config_manager.cv_config["n_outer_folds"]
     n_inner_folds = config_manager.cv_config["n_inner_folds"]
     target_fold = config_manager.cv_config['fold']  # This comes from job array index when running on HPC
-    current_params = select_hyperparameters_randomly(
-            hyperparameter_space, config_manager
-        )    
+   
     if target_fold is None:
         raise ValueError("target_fold must be specified")
     
@@ -517,7 +542,7 @@ def outer_training_loop(dataset, config_manager):
                                                             )
         
         # PLOT THE TRAINING AND VALIDATION LOSSES
-        plot_losses(training_scores, val_scores, test_scores, outer_fold, config_manager)
+        plot_losses_cv(training_scores, val_scores, test_scores, outer_fold, config_manager)
 
         
         # save the configuration_manager

@@ -55,6 +55,27 @@
         },
 
         {
+            "name": "DynamicDeepHit_dev",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--action_mode", "continuous_only",
+                "--experiment_type", "supervised_learning",
+                "--model_type", "dynamic_deephit", 
+                "--prediction_type", "discharge_mortality_tte",
+                "--mode", "single_split", 
+                "--testing",
+                "--experiment_variant", "standard",                
+                "--n_epochs", "10",
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
             "name": "DynamicDeepHit",
             "type": "debugpy",
             "request": "launch",
@@ -116,7 +137,7 @@
                 "--fold", "0",
                 "--experiment_variant", "standard",                
                 "--search_variant", "random_search",
-                "--n_epochs", "500",
+                "--n_epochs", "20",
                 "--n_search_iterations", "1"
             ],
             "console": "integratedTerminal",

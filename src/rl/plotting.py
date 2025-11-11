@@ -5,7 +5,48 @@ import numpy as np
 from pathlib import Path
 
 
-def plot_losses(training_scores, val_scores, test_scores, outer_fold, config_manager, development=False):    
+
+def plot_losses(training_scores, val_scores, test_scores, config_manager):
+    loss_keys = list(training_scores.keys())
+    n_subplots = len(loss_keys)
+    plt.figure(figsize=(15, 5 * n_subplots))
+    for i, key in enumerate(loss_keys):        
+        plt.subplot(n_subplots, 1, i + 1)
+        epochs_range = np.arange(1, len(training_scores[key]) + 1)
+
+        plt.plot(epochs_range, training_scores[key], color=plt.cm.Blues(0.9), linewidth=2, label='Training Loss')
+
+        val_epochs = np.array(val_scores['epoch'])
+        val_losses = val_scores[key]
+        plt.plot(val_epochs + 1, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      
+        
+        if test_scores is not None:
+            test_loss = test_scores[key]
+            # plot test loss as horizontal line
+            plt.axhline(y=test_loss, color='green', linestyle='--', linewidth=2, label='Test ' + key)
+        if i == len(loss_keys) - 1:
+            plt.xlabel('Epochs')
+        plt.ylabel(key)
+        plt.xticks(np.arange(1, epochs_range[-1] + 1, step=5))
+        plt.xlim(0.5, np.max(epochs_range))
+        plt.title(f'{key} over Epochs')
+        plt.grid(True)
+        plt.legend(
+            loc='upper right',
+            facecolor='white',  # solid white background
+            framealpha=1,
+            edgecolor='lightgray',
+            bbox_to_anchor=(0.98, 0.98),
+            fontsize=10,
+        )
+
+     # Save the plot
+    plot_path = Path(config_manager.experiment_dir) / f"loss_plot.png"
+    plt.savefig(plot_path)
+    plt.close()
+
+
+def plot_losses_cv(training_scores, val_scores, test_scores, outer_fold, config_manager, development=False):    
 
     n_folds = len(training_scores)
     loss_keys = list(training_scores[0].keys())
@@ -85,10 +126,7 @@ def plot_losses(training_scores, val_scores, test_scores, outer_fold, config_man
         )         
 
     # Save the plot
-    if development:
-        plots_path = Path(config_manager.fold_dir) / f"loss_plot.png"
-    else:
-        plots_path = Path(config_manager.fold_dir) / f"fold_{outer_fold}_loss_plot.png"
+    plots_path = Path(config_manager.fold_dir) / f"fold_{outer_fold}_loss_plot.png"
     plt.savefig(plots_path)
     plt.close()
 

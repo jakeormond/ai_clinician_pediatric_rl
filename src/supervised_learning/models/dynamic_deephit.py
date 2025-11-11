@@ -396,7 +396,7 @@ def dynamic_deephit_loss(
         physiological_feature_type: list = [],
         no_censoring=True,
         pair_sample_frac = 1.0,
-        alpha_rank=2., 
+        alpha_rank= 0., 
         alpha_pred = 0.1,
         sigma=0.1,
         eps=1e-8
@@ -607,6 +607,6 @@ def make_mixed_resolution_time_bins(max_time_hours=3000):
     # all_bins = np.sort(np.unique(time_indices))
 
     # create every 4 hour bins from 0 to 72 hours
-    all_bins = np.arange(0, 73, 4)
+    all_bins = np.arange(0, 73, 12)
 
     return all_bins

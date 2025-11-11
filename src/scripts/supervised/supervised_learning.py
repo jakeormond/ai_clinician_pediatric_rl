@@ -91,7 +91,7 @@ def parse_arguments():
                        help='Experiment variant determines config defaults')
 
     parser.add_argument('--search_variant', type=str, default=None,
-                        choices=['grid_search', 'random_search'],
+                        choices=['grid_search', 'random_search', 'fixed_hyperparameters'],
                         help='Search variant for hyperparameter tuning (default: None)')
     
     parser.add_argument('--n_search_iterations', type=int, default=0,
@@ -173,9 +173,7 @@ def main():
      
     
     elif args.mode == 'single_split':
-    
-        config_manager.create_single_split_dir()
-    
+      
         # load data
         dataset = Dataset(config_manager.data_config)
         print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")

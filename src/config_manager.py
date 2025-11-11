@@ -31,6 +31,9 @@ class ConfigManager:
             self._build_wandb_config()
             self.add_fold(self.fold)
 
+        elif self.mode == "single_split":
+            self.create_single_split_dir()
+
         elif self.mode == "analyse_features":
             self.set_experiment_name()
             self._create_experiment_dir()    
@@ -83,7 +86,10 @@ class ConfigManager:
                 raise FileNotFoundError(f"CV config not found for variant: {self.experiment_variant}")
 
         elif config_type == "training":
-            variant_name = f"{self.model_type}.yaml"
+            if self.search_variant == "fixed_hyperparameters":
+                variant_name = f"{self.model_type}_fixed.yaml"
+            else:
+                variant_name = f"{self.model_type}.yaml"
             variant_path = self.config_dir / "models" / variant_name
             if variant_path.exists():
                 return variant_path

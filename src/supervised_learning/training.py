@@ -78,6 +78,10 @@ def average_dicts(list_of_dicts):
     averages = {k: sum(v_list) / len(v_list) for k, v_list in values.items()}
     return averages
 
+def get_fixed_hyperparameters(config_manager):
+    """Extracts fixed hyperparameters from config_manager."""
+    hyperparameters = config_manager.training_config.copy()
+    return hyperparameters
 
 def select_hyperparameters_randomly(hyperparameter_space, config_manager):
     """Selects hyperparameters randomly from the given space."""
@@ -430,18 +434,15 @@ def development_training_loop(dataset, config_manager):
     )
 
     # train 
-    hyperparameter_space = get_hyperparameter_space(config_manager)
-    current_params = select_hyperparameters_randomly(
-            hyperparameter_space, config_manager
-        )    
+    hyperparameters = get_fixed_hyperparameters(config_manager)
     training_scores, test_scores, n_epochs = train_with_hyperparameters(
-                                                                train_processor, 
-                                                                test_processor, 
-                                                                config_manager, 
-                                                                current_params,
-                                                                n_epochs=config_manager.n_epochs,
-                                                                final_model=False
-                                                            )
+            train_processor, 
+            test_processor, 
+            config_manager, 
+            hyperparameters,
+            n_epochs=config_manager.n_epochs,
+            final_model=False
+        )
 
     # plot losses
     plot_losses(training_scores, test_scores, None, config_manager)
@@ -457,7 +458,7 @@ def development_training_loop(dataset, config_manager):
     all_scores = {
         "training_scores": training_scores,
         "test_scores": test_scores,
-        "hyperparameters": current_params,
+        "hyperparameters": hyperparameters,
         "n_epochs": n_epochs
     }
     with open(config_manager.experiment_dir / "all_scores.pkl", "wb") as f:
@@ -471,7 +472,7 @@ def development_training_loop(dataset, config_manager):
     results_path = Path(config_manager.experiment_dir) / f"results.json"
     with open(results_path, 'w') as f:
         json.dump({
-            'hyperparameters': current_params,
+            'hyperparameters': hyperparameters,
             'final_metrics': test_scores,
             'config': config_manager.training_config
         }, f, indent=2)

@@ -61,7 +61,7 @@ echo "========================================="
 
 
 # Run the training script for this specific fold
-echo "Starting training for fold $FOLD..."
+echo "Starting training..."
 
 python -m src.scripts.rl.reinforcement_learning \
     --hospital choc \

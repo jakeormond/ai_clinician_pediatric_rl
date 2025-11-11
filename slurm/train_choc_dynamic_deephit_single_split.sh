@@ -9,9 +9,9 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=64G
 #SBATCH --time=08:00:00
-# #SBATCH --partition=normal
-# #SBATCH --gres=gpu:l40:1     
-#SBATCH --gres=gpu:1    
+#SBATCH --partition=normal
+#SBATCH --gres=gpu:l40:1     
+# #SBATCH --gres=gpu:1    
 # #SBATCH --partition=GPU
 # #SBATCH --gres=gpu:h100:1     
 #SBATCH --mail-type=END,FAIL        # Email notifications
@@ -43,7 +43,7 @@ mkdir -p slurm/logs
 
 # Activate conda environment
 eval "$(conda shell.bash hook)"
-conda /groups/a-faisal/jakeormond/.conda/envs/rl_env
+conda activate rl_env
 
 # Print job information
 echo "========================================="

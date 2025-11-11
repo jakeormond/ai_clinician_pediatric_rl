@@ -67,6 +67,7 @@ python -m src.scripts.supervised.supervised_learning \
     --hospital choc \
     --experiment_type supervised_learning \
     --model_type dynamic_deephit \
+    --prediction_type discharge_mortality_tte \
     --mode single_split \
     --testing \
     --search_variant fixed_hyperparameters \

@@ -251,10 +251,13 @@ def compute_survival_metrics(
     
     # Integrated Brier (trapezoidal integration over times_grid)
     # We integrate for each event separately and for multiclass
+    epsilon = 1e-8
     ibs_per_event = np.zeros(n_labels, dtype=float)
     for k in range(n_labels):
-        ibs_per_event[k] = np.trapz(brier_per_event[k, :], time_bins_brier) / (time_bins_brier[-1] - time_bins_brier[0])
-    ibs_multiclass = np.trapz(brier_multiclass, time_bins_brier) / (time_bins_brier[-1] - time_bins_brier[0])
+        ibs_per_event[k] = np.trapz(brier_per_event[k, :], time_bins_brier) / \
+            ((time_bins_brier[-1] - time_bins_brier[0]) + epsilon)
+    ibs_multiclass = np.trapz(brier_multiclass, time_bins_brier) / \
+        ((time_bins_brier[-1] - time_bins_brier[0]) + epsilon)
     
     brier_results = {
         'times': time_bins_brier,

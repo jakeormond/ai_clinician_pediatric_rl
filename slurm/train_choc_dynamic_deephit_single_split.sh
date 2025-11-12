@@ -71,7 +71,7 @@ python -m src.scripts.supervised.supervised_learning \
     --mode single_split \
     --testing \
     --search_variant fixed_hyperparameters \
-    --n_epochs 100 \
+    --n_epochs 300 \
     --start_time $START_TIME 
 
 exit_code=$?

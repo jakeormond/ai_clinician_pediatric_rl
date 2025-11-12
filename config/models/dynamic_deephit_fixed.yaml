@@ -17,7 +17,7 @@ n_layers: 2
 loss_metric: "combined_loss"  # Which metric to use for early stopping
 max_val_samples: 5000  # Max samples to use for validation during training
 
-alpha_class: 1.0
+alpha_class: 3.0
 alpha_rank: 0.0   # Weight for ranking loss
 alpha_pred: 0.2
 sigma: 0.2

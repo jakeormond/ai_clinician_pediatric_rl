@@ -396,8 +396,8 @@ def dynamic_deephit_loss(
         physiological_feature_type: list = [],
         no_censoring=True,
         pair_sample_frac = 1.0,
-        alpha_rank= 0., 
-        alpha_pred = 0.1,
+        alpha_rank= 0.5, 
+        alpha_pred = 2.0,
         sigma=0.1,
         eps=1e-8
         ):

@@ -421,7 +421,7 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
     deephit_optimizer = torch.optim.AdamW(
         dynamic_deephit_model.parameters(),
         lr=learning_rate,
-        weight_decay = hyperparams['weight_decay']
+        weight_decay = float(hyperparams['weight_decay'])
     )
 
     trainer = DynamicDeepHitTrainer(

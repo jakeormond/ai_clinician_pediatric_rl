@@ -21,6 +21,8 @@ class DynamicDeepHitMulti(nn.Module):
         num_time_bins: int,
         num_risks: int,
         dropout: float = 0.3,
+        use_layernorm: bool = False,
+        attn_dropout: float = 0.1,
         rnn_type: str = "GRU",
         predict_covariates: list = None,
     ):
@@ -78,7 +80,9 @@ class DynamicDeepHitMulti(nn.Module):
         self.attn = TemporalAttention(
             hidden_size=self.hidden_size, 
             feature_size=self.feature_dim, 
-            attn_size=attn_hidden_dim
+            attn_size=attn_hidden_dim, 
+            dropout=attn_dropout,
+            use_layernorm=use_layernorm
             )
 
         # --- Event-specific heads ---
@@ -170,7 +174,15 @@ class TemporalAttention(nn.Module):
       - attn_weights: [B, T]
     Masking ensures padded timesteps receive zero weight.
     """
-    def __init__(self, hidden_size: int, feature_size: int, attn_size: int = None):
+    def __init__(
+            self, 
+            hidden_size: int, 
+            feature_size: int, 
+            attn_size: int = None, 
+            dropout: float = None,
+            use_layernorm: bool = True
+            ):
+
         super().__init__()
         self.hidden_size = hidden_size
         if attn_size is None:
@@ -182,19 +194,48 @@ class TemporalAttention(nn.Module):
         self.W_x = nn.Linear(self.feature_size, self.attn_size, bias=False)
         self.v = nn.Linear(self.attn_size, 1, bias=False)  #
         self.b = nn.Parameter(torch.zeros(attn_size))
-        # optionally add dropout / layernorm if desired
+        self.dropout = nn.Dropout(dropout)
+        self.attn_dropout = nn.Dropout(dropout)  # separate name for clarity
+        
+        # LayerNorm should normalize across the last (feature) dimension.
+        # For h: last dim = hidden_size; for x: last dim = feature_size.
+        self.use_layernorm = use_layernorm
+        if use_layernorm:
+            self.ln_h = nn.LayerNorm(self.hidden_size)
+            self.ln_x = nn.LayerNorm(self.feature_size)
+        
+        # weight init (optional but recommended)
+        nn.init.xavier_uniform_(self.W_h.weight)
+        nn.init.xavier_uniform_(self.W_x.weight)
+        nn.init.xavier_uniform_(self.v.weight)
+     
 
-    def forward(self, h: torch.Tensor, x: torch.Tensor, mask: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+            self, h: torch.Tensor, 
+            x: torch.Tensor, 
+            mask: torch.Tensor = None, 
+            ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         h: [B, T, H] RNN outputs / hidden states (batch_first)
         mask: [B, T] boolean or float (1 for valid, 0 for pad)
         returns: context [B, H], attn_weights [B, T]
         """
+        # Optional LayerNorm applied per timestep across feature dim
+        if self.use_layernorm:
+            # LayerNorm works on last dim, so this will normalize per-timestep vectors
+            h_norm = self.ln_h(h)         # [B, T, H]
+            x_norm = self.ln_x(x)         # [B, T, F]
+        else:
+            h_norm = h
+            x_norm = x
+
         # compute intermediate: [B, T, attn_hidden]
-        Wh = self.W_h(h)    # [B, T, A]
-        Wx = self.W_x(x)    # [B, T, A]
+        Wh = self.W_h(h_norm)    # [B, T, A]
+        Wx = self.W_x(x_norm)    # [B, T, A]
         
-        u = torch.tanh(Wh + Wx + self.b)                # [B, T, A]
+        u = torch.tanh(Wh + Wx + self.b)    # [B, T, A]
+        u = self.dropout(u)  # regularize attention intermediate
+                       
         scores = self.v(u).squeeze(-1)           # [B, T]
 
         # mask: convert to float (1.0 valid, 0.0 pad)
@@ -208,6 +249,7 @@ class TemporalAttention(nn.Module):
         scores_masked = scores.masked_fill(~mask_bool, float("-1e9"))
         # compute normalized attention
         attn_weights = F.softmax(scores_masked, dim=-1)   # [B, T], padded positions ~0
+        attn_weights = self.attn_dropout(attn_weights)  # attention dropout
 
         # weighted sum => context
         attn_weights_unsq = attn_weights.unsqueeze(-1)    # [B, T, 1]
@@ -371,13 +413,15 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
         n_time_bins,
         num_risks,
         dropout=hyperparams['dropout'],
+        use_layernorm=hyperparams['use_layernorm'],
         rnn_type="GRU",
         predict_covariates=train_processor.physiological_feature_ind,
     ).to(config_manager.training_config['device'])
 
-    deephit_optimizer = torch.optim.Adam(
+    deephit_optimizer = torch.optim.AdamW(
         dynamic_deephit_model.parameters(),
-        lr=learning_rate
+        lr=learning_rate,
+        weight_decay = hyperparams['weight_decay']
     )
 
     trainer = DynamicDeepHitTrainer(

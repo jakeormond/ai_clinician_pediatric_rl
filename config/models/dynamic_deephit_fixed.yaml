@@ -5,8 +5,10 @@
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
     window_length: 72 # Prediction horizon in hours - so 1 month
     device: "cuda"  # Device (cuda or cpu)
-    learning_rate: 5e-6          #      [1e-6]  # Learning rates to try
+    learning_rate: 2e-6          #      [1e-6]  # Learning rates to try
     dropout: 0.5
+    weight_decay: 1e-4
+    use_layernorm: True
     batch_size: 128  # Batch size for all networks
     hidden_dim: 64  # Hidden dimension for all networks
     attn_hidden_dim: 64

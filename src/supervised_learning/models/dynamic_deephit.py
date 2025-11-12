@@ -226,6 +226,8 @@ class DynamicDeepHitTrainer:
         num_time_bins = 100,
         loss_fn=None,
         grad_clip=1.0,
+        alpha_rank = None,
+        alpha_pred = None,
         scheduler=None,
         verbose=True,
         physiological_feature_type = None
@@ -249,6 +251,8 @@ class DynamicDeepHitTrainer:
         self.num_time_bins = num_time_bins
         self.loss_fn = loss_fn
         self.grad_clip = grad_clip
+        self.alpha_rank = alpha_rank
+        self.alpha_pred = alpha_pred
         self.scheduler = scheduler
         self.verbose = verbose
         self.physiological_feature_type = physiological_feature_type
@@ -279,6 +283,8 @@ class DynamicDeepHitTrainer:
             event_label, 
             x_right_padded,
             new_mask,
+            alpha_rank = self.alpha_rank,
+            alpha_pred = self.alpha_pred,
             predict_covariates=self.model.predict_covariates,
             physiological_feature_type=self.physiological_feature_type
             )
@@ -376,6 +382,8 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
             num_time_bins=n_time_bins,
             loss_fn=dynamic_deephit_loss,
             grad_clip = hyperparams['grad_clip'],
+            alpha_rank = hyperparams['alpha_rank'],
+            alpha_pred = hyperparams['alpha_pred'],
             scheduler=None,
             verbose=True, 
             physiological_feature_type = train_processor.physiological_feature_type                
@@ -396,8 +404,8 @@ def dynamic_deephit_loss(
         physiological_feature_type: list = [],
         no_censoring=True,
         pair_sample_frac = 1.0,
-        alpha_rank= 0.5, 
-        alpha_pred = 2.0,
+        alpha_rank= None, 
+        alpha_pred = None,
         sigma=0.1,
         eps=1e-8
         ):

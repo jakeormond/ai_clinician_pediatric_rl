@@ -183,8 +183,16 @@ class DataProcessor:
         # so we will loop throught the traj_lengths and calculate n_windows for each traj
         window_indices = {}
         n_windows = {}
-        n_windows_per_bin = 2
-        n_early_windows = 10
+        
+        
+        # get min gap between time bins
+        min_gap = int(np.floor(np.min(np.diff(config_manager.time_bins))))
+        if min_gap < 1:
+            min_gap = 1
+
+        n_windows_per_bin = int(min_gap/4)
+        if n_windows_per_bin < 1:
+            n_windows_per_bin = 1
 
         for encounter_id, traj_length in traj_lengths.items():
             window_ind = []

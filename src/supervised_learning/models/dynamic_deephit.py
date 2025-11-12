@@ -336,6 +336,9 @@ class DynamicDeepHitTrainer:
                 event_label, 
                 x_right_padded,
                 new_mask,
+                alpha_rank = self.alpha_rank,
+                alpha_pred = self.alpha_pred,
+                sigma = self.sigma,
                 predict_covariates=self.model.predict_covariates,
                 physiological_feature_type=self.physiological_feature_type
                 )

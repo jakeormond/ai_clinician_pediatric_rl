@@ -270,6 +270,7 @@ class DynamicDeepHitTrainer:
         grad_clip=1.0,
         alpha_rank = None,
         alpha_pred = None,
+        alpha_class = None,
         sigma = None,
         scheduler=None,
         verbose=True,
@@ -294,6 +295,7 @@ class DynamicDeepHitTrainer:
         self.num_time_bins = num_time_bins
         self.loss_fn = loss_fn
         self.grad_clip = grad_clip
+        self.alpha_class = alpha_class
         self.alpha_rank = alpha_rank
         self.alpha_pred = alpha_pred
         self.sigma = sigma
@@ -320,13 +322,14 @@ class DynamicDeepHitTrainer:
         logits, _, predictions, x_right_padded , new_mask = self.model(X, mask=mask, return_predictions=True)
 
         # Compute log loss and ranking loss
-        loss, lik_loss, rank_loss, pred_loss = self.loss_fn(
+        loss, lik_loss, class_loss, rank_loss, pred_loss = self.loss_fn(
             logits, 
             predictions, 
             time_to_event, 
             event_label, 
             x_right_padded,
             new_mask,
+            alpha_class = self.alpha_class,
             alpha_rank = self.alpha_rank,
             alpha_pred = self.alpha_pred,
             sigma = self.sigma,
@@ -350,6 +353,7 @@ class DynamicDeepHitTrainer:
         loss_dict = {
             "combined_loss": loss.item(),
             "likelihood_loss": lik_loss.item(),
+            "classification_loss": class_loss.item(),
             "ranking_loss": rank_loss.item(),
             "prediction_loss": pred_loss.item()
             }
@@ -371,13 +375,14 @@ class DynamicDeepHitTrainer:
             logits, _, predictions, x_right_padded , new_mask = self.model(X, mask=mask, return_predictions=True)
 
             # Compute log loss and ranking loss
-            loss, lik_loss, rank_loss, pred_loss = self.loss_fn(
+            loss, lik_loss, class_loss, rank_loss, pred_loss = self.loss_fn(
                 logits, 
                 predictions, 
                 time_to_event, 
                 event_label, 
                 x_right_padded,
                 new_mask,
+                alpha_class = self.alpha_class,
                 alpha_rank = self.alpha_rank,
                 alpha_pred = self.alpha_pred,
                 sigma = self.sigma,
@@ -391,6 +396,7 @@ class DynamicDeepHitTrainer:
         loss_dict = {
             "combined_loss": loss.item(),
             "likelihood_loss": lik_loss.item(),
+            "classification_loss": class_loss.item(),
             "ranking_loss": rank_loss.item(),
             "prediction_loss": pred_loss.item()
             }
@@ -432,6 +438,7 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
             num_time_bins=n_time_bins,
             loss_fn=dynamic_deephit_loss,
             grad_clip = hyperparams['grad_clip'],
+            alpha_class = hyperparams['alpha_class'], 
             alpha_rank = hyperparams['alpha_rank'],
             alpha_pred = hyperparams['alpha_pred'],
             sigma = hyperparams['sigma'],
@@ -455,6 +462,7 @@ def dynamic_deephit_loss(
         physiological_feature_type: list = [],
         no_censoring=True,
         pair_sample_frac = 1.0,
+        alpha_class= None,
         alpha_rank= None, 
         alpha_pred = None,
         sigma=None,
@@ -479,6 +487,7 @@ def dynamic_deephit_loss(
     """
     
     lik_loss = log_likelihood_loss(logits, time_to_event, event_label, no_censoring)
+    classification_loss = event_classification_loss(logits, event_label, no_censoring)
     rank_loss = ranking_loss(logits, time_to_event, event_label, no_censoring=no_censoring, sigma=sigma)
     
     pred_loss = prediction_loss(
@@ -490,8 +499,8 @@ def dynamic_deephit_loss(
             ) 
       
     # --- Combine ---
-    loss = lik_loss + alpha_rank * rank_loss + alpha_pred * pred_loss
-    return loss, lik_loss, rank_loss, pred_loss
+    loss = lik_loss + alpha_class * classification_loss + alpha_rank * rank_loss + alpha_pred * pred_loss
+    return loss, lik_loss, classification_loss, rank_loss, pred_loss
 
 
 def log_likelihood_loss(logits, time_to_event, event_label, no_censoring=True):
@@ -508,6 +517,19 @@ def log_likelihood_loss(logits, time_to_event, event_label, no_censoring=True):
     lik_loss = - logp_flat_sel.mean() # the negative of which can be used as the loss (log prob close to 0 mean highs high prob, 
     # log prob very negative means low prob   
     return lik_loss
+
+
+def event_classification_loss(logits, event_label, no_censoring=True):
+
+    # subtract 1 from event_label if no censoring
+    event_label = event_label -1 if no_censoring else event_label   
+    
+    # aggregate over time to get event-level logits
+    event_logits = logits.sum(dim=2)           # [B, K]
+    event_logp = F.log_softmax(event_logits, dim=1)
+    classification_loss = F.nll_loss(event_logp, event_label)                      
+
+    return classification_loss
 
 
 def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=None):

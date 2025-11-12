@@ -17,6 +17,7 @@
 
     alpha_rank: 0.5   # Weight for ranking loss
     alpha_pred: 5.0
+    sigma: 0.2
 
     # Early stopping parameters (fixed for all combinations)
     patience: 1500        # Stop if no improvement for 15 evaluations

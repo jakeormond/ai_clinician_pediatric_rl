@@ -228,6 +228,7 @@ class DynamicDeepHitTrainer:
         grad_clip=1.0,
         alpha_rank = None,
         alpha_pred = None,
+        sigma = None,
         scheduler=None,
         verbose=True,
         physiological_feature_type = None
@@ -253,6 +254,7 @@ class DynamicDeepHitTrainer:
         self.grad_clip = grad_clip
         self.alpha_rank = alpha_rank
         self.alpha_pred = alpha_pred
+        self.sigma = sigma
         self.scheduler = scheduler
         self.verbose = verbose
         self.physiological_feature_type = physiological_feature_type
@@ -285,6 +287,7 @@ class DynamicDeepHitTrainer:
             new_mask,
             alpha_rank = self.alpha_rank,
             alpha_pred = self.alpha_pred,
+            sigma = self.sigma,
             predict_covariates=self.model.predict_covariates,
             physiological_feature_type=self.physiological_feature_type
             )
@@ -384,6 +387,7 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
             grad_clip = hyperparams['grad_clip'],
             alpha_rank = hyperparams['alpha_rank'],
             alpha_pred = hyperparams['alpha_pred'],
+            sigma = hyperparams['sigma'],
             scheduler=None,
             verbose=True, 
             physiological_feature_type = train_processor.physiological_feature_type                
@@ -406,7 +410,7 @@ def dynamic_deephit_loss(
         pair_sample_frac = 1.0,
         alpha_rank= None, 
         alpha_pred = None,
-        sigma=0.1,
+        sigma=None,
         eps=1e-8
         ):
     """
@@ -428,7 +432,7 @@ def dynamic_deephit_loss(
     """
     
     lik_loss = log_likelihood_loss(logits, time_to_event, event_label, no_censoring)
-    rank_loss = ranking_loss(logits, time_to_event, event_label, no_censoring, sigma)
+    rank_loss = ranking_loss(logits, time_to_event, event_label, no_censoring=no_censoring, sigma=sigma)
     
     pred_loss = prediction_loss(
             x_right_padded,
@@ -459,7 +463,7 @@ def log_likelihood_loss(logits, time_to_event, event_label, no_censoring=True):
     return lik_loss
 
 
-def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=0.2):
+def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=None):
 
     B, K, T = logits.shape
     device = logits.device

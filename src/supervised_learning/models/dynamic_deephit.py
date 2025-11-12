@@ -627,4 +627,7 @@ def make_mixed_resolution_time_bins(max_time_hours=3000):
     # create every 24 hour bins from 0 to 168 hours
     all_bins = np.arange(0, 169, 24)
 
+    # manual bins
+    all_bins = np.array([0, 24, 48, 168])
+
     return all_bins

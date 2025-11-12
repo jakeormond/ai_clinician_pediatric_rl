@@ -15,8 +15,8 @@
     loss_metric: "combined_loss"  # Which metric to use for early stopping
     max_val_samples: 5000  # Max samples to use for validation during training
 
-    alpha_rank: 0.5   # Weight for ranking loss
-    alpha_pred: 5.0
+    alpha_rank: 0.0   # Weight for ranking loss
+    alpha_pred: 0.0
     sigma: 0.2
 
     # Early stopping parameters (fixed for all combinations)

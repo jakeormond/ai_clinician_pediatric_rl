@@ -6,7 +6,7 @@
     window_length: 72 # Prediction horizon in hours - so 1 month
     device: "cuda"  # Device (cuda or cpu)
     learning_rate: 5e-6          #      [1e-6]  # Learning rates to try
-    dropout: 0.2
+    dropout: 0.5
     batch_size: 128  # Batch size for all networks
     hidden_dim: 64  # Hidden dimension for all networks
     attn_hidden_dim: 64

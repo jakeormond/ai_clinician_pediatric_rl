@@ -525,10 +525,12 @@ def event_classification_loss(logits, event_label, no_censoring=True):
     event_label = event_label -1 if no_censoring else event_label   
     
     # aggregate over time to get event-level logits
-    event_logits = logits.sum(dim=2)           # [B, K]
-    event_logp = F.log_softmax(event_logits, dim=1)
-    classification_loss = F.nll_loss(event_logp, event_label.long())                      
-
+    # event_logits = logits.sum(dim=2)           # [B, K]
+    event_logits = torch.logsumexp(logits, dim=2)  # [B, K]
+    # event_logp = F.log_softmax(event_logits, dim=1)
+    # classification_loss = F.nll_loss(event_logp, event_label.long())                      
+    classification_loss = F.cross_entropy(event_logits, event_label.long())
+    
     return classification_loss
 
 

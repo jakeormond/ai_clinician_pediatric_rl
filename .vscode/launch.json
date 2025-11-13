@@ -67,7 +67,7 @@
                 "--mode", "single_split", 
                 "--testing",
                 "--search_variant", "fixed_hyperparameters",
-                "--n_epochs", "200",
+                "--n_epochs", "500",
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

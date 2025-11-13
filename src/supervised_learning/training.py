@@ -173,7 +173,8 @@ def compute_survival_metrics(
     # Use predicted probability of event by the actual event time
     # Sum over all risks and time bins up to observed time
 
-    horizons = [1, 5, 10, 50, 100, 200] # in hours
+    # horizons = [1, 5, 10, 50, 100, time_bins[-1]] # in hours
+    horizons = time_bins[0:-1:] + (time_bins[1]-time_bins[0])/2  # 
     horizon_bin_ind = [np.searchsorted(time_bins, h, side='right') - 1 for h in horizons]
 
     cif = torch.cumsum(torch.tensor(probs), dim=2).numpy()  # cumulative incidence function
@@ -438,7 +439,7 @@ def development_training_loop(dataset, config_manager):
 
     # train 
     hyperparameters = get_fixed_hyperparameters(config_manager)
-    training_scores, test_scores, n_epochs = train_with_hyperparameters(
+    training_scores, test_scores, n_epochs, trainer = train_with_hyperparameters(
             train_processor, 
             test_processor, 
             config_manager, 
@@ -464,6 +465,12 @@ def development_training_loop(dataset, config_manager):
         "hyperparameters": hyperparameters,
         "n_epochs": n_epochs
     }
+
+    # save model so that it can be reloaded later
+    model_path = Path(config_manager.experiment_dir /  "final_model.pt")
+    torch.save(trainer.model.state_dict(), model_path)
+    logger.info(f" Final model saved to {model_path}")
+
     with open(config_manager.experiment_dir / "all_scores.pkl", "wb") as f:
         pickle.dump(all_scores, f)
 
@@ -536,15 +543,18 @@ def outer_training_loop(dataset, config_manager):
                 dataset, outer_train_id, outer_test_id, config_manager
             )        
                         
-        final_training_scores, test_scores, n_epochs = train_with_hyperparameters(
-                                                                train_processor, 
-                                                                test_processor, 
-                                                                config_manager, 
-                                                                best_hyperparameters,
-                                                                n_epochs=n_epochs,
-                                                                final_model=True
-                                                            )
-        
+        final_training_scores, \
+        test_scores, \
+        n_epochs, \
+        trainer = train_with_hyperparameters(
+                train_processor, 
+                test_processor, 
+                config_manager, 
+                best_hyperparameters,
+                n_epochs=n_epochs,
+                final_model=True
+            )
+
         # PLOT THE TRAINING AND VALIDATION LOSSES
         plot_losses_cv(training_scores, val_scores, test_scores, outer_fold, config_manager)
 
@@ -654,13 +664,15 @@ def optimize_hyperparameters(train_dataset, config_manager,
             )
            
             ######################### Train with current hyperparameters ########################
-            inner_training_scores[inner_fold], inner_val_scores[inner_fold], inner_n_epochs[inner_fold] = \
-                train_with_hyperparameters(
-                    inner_train_processor, 
-                    inner_val_processor, 
-                    config_manager, 
-                    current_params
-                )                        
+            inner_training_scores[inner_fold], \
+            inner_val_scores[inner_fold], \
+            inner_n_epochs[inner_fold],\
+                _ = train_with_hyperparameters(
+                inner_train_processor, 
+                inner_val_processor, 
+                config_manager, 
+                current_params
+            )                        
             
             current_val_loss = min(inner_val_scores[inner_fold][loss_metric])
             logger.info(f"  Inner fold {inner_fold+1} val loss: {current_val_loss:.4f}")
@@ -771,7 +783,7 @@ def train_with_hyperparameters(
             restore_model_parameters(trainer, best_model_state, config_manager)
             logger.info(f"    Restored best model (val_loss={best_val_loss:.4f})")
 
-        return training_losses, val_losses, n_epochs
+        return training_losses, val_losses, n_epochs, trainer
 
     ########################## evaluate on test set after training if final model ##########################
     # note that results df will be None if no targets/predictions were collected during evaluation (i.e.Q learning)

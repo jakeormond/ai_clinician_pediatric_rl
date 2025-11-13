@@ -5,7 +5,7 @@ name: "dynamic_deephit_loss"
 checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
 window_length: 72 # Prediction horizon in hours - so 1 month
 device: "cuda"  # Device (cuda or cpu)
-learning_rate: 2e-5          #      [1e-6]  # Learning rates to try
+learning_rate: 2e-6          #      [1e-6]  # Learning rates to try
 dropout: 0.5
 weight_decay: 1e-4
 use_layernorm: True

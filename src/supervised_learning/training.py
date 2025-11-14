@@ -217,59 +217,128 @@ def compute_survival_metrics(
     weighted_IC = event_weighted_IC(horizon_bin_ind, c_index, n_per_event=event_counts)
 
     # ----------------------- Brier Score Calculation ----------------------
-    # Compute Brier score at specific time points
-    # evaluate at every 5th time bin
-    time_bins_brier = list(range(0, len(time_bins), 5))  # [0, 5, 10, 15, ..., 90]
-    eval_times = time_bins[time_bins_brier] + 1  # Get time values at those indices
+    # compute joint pmf
+    B, K, T = logits.shape
+    device = logits.device
 
-    pred_cif = cif[:, :, time_bins_brier]
+    logits_flat = logits.view(B, K * T)   
+    logp = F.log_softmax(logits_flat, dim=1)
+    p = logp.exp().view(B, K, T)   # [B, K, T]
+
+    # 2) CIF: cumulative over time
+    cif = p.cumsum(dim=2)    # [B, K, T]
+
+    # 3) Build true indicator tensors
+    times = torch.arange(1, T+1, device=device).view(1, T)   # [1, T]
+    tt = time_to_event.view(B, 1)                               # [B, 1]
+    tc = event_label.view(B, 1)       
+
+    # I_{i,k}(t) = 1 if true_time <= t and true_cause == k
+    # Build shape [B, K, T] with broadcasting
+    # mask_time = (tt <= times) -> [B, T]
+    mask_time = (tt <= times)                                # [B, T]
+    # mask_cause = (tc == k) -> we will expand it
+    # create [B, K, 1] then broadcast
+    cause_idx = torch.arange(K, device=device).view(1, K, 1)  # [1, K, 1]
+    true_cause_expand = tc.view(B, 1, 1)                     # [B, 1, 1]
+    mask_cause = (true_cause_expand == cause_idx)           # [B, K, 1]
+
+    I_ik_t = (mask_cause.expand(B, K, T) & mask_time.view(B, 1, T).expand(B, K, T)).float()  # [B, K, T]
+
+        # 4) Cause-specific Brier per time BS_k(t)
+    # squared errors: [B, K, T]
+    sq_err = (I_ik_t - cif) ** 2
+    bs_k_t = sq_err.mean(dim=0)   # average over B -> shape [K, T]
+
+    # 5) Multiclass Brier per time is sum over causes
+    bs_multi_t = bs_k_t.sum(dim=0)   # [T]
+
+    # 6) Integrated (simple mean over times)
+    ibs_k = bs_k_t.mean(dim=1)       # [K] mean over T
+    ibs_multi = bs_multi_t.mean()    # scalar
+
+    ew_ibs_k = None
+    ew_ibs_multi = None
+    if event_weighted:
+        # E(t) = number of events at exactly time t (any cause)
+        # true_time==t and note every trajectory ends with an event
+        # Build E(t): [T]
+        true_time_onehot = torch.zeros(B, T, device=device)
+        # index positions true_time-1 (if true_time in 1..T)
+        true_time_onehot.scatter_(1, (true_time-1).view(B,1), 1.0)  # [B,T]
+        E_t = true_time_onehot.sum(dim=0)   # [T]
+        denom = E_t.sum()
+        # Guard against denom==0 (shouldn't happen if events exist)
+        if denom.item() == 0:
+            raise ValueError("No events found to weight by.")
+        # weighted sums across times
+        ew_ibs_k = (bs_k_t * E_t.view(1, T)).sum(dim=1) / denom   # [K]
+        ew_ibs_multi = (bs_multi_t * E_t).sum() / denom
+
     
-    n_patients = logits.shape[0]
-    n_t = len(eval_times)  # number of time intervals
-    n_labels = len(events)
+    
+    
+    
+    # eval_times = time_bins[time_bins_brier] + 1  # Get time values at those indices
 
-    brier_per_event = np.zeros((n_labels, n_t), dtype=float)
-    brier_multiclass = np.zeros(n_t, dtype=float)
+    # pred_cif = cif[:, :, time_bins_brier]
+    
+    # n_patients = logits.shape[0]
+    # n_t = len(eval_times)  # number of time intervals
+    # n_labels = len(events)
 
-    for ti_idx, t in enumerate(time_bins_brier):
-        # true matrix Y: shape (n, K)
-        Y = np.zeros((n_patients, n_labels), dtype=float)
-        occurred_by_t = time_to_event <= t
-        if np.any(occurred_by_t):
-            # set Y[i,k] = 1 for subjects that experienced event k by t
-            for k in range(n_labels):
-                Y[:, k] = ((event_label == k+1) & occurred_by_t).astype(float)
-        # predicted CIFs at this t: shape (n, K)
-        P = pred_cif[:, :, ti_idx]
+    # brier_per_event = np.zeros((n_labels, n_t), dtype=float)
+    # brier_multiclass = np.zeros(n_t, dtype=float)
+
+    # for ti_idx, t in enumerate(time_bins_brier):
+    #     # true matrix Y: shape (n, K)
+    #     Y = np.zeros((n_patients, n_labels), dtype=float)
+    #     occurred_by_t = time_to_event <= t
+    #     if np.any(occurred_by_t):
+    #         # set Y[i,k] = 1 for subjects that experienced event k by t
+    #         for k in range(n_labels):
+    #             Y[:, k] = ((event_label == k+1) & occurred_by_t).astype(float)
+    #     # predicted CIFs at this t: shape (n, K)
+    #     P = pred_cif[:, :, ti_idx]
         
-        # Brier per event k
-        for k in range(n_labels):
-            diffsq = (Y[:, k] - P[:, k])**2
-            brier_per_event[k, ti_idx] = diffsq.mean()
+    #     # Brier per event k
+    #     for k in range(n_labels):
+    #         diffsq = (Y[:, k] - P[:, k])**2
+    #         brier_per_event[k, ti_idx] = diffsq.mean()
         
-        # multiclass (average over events) Brier at time t
-        brier_multiclass[ti_idx] = brier_per_event[:, ti_idx].mean()
+    #     # multiclass (average over events) Brier at time t
+    #     brier_multiclass[ti_idx] = brier_per_event[:, ti_idx].mean()
     
-    # Integrated Brier (trapezoidal integration over times_grid)
-    # We integrate for each event separately and for multiclass
-    epsilon = 1e-8
-    ibs_per_event = np.zeros(n_labels, dtype=float)
-    for k in range(n_labels):
-        ibs_per_event[k] = np.trapz(brier_per_event[k, :], time_bins_brier) / \
-            ((time_bins_brier[-1] - time_bins_brier[0]) + epsilon)
-    ibs_multiclass = np.trapz(brier_multiclass, time_bins_brier) / \
-        ((time_bins_brier[-1] - time_bins_brier[0]) + epsilon)
+    # # Integrated Brier (trapezoidal integration over times_grid)
+    # # We integrate for each event separately and for multiclass
+    # epsilon = 1e-8
+    # ibs_per_event = np.zeros(n_labels, dtype=float)
+    # for k in range(n_labels):
+    #     ibs_per_event[k] = np.trapz(brier_per_event[k, :], time_bins_brier) / \
+    #         ((time_bins_brier[-1] - time_bins_brier[0]) + epsilon)
+    # ibs_multiclass = np.trapz(brier_multiclass, time_bins_brier) / \
+    #     ((time_bins_brier[-1] - time_bins_brier[0]) + epsilon)
     
-    brier_results = {
-        'times': time_bins_brier,
-        'brier_per_event': brier_per_event,
-        'brier_multiclass': brier_multiclass,
-        'ibs_per_event': ibs_per_event,
-        'ibs_multiclass': ibs_multiclass
+    # brier_results = {
+    #     'times': time_bins_brier,
+    #     'brier_per_event': brier_per_event,
+    #     'brier_multiclass': brier_multiclass,
+    #     'ibs_per_event': ibs_per_event,
+    #     'ibs_multiclass': ibs_multiclass
+    # }
+
+    brier_results = {        
+        "bs_k_t": bs_k_t,           # [K, T]
+        "bs_multi_t": bs_multi_t,   # [T]
+        "ibs_k": ibs_k,             # [K]
+        "ibs_multi": ibs_multi,     # scalar
+        "ew_ibs_k": ew_ibs_k,       # [K] or None
+        "ew_ibs_multi": ew_ibs_multi  # scalar or None
     }
 
+
     return {'weighted_C_index': weighted_IC,
-            'ibs_multiclass': ibs_multiclass}
+            'ibs_multiclass': ibs_multi}
 
 
 

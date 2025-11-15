@@ -141,12 +141,12 @@ def get_early_stopping_config(config_manager):
     return early_stopping
 
 
-
 def compute_survival_metrics(
     logits: np.ndarray,
     time_to_event: np.ndarray,
     event_label: np.ndarray,
-    time_bins: np.ndarray
+    time_bins: np.ndarray,
+    no_censoring: bool = True
 ) -> Dict[str, float]:
     """
     Compute survival analysis metrics. # Note that we have no censoring, and that 
@@ -160,78 +160,117 @@ def compute_survival_metrics(
         
     Returns:
         Dictionary of survival metrics
+
+
+    NOTE: need to implement bootstrapping with confidence intervals for final analysis. 
+    Will report integrated Brier score and event weighted integrated Brier score, both multiclass.
+    Could potentially show curves of Brier over time as well.
     """
-    metrics = {}
+
+    # subtract 1 from event_label if no censoring
+    event_label = event_label -1 if no_censoring else event_label   
 
     # Convert logits to probabilities using softmax over time dimension
     # Shape: [batch_size, num_risks, num_time_bins]
-    probs = softmax(logits, axis=-1)  # softmax over time bins    
-        
+    # compute joint pmf
+    B, K, T = logits.shape
+    device = logits.device    
+    logits = torch.from_numpy(logits)
+    logits_flat = logits.view(B, K * T)   
+    p = F.softmax(logits_flat, dim=1).view(B, K, T)   # [B, K, T]
 
+    # 2) CIF: cumulative over time
+    cif = p.cumsum(dim=2)    # [B, K, T]       
+    
+    tt = torch.from_numpy(time_to_event).view(B, 1)    
+    el = torch.from_numpy(event_label).view(B, 1)       
+    
     # ---------------------- C-index Calculation ----------------------
     # For C-index, we need a risk score (higher = higher risk)
     # Use predicted probability of event by the actual event time
     # Sum over all risks and time bins up to observed time
 
-    # horizons = [1, 5, 10, 50, 100, time_bins[-1]] # in hours
-    horizons = time_bins[0:-1:] + (time_bins[1]-time_bins[0])/2  # 
-    horizon_bin_ind = [np.searchsorted(time_bins, h, side='right') - 1 for h in horizons]
+    C = torch.zeros(K, T)
 
-    cif = torch.cumsum(torch.tensor(probs), dim=2).numpy()  # cumulative incidence function
-    cif_horizon = cif[:, :, horizon_bin_ind]
-
-    events = np.sort(np.unique(event_label))
-    _, event_counts = np.unique(event_label, return_counts=True)
-
-    c_index = np.zeros((len(events), len(horizons)))
-
-    for i, risk_type in enumerate(events):
-        cif_event = cif_horizon[:, i, :]  # -1 because risk labels are 1-indexed
-        event_indicator = event_label == risk_type
+    for k in range(K):
+        is_k = (el == k)             # [B]
         
-        for j, horizon in enumerate(horizon_bin_ind):
-            # Find the time bin index for the horizon
-            risk_scores_horizon = cif_event[:, j]
+        # Event times for cause k patients
+        tt_k = tt[is_k]              # [num_k]
 
-            c_index[i, j], *_ = concordance_index_censored(event_indicator, time_to_event, risk_scores_horizon)
+        if tt_k.numel() == 0:
+            continue  # no patients with this cause
 
-     # calculate a single c-index for reporting during training
-    def integrated_C_per_event(times, C_k_t):
-        # times: shape (T,), C_k_t: shape (T,)
-        # returns scalar integrated C (normalized by time range)
-        t0, t1 = times[0], times[-1]
-        area = np.trapz(C_k_t, times)
-        return area / (t1 - t0)
+        # CIF for cause k, shape [B, T]
+        cif_k = cif[:, k, :]
+        
+        for t in range(T):
+            # Patients who had event k at or before t
+            # These are the "cases" in C-index
+            cases = is_k & (tt <= t)
+            if cases.sum() == 0:
+                continue
 
-    def integrated_C_matrix(times, C_matrix):
-        # C_matrix: shape (K, T)
-        K = C_matrix.shape[0]
-        return np.array([integrated_C_per_event(times, C_matrix[k]) for k in range(K)])
+            # For each case i, we compare them to all others j
+            # whose event time is >= event time of i OR had competing event
+            #
+            # Create pairwise comparison matrix:
+            #
+            # For vectorization, expand risk scores
+            R_i = cif_k[cases.squeeze(), t].view(-1, 1)    # shape [Nc, 1]
+            R_j = cif_k[:, t].view(1, -1)        # shape [1, B]
+            
 
-    def event_weighted_IC(times, C_matrix, n_per_event):
-        K = C_matrix.shape[0]
-        ic = integrated_C_matrix(times, C_matrix)  # shape (K,)
-        weights = n_per_event / n_per_event.sum()
-        return (weights * ic).sum()
+            # Valid comparators j:
+            # j must not have event k before time of i
+            tt_cases = tt[cases].view(-1, 1)     # [Nc,1]
+            tt_all = tt.view(1, -1)               # [1, B]  
+            el_all = el.view(1, -1)               # [1, B]
+            valid_j = (tt_all > tt_cases) & (el_all == k)  # [Nc,B]
+            
+            # Concordance condition: R_i > R_j
+            concordant = (R_i > R_j) & valid_j
 
-    weighted_IC = event_weighted_IC(horizon_bin_ind, c_index, n_per_event=event_counts)
+            # Comparable pairs count
+            comparable = valid_j.sum().float()
+
+            if comparable > 0:
+                C[k, t] = concordant.sum().float() / comparable
+            else:
+                C[k, t] = torch.nan
+    
+
+    # integrated C-index
+    C_integrated_k = C.mean(dim=1)   
+
+
+    # event weighted
+    true_time_onehot = torch.zeros(B, T, device=device)
+    true_time_onehot.scatter_(1, (tt).long().view(B,1), 1.0)  # [B,T]
+    
+    true_cause_onehot = torch.zeros(B, K, device=device)
+    true_cause_onehot.scatter_(1, el.view(B,1).long(), 1.0)  # [B, K]
+    
+    # ew cause specific
+    event_occ = true_cause_onehot.unsqueeze(2) * true_time_onehot.unsqueeze(1)  # [B, K, T]
+    E_k_t = event_occ.sum(dim=0)  # [K, T] number of events of cause k at time t
+    denom_k = E_k_t.sum(dim=1)  # [K]
+    C_weighted_k = (C * E_k_t).sum(dim=1) / denom_k   # [K]
+
+    # ew multiclass
+    denom_all = denom_k.sum()
+    C_weighted_multi = (C_weighted_k * denom_k).sum() / denom_all
+
+    c_index_results = {
+        "C_k_t": C,                     # [K, T]
+        "C_integrated_k": C_integrated_k,       # [K]
+        "C_weighted_k": C_weighted_k,   # [K]
+        "C_weighted_multi": C_weighted_multi  # scalar
+    }
 
     # ----------------------- Brier Score Calculation ----------------------
-    # compute joint pmf
-    B, K, T = logits.shape
-    device = logits.device
-
-    logits_flat = logits.view(B, K * T)   
-    logp = F.log_softmax(logits_flat, dim=1)
-    p = logp.exp().view(B, K, T)   # [B, K, T]
-
-    # 2) CIF: cumulative over time
-    cif = p.cumsum(dim=2)    # [B, K, T]
-
     # 3) Build true indicator tensors
-    times = torch.arange(1, T+1, device=device).view(1, T)   # [1, T]
-    tt = time_to_event.view(B, 1)                               # [B, 1]
-    tc = event_label.view(B, 1)       
+    times = torch.arange(0, T, device=device).view(1, T)   # [1, T]
 
     # I_{i,k}(t) = 1 if true_time <= t and true_cause == k
     # Build shape [B, K, T] with broadcasting
@@ -240,12 +279,12 @@ def compute_survival_metrics(
     # mask_cause = (tc == k) -> we will expand it
     # create [B, K, 1] then broadcast
     cause_idx = torch.arange(K, device=device).view(1, K, 1)  # [1, K, 1]
-    true_cause_expand = tc.view(B, 1, 1)                     # [B, 1, 1]
+    true_cause_expand = el.view(B, 1, 1)                     # [B, 1, 1]
     mask_cause = (true_cause_expand == cause_idx)           # [B, K, 1]
 
     I_ik_t = (mask_cause.expand(B, K, T) & mask_time.view(B, 1, T).expand(B, K, T)).float()  # [B, K, T]
 
-        # 4) Cause-specific Brier per time BS_k(t)
+    # 4) Cause-specific Brier per time BS_k(t)
     # squared errors: [B, K, T]
     sq_err = (I_ik_t - cif) ** 2
     bs_k_t = sq_err.mean(dim=0)   # average over B -> shape [K, T]
@@ -257,75 +296,30 @@ def compute_survival_metrics(
     ibs_k = bs_k_t.mean(dim=1)       # [K] mean over T
     ibs_multi = bs_multi_t.mean()    # scalar
 
-    ew_ibs_k = None
-    ew_ibs_multi = None
-    if event_weighted:
-        # E(t) = number of events at exactly time t (any cause)
-        # true_time==t and note every trajectory ends with an event
-        # Build E(t): [T]
-        true_time_onehot = torch.zeros(B, T, device=device)
-        # index positions true_time-1 (if true_time in 1..T)
-        true_time_onehot.scatter_(1, (true_time-1).view(B,1), 1.0)  # [B,T]
-        E_t = true_time_onehot.sum(dim=0)   # [T]
-        denom = E_t.sum()
-        # Guard against denom==0 (shouldn't happen if events exist)
-        if denom.item() == 0:
-            raise ValueError("No events found to weight by.")
-        # weighted sums across times
-        ew_ibs_k = (bs_k_t * E_t.view(1, T)).sum(dim=1) / denom   # [K]
-        ew_ibs_multi = (bs_multi_t * E_t).sum() / denom
+    # event-weighted IBS
+    # E(t) = number of events at exactly time t (any cause)
+    # true_time==t and note every trajectory ends with an event
+    # Build E(t): [T]
+    true_time_onehot = torch.zeros(B, T, device=device)
+    # index positions true_time-1 (if true_time in 1..T)
+    true_time_onehot.scatter_(1, (tt).long().view(B,1), 1.0)  # [B,T]
+    
+    true_cause_onehot = torch.zeros(B, K, device=device)
+    true_cause_onehot.scatter_(1, el.view(B,1).long(), 1.0)  # [B, K]
+    
+    # 7) event specific ew IBS
+    event_occ = true_cause_onehot.unsqueeze(2) * true_time_onehot.unsqueeze(1)  # [B, K, T]
+    E_k_t = event_occ.sum(dim=0)  # [K, T] number of events of cause k at time t
 
+    denom_k = E_k_t.sum(dim=1)  # [K]
+    ew_ibs_k = (bs_k_t * E_k_t).sum(dim=1) / denom_k   # [K]
     
-    
-    
-    
-    # eval_times = time_bins[time_bins_brier] + 1  # Get time values at those indices
+    # 8) multi-event ew IBS  
+    E_t = true_time_onehot.sum(dim=0)   # [T] number of events at time t
+    denom = E_t.sum()
 
-    # pred_cif = cif[:, :, time_bins_brier]
-    
-    # n_patients = logits.shape[0]
-    # n_t = len(eval_times)  # number of time intervals
-    # n_labels = len(events)
-
-    # brier_per_event = np.zeros((n_labels, n_t), dtype=float)
-    # brier_multiclass = np.zeros(n_t, dtype=float)
-
-    # for ti_idx, t in enumerate(time_bins_brier):
-    #     # true matrix Y: shape (n, K)
-    #     Y = np.zeros((n_patients, n_labels), dtype=float)
-    #     occurred_by_t = time_to_event <= t
-    #     if np.any(occurred_by_t):
-    #         # set Y[i,k] = 1 for subjects that experienced event k by t
-    #         for k in range(n_labels):
-    #             Y[:, k] = ((event_label == k+1) & occurred_by_t).astype(float)
-    #     # predicted CIFs at this t: shape (n, K)
-    #     P = pred_cif[:, :, ti_idx]
-        
-    #     # Brier per event k
-    #     for k in range(n_labels):
-    #         diffsq = (Y[:, k] - P[:, k])**2
-    #         brier_per_event[k, ti_idx] = diffsq.mean()
-        
-    #     # multiclass (average over events) Brier at time t
-    #     brier_multiclass[ti_idx] = brier_per_event[:, ti_idx].mean()
-    
-    # # Integrated Brier (trapezoidal integration over times_grid)
-    # # We integrate for each event separately and for multiclass
-    # epsilon = 1e-8
-    # ibs_per_event = np.zeros(n_labels, dtype=float)
-    # for k in range(n_labels):
-    #     ibs_per_event[k] = np.trapz(brier_per_event[k, :], time_bins_brier) / \
-    #         ((time_bins_brier[-1] - time_bins_brier[0]) + epsilon)
-    # ibs_multiclass = np.trapz(brier_multiclass, time_bins_brier) / \
-    #     ((time_bins_brier[-1] - time_bins_brier[0]) + epsilon)
-    
-    # brier_results = {
-    #     'times': time_bins_brier,
-    #     'brier_per_event': brier_per_event,
-    #     'brier_multiclass': brier_multiclass,
-    #     'ibs_per_event': ibs_per_event,
-    #     'ibs_multiclass': ibs_multiclass
-    # }
+    # weighted sums across times
+    ew_ibs_multi = (bs_multi_t * E_t).sum() / denom   
 
     brier_results = {        
         "bs_k_t": bs_k_t,           # [K, T]
@@ -336,8 +330,7 @@ def compute_survival_metrics(
         "ew_ibs_multi": ew_ibs_multi  # scalar or None
     }
 
-
-    return {'weighted_C_index': weighted_IC,
+    return {'weighted_C_index': C_weighted_k,
             'ibs_multiclass': ibs_multi}
 
 

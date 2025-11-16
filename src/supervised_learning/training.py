@@ -38,12 +38,38 @@ from ..data.data_processor import DataProcessor
 from ..rl.replay_buffer import DynamicDeepHitDataset
 
 from ..utils.utilities import set_seed
-from ..rl.plotting import plot_losses,plot_losses_cv
+from ..rl.plotting import plot_losses,plot_losses_cv, plot_c_and_brier_over_time
 from .dynamic_deephit_evaluation import compute_survival_metrics
 
 import logging
 logger = logging.getLogger(__name__)
 
+
+# --------------------- Serialization Utilities ---------------------
+def to_json_safe(obj):
+    """Recursively convert numpy arrays, torch tensors, and numpy scalars
+    into JSON-serializable Python types (lists, floats, ints).
+    """
+    import numpy as np
+    import torch
+
+    if isinstance(obj, dict):
+        return {k: to_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_json_safe(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, torch.Tensor):
+        # detach and move to cpu before converting
+        if obj.dim() == 0:
+            return obj.item()
+        return obj.detach().cpu().tolist()
+    # numpy scalar types
+    if hasattr(obj, 'item') and (
+        isinstance(obj, (np.generic,))
+    ):
+        return obj.item()
+    return obj
 
 MODEL_MODULES = {
     "dynamic_deephit": "src.supervised_learning.models.dynamic_deephit",
@@ -437,6 +463,10 @@ def evaluate_during_training(trainer, epoch, val_buffer, val_losses, config_mana
     
     # Append to validation losses
     for key, value in epoch_val_metrics.items():
+        if type(value) is torch.Tensor:
+            if value.shape[0] > 1:
+                value = value.detach().cpu().numpy()
+
         val_losses[key].append(value)
 
 
@@ -514,6 +544,10 @@ def development_training_loop(dataset, config_manager):
     # plot losses
     plot_losses(training_scores, test_scores, None, config_manager)
 
+    if config_manager.model_type == 'dynamic_deephit':
+        # plot the validation C-index and Brier scores over time
+        plot_c_and_brier_over_time(test_scores, config_manager)
+
     logger.info("Development training loop complete.")
     logger.info(f"Test scores: {test_scores}")
 
@@ -544,11 +578,11 @@ def development_training_loop(dataset, config_manager):
     # Save results for this outer fold
     results_path = Path(config_manager.experiment_dir) / f"results.json"
     with open(results_path, 'w') as f:
-        json.dump({
+        json.dump(to_json_safe({
             'hyperparameters': hyperparameters,
             'final_metrics': test_scores,
             'config': config_manager.training_config
-        }, f, indent=2)
+        }), f, indent=2)
         
         logger.info(f"Training complete. Results saved to {results_path}")
           
@@ -645,12 +679,12 @@ def outer_training_loop(dataset, config_manager):
         # Save results for this outer fold
         results_path = Path(config_manager.experiment_dir) / f"fold_{outer_fold}_results.json"
         with open(results_path, 'w') as f:
-            json.dump({
+            json.dump(to_json_safe({
                 'outer_fold': outer_fold,
                 'best_hyperparameters': best_hyperparameters,
                 'final_metrics': test_scores,
                 'config': config_manager.training_config
-            }, f, indent=2)
+            }), f, indent=2)
         
         logger.info(f"✓ Outer fold {outer_fold} complete. Results saved to {results_path}")
         

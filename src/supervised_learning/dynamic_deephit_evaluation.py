@@ -229,5 +229,5 @@ def compute_survival_metrics(
 
     brier_results = calculate_brier_score(logits, time_to_event, event_label)
 
-    return {'weighted_C_index_multiclass': c_index_results['C_weighted_multi'],
-        'ibs_multiclass': brier_results['ew_ibs_multi']}
+    return {'weighted_C_index': c_index_results['C_weighted_k'],
+        'ibs_weighted': brier_results['ew_ibs_k']}

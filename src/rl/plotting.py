@@ -46,7 +46,47 @@ def plot_losses(training_scores, val_scores, test_scores, config_manager):
     plt.close()
 
 
-def plot_losses_cv(training_scores, val_scores, test_scores, outer_fold, config_manager, development=False):    
+def plot_c_and_brier_over_time(test_scores, config_manager):
+    
+    metric_keys = ['weighted_C_index', 'ibs_weighted']
+    epochs = test_scores['epoch']
+    n_subplots = len(metric_keys)
+    
+    plt.figure(figsize=(15, 5 * n_subplots))
+    for i, key in enumerate(metric_keys):        
+        
+        # test_scores[key] is a list tensors of len(2), we want to plot the 
+        # concatenated columns over time
+        metric_values = np.stack([score for score in test_scores[key]], axis=0)
+        
+        plt.subplot(n_subplots, 1, i + 1)
+        
+        plt.plot(epochs, metric_values[:,0], color=plt.cm.Blues(0.9), linewidth=2, label=f'{key} - Cause 1')
+        plt.plot(epochs, metric_values[:,1], color=plt.cm.Oranges(0.9), linewidth=2, label=f'{key} - Cause 2')
+
+        if i == len(metric_keys) - 1:
+            plt.xlabel('Epochs')
+        plt.ylabel(key)
+        plt.xticks(epochs)
+        plt.xlim(0.5, np.max(epochs))
+        plt.title(f'{key} over Epochs')
+        plt.grid(True)
+        plt.legend(
+            loc='upper right',
+            facecolor='white',  # solid white background
+            framealpha=1,
+            edgecolor='lightgray',
+            bbox_to_anchor=(0.98, 0.98),
+            fontsize=10,
+        )
+
+     # Save the plot
+    plot_path = Path(config_manager.experiment_dir) / f"c_index_and_brier_score.png"
+    plt.savefig(plot_path)
+    plt.close()
+
+
+def plot_losses_cv(training_scores, val_scores, test_scores, outer_fold, config_manager):    
 
     n_folds = len(training_scores)
     loss_keys = list(training_scores[0].keys())

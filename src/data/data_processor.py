@@ -251,14 +251,17 @@ class DataProcessor:
                 window_features = features[window_start:window_end]
                 window_len = len(window_features)
                 
-                # Pad if necessary using numpy operations
+                # Pad using the first column from window_features if needed
                 if window_len < self.window_length:
                     pad_width = self.window_length - window_len
-                    window_features = np.pad(window_features, 
-                                            ((pad_width, 0), (0, 0)), 
-                                            mode='constant', 
-                                            constant_values=0)
-                    mask_array[array_ind, pad_width:] = 1
+                    # window_features = np.pad(window_features, 
+                    #                         ((pad_width, 0), (0, 0)), 
+                    #                         mode='constant', 
+                    #                         constant_values=0)
+                    # mask_array[array_ind, pad_width:] = 1
+                    padding = np.tile(window_features[0], (pad_width, 1))
+                    window_features = np.vstack((padding, window_features))
+                    mask_array[array_ind, :] = 1
                 else:
                     mask_array[array_ind, :] = 1
                 

@@ -65,6 +65,25 @@
                 "--model_type", "dynamic_deephit", 
                 "--prediction_type", "discharge_mortality_tte",
                 "--mode", "single_split", 
+                "--search_variant", "fixed_hyperparameters",
+                "--n_epochs", "100",
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
+            "name": "DynamicDeepHit_truncated_traj",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "supervised_learning",
+                "--model_type", "dynamic_deephit", 
+                "--prediction_type", "discharge_mortality_tte",
+                "--mode", "single_split", 
                 "--testing",
                 "--search_variant", "fixed_hyperparameters",
                 "--n_epochs", "100",

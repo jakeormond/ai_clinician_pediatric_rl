@@ -24,6 +24,7 @@ class DynamicDeepHitMulti(nn.Module):
         use_layernorm: bool = False,
         attn_dropout: float = 0.1,
         rnn_type: str = "GRU",
+        project_features: bool = False,
         predict_covariates: list = None,
     ):
         """
@@ -45,6 +46,7 @@ class DynamicDeepHitMulti(nn.Module):
         self.num_time_bins = num_time_bins
         self.num_risks = num_risks
         self.predict_covariates = predict_covariates if predict_covariates else []
+        self.project_features = project_features
 
         # --- Temporal encoder ---
         if rnn_type.upper() == "LSTM":
@@ -63,6 +65,9 @@ class DynamicDeepHitMulti(nn.Module):
                 batch_first=True,
                 dropout=dropout if num_layers > 1 else 0.0,
             )
+
+        # LayerNorm after RNN — KEY for stability at higher LR
+        self.rnn_ln = nn.LayerNorm(hidden_dim)
 
         # prediction head for step-ahead covariate prediction 
         if len(self.predict_covariates) > 0:
@@ -84,11 +89,22 @@ class DynamicDeepHitMulti(nn.Module):
             dropout=attn_dropout,
             use_layernorm=use_layernorm
             )
+        
+        # Additional dropout after attention (reduces hazard overfitting)
+        self.post_attn_dropout = nn.Dropout(dropout)
+        
+        # feature projection, recommended when feature_dim is large - CURRENTLY, feature_dim IS LESS THAN hidden_dim, SO THIS IS UNUSED
+        if self.project_features:
+            self.feat_proj = nn.Linear(feature_dim, hidden_dim)
+            head_input_dim = hidden_dim + hidden_dim
+        else:
+            head_input_dim = hidden_dim + feature_dim
 
         # --- Event-specific heads ---
         self.heads = nn.ModuleList([
             nn.Sequential(
-                nn.Linear(hidden_dim + feature_dim, hidden_dim),
+                nn.Linear(head_input_dim, hidden_dim),
+                nn.LayerNorm(hidden_dim),
                 nn.ReLU(),
                 nn.Dropout(dropout),
                 nn.Linear(hidden_dim, num_time_bins)
@@ -115,6 +131,13 @@ class DynamicDeepHitMulti(nn.Module):
             h, _ = nn.utils.rnn.pad_packed_sequence(h_packed, batch_first=True)
         else:
             h, _ = self.rnn(x)
+
+        # LayerNorm on RNN outputs
+        h = self.rnn_ln(h)
+
+        # Optionally zero-out padding representations after LN
+        if mask is not None:
+            h = h * mask.unsqueeze(-1)  # (B, T, H)
 
         # ------ note that h comes out padded at the end not the beginning for shorter windows -------
         # generate right-padded mask
@@ -151,8 +174,13 @@ class DynamicDeepHitMulti(nn.Module):
         # Note that here we use the left padded data so the last measurement corresponds to the last time step
         last_measurement = x[:, -1, :]      # [batch, 80] - just the last timestep
 
+        if self.project_features: # only if feature_dim > hidden_dim
+            feat_vec = self.feat_proj(last_measurement)             # (B, H)
+        else:
+            feat_vec = last_measurement                             # (B, F)
+        
         # Input to cause-specific subnetworks
-        subnetwork_input = torch.cat([context, last_measurement], dim=-1)
+        subnetwork_input = torch.cat([context, feat_vec], dim=-1)
         
         logits = torch.stack([head(subnetwork_input) for head in self.heads], dim=1)
         B, K, T = logits.shape
@@ -184,18 +212,23 @@ class TemporalAttention(nn.Module):
             ):
 
         super().__init__()
+        
         self.hidden_size = hidden_size
+        self.feature_size = feature_size
+
         if attn_size is None:
             attn_size = self.hidden_size // 2 if self.hidden_size >= 4 else self.hidden_size
         self.attn_size = attn_size
-        self.feature_size = feature_size
-        
+                
         self.W_h = nn.Linear(self.hidden_size, self.attn_size, bias=False)
         self.W_x = nn.Linear(self.feature_size, self.attn_size, bias=False)
         self.v = nn.Linear(self.attn_size, 1, bias=False)  #
+        
         self.b = nn.Parameter(torch.zeros(attn_size))
-        self.dropout = nn.Dropout(dropout)
+        
+        self.intermediate_dropout = nn.Dropout(dropout)
         self.attn_dropout = nn.Dropout(dropout)  # separate name for clarity
+        self.post_attn_dropout = nn.Dropout(dropout) # dropout on final context
         
         # LayerNorm should normalize across the last (feature) dimension.
         # For h: last dim = hidden_size; for x: last dim = feature_size.
@@ -234,7 +267,7 @@ class TemporalAttention(nn.Module):
         Wx = self.W_x(x_norm)    # [B, T, A]
         
         u = torch.tanh(Wh + Wx + self.b)    # [B, T, A]
-        u = self.dropout(u)  # regularize attention intermediate
+        u = self.intermediate_dropout(u)  # regularize attention intermediate
                        
         scores = self.v(u).squeeze(-1)           # [B, T]
 
@@ -252,8 +285,8 @@ class TemporalAttention(nn.Module):
         attn_weights = self.attn_dropout(attn_weights)  # attention dropout
 
         # weighted sum => context
-        attn_weights_unsq = attn_weights.unsqueeze(-1)    # [B, T, 1]
-        context = torch.sum(attn_weights_unsq * h, dim=1) # [B, H]
+        context = (attn_weights.unsqueeze(-1) * h).sum(dim=1)
+        context = self.post_attn_dropout(context)
 
         return context, attn_weights
 

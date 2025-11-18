@@ -1,7 +1,8 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
-from sklearn.metrics import roc_auc_score, precision_recall_curve, average_precision_score
+from sklearn.metrics import roc_auc_score, precision_recall_curve, \
+    average_precision_score, roc_curve, precision_recall_curve
 
 from typing import Dict
 
@@ -198,7 +199,7 @@ def calculate_brier_score(
     return brier_results
 
 
-def calculate_roc_and_prc(logits, time_to_event, event_label):
+def calculate_roc_and_prc(logits, time_to_event, event_label, return_full_curves: bool = False) -> Dict[str, float]:
     # simply calculate the classification as the sum over time of the predicted probabilities
     # for mortality (event_label == 1)
 
@@ -218,13 +219,32 @@ def calculate_roc_and_prc(logits, time_to_event, event_label):
 
     # Average Precision (area under PR curve)
     avg_precision = average_precision_score(y, p)
-    pi = y.mean()  # equals proportion of positive samples
+    prevalence = y.mean()  # equals proportion of positive samples
 
+    output = {
+        "auroc": auroc,
+        "average_precision": avg_precision,
+        "prevalence": prevalence
+    }
 
-    pass
+    # ---- Optional full curves ----
+    if return_full_curves:
+        fpr, tpr, roc_thresholds = roc_curve(y, p)
+        precision, recall, pr_thresholds = precision_recall_curve(y, p)
 
-    # Placeholder function for ROC and PRC calculation
-    # Implement as needed
+        output.update({
+            "roc_curve": {
+                "fpr": fpr,
+                "tpr": tpr,
+                "thresholds": roc_thresholds,
+            },
+            "pr_curve": {
+                "precision": precision,
+                "recall": recall,
+                "thresholds": pr_thresholds,
+            }
+        })
+
     return {'auroc': auroc, 'average_precision': avg_precision, 'prevalence': pi}
 
 

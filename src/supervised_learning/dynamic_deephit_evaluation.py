@@ -1,6 +1,8 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
+from sklearn.metrics import roc_auc_score, precision_recall_curve, average_precision_score
+
 from typing import Dict
 
 
@@ -196,6 +198,36 @@ def calculate_brier_score(
     return brier_results
 
 
+def calculate_roc_and_prc(logits, time_to_event, event_label):
+    # simply calculate the classification as the sum over time of the predicted probabilities
+    # for mortality (event_label == 1)
+
+    B, K, T = logits.shape
+    device = logits.device    
+    
+    cif = calculate_cif(logits)    # [B, K, T]
+    # risk score for mortality (event 1)   
+    risk_score_mortality = cif[:, 1, -1]   # [B]    
+
+    y = event_label.cpu().numpy()
+    p = risk_score_mortality.cpu().numpy()
+
+    # implement ROC and PRC calculations as needed
+    # AUROC (area under ROC curve)
+    auroc = roc_auc_score(y, p)
+
+    # Average Precision (area under PR curve)
+    avg_precision = average_precision_score(y, p)
+    pi = y.mean()  # equals proportion of positive samples
+
+
+    pass
+
+    # Placeholder function for ROC and PRC calculation
+    # Implement as needed
+    return {'auroc': auroc, 'average_precision': avg_precision, 'prevalence': pi}
+
+
 def compute_survival_metrics(
     logits: torch.Tensor,
     time_to_event: torch.Tensor,
@@ -214,7 +246,7 @@ def compute_survival_metrics(
         
     Returns:
         Dictionary of survival metrics
-
+calculate_roc_and_prc(logits, time_to_event, event_label)
     NOTE: Censoring is not handled in this implementation.
         
     NOTE: need to implement bootstrapping with confidence intervals for final analysis. 
@@ -228,6 +260,9 @@ def compute_survival_metrics(
     c_index_results = calculate_c_index(logits, time_to_event, event_label)
 
     brier_results = calculate_brier_score(logits, time_to_event, event_label)
+
+    # calculate auroc and average precision for the mortality prediction
+    roc_and_prc_results = calculate_roc_and_prc(logits, time_to_event, event_label)
 
     return {'weighted_C_index': c_index_results['C_weighted_k'],
         'ibs_weighted': brier_results['ew_ibs_k']}

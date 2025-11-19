@@ -307,7 +307,9 @@ class DynamicDeepHitTrainer:
         sigma = None,
         scheduler=None,
         verbose=True,
-        physiological_feature_type = None
+        physiological_feature_type = None,
+        l1_params: list = [],
+        l1_lambda: float = 0.0,
     ):
         """
         Args:
@@ -335,7 +337,8 @@ class DynamicDeepHitTrainer:
         self.scheduler = scheduler
         self.verbose = verbose
         self.physiological_feature_type = physiological_feature_type
-
+        self.l1_params = l1_params
+        self.l1_lambda = float(l1_lambda)
 
     def train(self, batch: TensorBatch):
 
@@ -369,6 +372,11 @@ class DynamicDeepHitTrainer:
             predict_covariates=self.model.predict_covariates,
             physiological_feature_type=self.physiological_feature_type
             )
+
+        if self.l1_lambda > 0.0 and len(self.l1_params) > 0:
+            l1_lambda = self.l1_lambda  # set your value during initialization
+            l1_penalty = sum(torch.sum(torch.abs(p)) for p in self.l1_params)
+            loss = loss + l1_lambda * l1_penalty
 
         # Backward pass - compute gradients
         loss.backward()
@@ -457,6 +465,12 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
         predict_covariates=train_processor.physiological_feature_ind,
     ).to(config_manager.training_config['device'])
 
+    # Collect L1 parameters: classification head weights only
+    l1_params = [
+        p for name, p in dynamic_deephit_model.named_parameters()
+        if name.startswith("heads.") and name.endswith(".weight")
+    ]
+
     deephit_optimizer = torch.optim.AdamW(
         dynamic_deephit_model.parameters(),
         lr=learning_rate,
@@ -477,7 +491,9 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
             sigma = hyperparams['sigma'],
             scheduler=None,
             verbose=True, 
-            physiological_feature_type = train_processor.physiological_feature_type                
+            physiological_feature_type = train_processor.physiological_feature_type,
+            l1_params=l1_params,          # ← ADD THIS
+            l1_lambda=hyperparams['l1_lambda'],                
         )
 
     return trainer
@@ -731,6 +747,9 @@ def make_mixed_resolution_time_bins(max_time_hours=3000):
 
     # manual bins
     # all_bins = np.array([0, 24, 48, 168])
-    all_bins = np.array([0, 24, 48, 168, 336, max_time_hours])
+    if max_time_hours <= 336:
+        all_bins = np.array([0, 24, 48, 168]) # testing with fewer bins
+    else:
+        all_bins = np.array([0, 24, 48, 168, 336, max_time_hours])
 
     return all_bins

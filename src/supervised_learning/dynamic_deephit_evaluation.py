@@ -245,13 +245,14 @@ def calculate_roc_and_prc(logits, time_to_event, event_label, return_full_curves
             }
         })
 
-    return {'auroc': auroc, 'average_precision': avg_precision, 'prevalence': pi}
+    return output
 
 
 def compute_survival_metrics(
     logits: torch.Tensor,
     time_to_event: torch.Tensor,
     event_label: torch.Tensor,
+    return_full_curves: bool = False,
     no_censoring: bool = True
 ) -> Dict[str, float]:
     """
@@ -282,7 +283,19 @@ calculate_roc_and_prc(logits, time_to_event, event_label)
     brier_results = calculate_brier_score(logits, time_to_event, event_label)
 
     # calculate auroc and average precision for the mortality prediction
-    roc_and_prc_results = calculate_roc_and_prc(logits, time_to_event, event_label)
+    roc_and_prc_results = calculate_roc_and_prc(logits, time_to_event, event_label, return_full_curves=return_full_curves)
 
-    return {'weighted_C_index': c_index_results['C_weighted_k'],
-        'ibs_weighted': brier_results['ew_ibs_k']}
+    if return_full_curves:
+        return {'weighted_C_index': c_index_results['C_weighted_k'],
+            'ibs_weighted': brier_results['ew_ibs_k'], 
+            'auroc': roc_and_prc_results['auroc'],
+            'average_precision': roc_and_prc_results['average_precision'],
+            'prevalence': roc_and_prc_results['prevalence'],
+            'roc_curve': roc_and_prc_results['roc_curve'],
+            'pr_curve': roc_and_prc_results['pr_curve']}
+    else:
+        return {'weighted_C_index': c_index_results['C_weighted_k'],
+            'ibs_weighted': brier_results['ew_ibs_k'], 
+            'auroc': roc_and_prc_results['auroc'],
+            'average_precision': roc_and_prc_results['average_precision'],
+            'prevalence': roc_and_prc_results['prevalence']}

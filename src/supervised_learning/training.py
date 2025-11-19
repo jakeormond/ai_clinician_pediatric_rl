@@ -38,7 +38,7 @@ from ..data.data_processor import DataProcessor
 from ..rl.replay_buffer import DynamicDeepHitDataset
 
 from ..utils.utilities import set_seed
-from ..rl.plotting import plot_losses,plot_losses_cv, plot_c_and_brier_over_time
+from ..rl.plotting import plot_losses,plot_losses_cv, plot_c_and_brier_over_time, plot_auroc_prc_curves
 from .dynamic_deephit_evaluation import compute_survival_metrics
 
 import logging
@@ -113,11 +113,14 @@ def get_fixed_hyperparameters(config_manager):
 def select_hyperparameters_randomly(hyperparameter_space, config_manager):
     """Selects hyperparameters randomly from the given space."""
     selected_params = {}
-    for param, values in hyperparameter_space.items():
-        if isinstance(values, list):
-            selected_params[param] = random.choice(values)
+    for param, value in hyperparameter_space.items():
+        if isinstance(value, list):
+            selected_params[param] = random.choice(value)
+        # else if it is a single value
+        elif isinstance(value, (int, float, str, bool)):
+            selected_params[param] = value
         else:  # assume it's a scipy.stats distribution
-            selected_params[param] = round(values.rvs(), 6)  # round for readability
+            selected_params[param] = round(value.rvs(), 6)  # round for readability
     return selected_params
 
 
@@ -168,200 +171,6 @@ def get_early_stopping_config(config_manager):
     return early_stopping
 
 
-# def compute_survival_metrics(
-#     logits: np.ndarray,
-#     time_to_event: np.ndarray,
-#     event_label: np.ndarray,
-#     time_bins: np.ndarray,
-#     no_censoring: bool = True
-# ) -> Dict[str, float]:
-#     """
-#     Compute survival analysis metrics. # Note that we have no censoring, and that 
-#     is assumed in the code below.
-    
-#     Args:
-#         predictions: [batch_size, num_risks, num_time_bins] - predicted probabilities
-#         time_to_event: [batch_size] - actual time to event
-#         event_label: [batch_size] - event type (0=censored, 1=event1, 2=event2, etc.)
-#         time_bins: array of time bin edges
-        
-#     Returns:
-#         Dictionary of survival metrics
-
-
-#     NOTE: need to implement bootstrapping with confidence intervals for final analysis. 
-#     Will report integrated Brier score and event weighted integrated Brier score, both multiclass.
-#     Could potentially show curves of Brier over time as well.
-#     """
-
-#     # subtract 1 from event_label if no censoring
-#     event_label = event_label -1 if no_censoring else event_label   
-
-#     # Convert logits to probabilities using softmax over time dimension
-#     # Shape: [batch_size, num_risks, num_time_bins]
-#     # compute joint pmf
-#     B, K, T = logits.shape
-#     device = logits.device    
-#     logits = torch.from_numpy(logits)
-#     logits_flat = logits.view(B, K * T)   
-#     p = F.softmax(logits_flat, dim=1).view(B, K, T)   # [B, K, T]
-
-#     # 2) CIF: cumulative over time
-#     cif = p.cumsum(dim=2)    # [B, K, T]       
-    
-#     tt = torch.from_numpy(time_to_event).view(B, 1)    
-#     el = torch.from_numpy(event_label).view(B, 1)       
-    
-#     # ---------------------- C-index Calculation ----------------------
-#     # For C-index, we need a risk score (higher = higher risk)
-#     # Use predicted probability of event by the actual event time
-#     # Sum over all risks and time bins up to observed time
-
-#     C = torch.zeros(K, T)
-
-#     for k in range(K):
-#         is_k = (el == k)             # [B]
-        
-#         # Event times for cause k patients
-#         tt_k = tt[is_k]              # [num_k]
-
-#         if tt_k.numel() == 0:
-#             continue  # no patients with this cause
-
-#         # CIF for cause k, shape [B, T]
-#         cif_k = cif[:, k, :]
-        
-#         for t in range(T):
-#             # Patients who had event k at or before t
-#             # These are the "cases" in C-index
-#             cases = is_k & (tt <= t)
-#             if cases.sum() == 0:
-#                 continue
-
-#             # For each case i, we compare them to all others j
-#             # whose event time is >= event time of i OR had competing event
-#             #
-#             # Create pairwise comparison matrix:
-#             #
-#             # For vectorization, expand risk scores
-#             R_i = cif_k[cases.squeeze(), t].view(-1, 1)    # shape [Nc, 1]
-#             R_j = cif_k[:, t].view(1, -1)        # shape [1, B]
-            
-
-#             # Valid comparators j:
-#             # j must not have event k before time of i
-#             tt_cases = tt[cases].view(-1, 1)     # [Nc,1]
-#             tt_all = tt.view(1, -1)               # [1, B]  
-#             el_all = el.view(1, -1)               # [1, B]
-#             valid_j = (tt_all > tt_cases) & (el_all == k)  # [Nc,B]
-            
-#             # Concordance condition: R_i > R_j
-#             concordant = (R_i > R_j) & valid_j
-
-#             # Comparable pairs count
-#             comparable = valid_j.sum().float()
-
-#             if comparable > 0:
-#                 C[k, t] = concordant.sum().float() / comparable
-#             else:
-#                 C[k, t] = torch.nan
-    
-
-#     # integrated C-index
-#     C_integrated_k = C.mean(dim=1)   
-
-
-#     # event weighted
-#     true_time_onehot = torch.zeros(B, T, device=device)
-#     true_time_onehot.scatter_(1, (tt).long().view(B,1), 1.0)  # [B,T]
-    
-#     true_cause_onehot = torch.zeros(B, K, device=device)
-#     true_cause_onehot.scatter_(1, el.view(B,1).long(), 1.0)  # [B, K]
-    
-#     # ew cause specific
-#     event_occ = true_cause_onehot.unsqueeze(2) * true_time_onehot.unsqueeze(1)  # [B, K, T]
-#     E_k_t = event_occ.sum(dim=0)  # [K, T] number of events of cause k at time t
-#     denom_k = E_k_t.sum(dim=1)  # [K]
-#     C_weighted_k = (C * E_k_t).sum(dim=1) / denom_k   # [K]
-
-#     # ew multiclass
-#     denom_all = denom_k.sum()
-#     C_weighted_multi = (C_weighted_k * denom_k).sum() / denom_all
-
-#     c_index_results = {
-#         "C_k_t": C,                     # [K, T]
-#         "C_integrated_k": C_integrated_k,       # [K]
-#         "C_weighted_k": C_weighted_k,   # [K]
-#         "C_weighted_multi": C_weighted_multi  # scalar
-#     }
-
-#     # ----------------------- Brier Score Calculation ----------------------
-#     # 3) Build true indicator tensors
-#     times = torch.arange(0, T, device=device).view(1, T)   # [1, T]
-
-#     # I_{i,k}(t) = 1 if true_time <= t and true_cause == k
-#     # Build shape [B, K, T] with broadcasting
-#     # mask_time = (tt <= times) -> [B, T]
-#     mask_time = (tt <= times)                                # [B, T]
-#     # mask_cause = (tc == k) -> we will expand it
-#     # create [B, K, 1] then broadcast
-#     cause_idx = torch.arange(K, device=device).view(1, K, 1)  # [1, K, 1]
-#     true_cause_expand = el.view(B, 1, 1)                     # [B, 1, 1]
-#     mask_cause = (true_cause_expand == cause_idx)           # [B, K, 1]
-
-#     I_ik_t = (mask_cause.expand(B, K, T) & mask_time.view(B, 1, T).expand(B, K, T)).float()  # [B, K, T]
-
-#     # 4) Cause-specific Brier per time BS_k(t)
-#     # squared errors: [B, K, T]
-#     sq_err = (I_ik_t - cif) ** 2
-#     bs_k_t = sq_err.mean(dim=0)   # average over B -> shape [K, T]
-
-#     # 5) Multiclass Brier per time is sum over causes
-#     bs_multi_t = bs_k_t.sum(dim=0)   # [T]
-
-#     # 6) Integrated (simple mean over times)
-#     ibs_k = bs_k_t.mean(dim=1)       # [K] mean over T
-#     ibs_multi = bs_multi_t.mean()    # scalar
-
-#     # event-weighted IBS
-#     # E(t) = number of events at exactly time t (any cause)
-#     # true_time==t and note every trajectory ends with an event
-#     # Build E(t): [T]
-#     true_time_onehot = torch.zeros(B, T, device=device)
-#     # index positions true_time-1 (if true_time in 1..T)
-#     true_time_onehot.scatter_(1, (tt).long().view(B,1), 1.0)  # [B,T]
-    
-#     true_cause_onehot = torch.zeros(B, K, device=device)
-#     true_cause_onehot.scatter_(1, el.view(B,1).long(), 1.0)  # [B, K]
-    
-#     # 7) event specific ew IBS
-#     event_occ = true_cause_onehot.unsqueeze(2) * true_time_onehot.unsqueeze(1)  # [B, K, T]
-#     E_k_t = event_occ.sum(dim=0)  # [K, T] number of events of cause k at time t
-
-#     denom_k = E_k_t.sum(dim=1)  # [K]
-#     ew_ibs_k = (bs_k_t * E_k_t).sum(dim=1) / denom_k   # [K]
-    
-#     # 8) multi-event ew IBS  
-#     E_t = true_time_onehot.sum(dim=0)   # [T] number of events at time t
-#     denom = E_t.sum()
-
-#     # weighted sums across times
-#     ew_ibs_multi = (bs_multi_t * E_t).sum() / denom   
-
-#     brier_results = {        
-#         "bs_k_t": bs_k_t,           # [K, T]
-#         "bs_multi_t": bs_multi_t,   # [T]
-#         "ibs_k": ibs_k,             # [K]
-#         "ibs_multi": ibs_multi,     # scalar
-#         "ew_ibs_k": ew_ibs_k,       # [K] or None
-#         "ew_ibs_multi": ew_ibs_multi  # scalar or None
-#     }
-
-#     return {'weighted_C_index': C_weighted_k,
-#             'ibs_multiclass': ibs_multi}
-
-
-
 def append_epoch_losses(
         epoch_training_losses, 
         training_losses
@@ -377,8 +186,8 @@ def append_epoch_losses(
 def evaluate_model(
     trainer, 
     dataloader, 
-    config_manager,
     max_samples=None,
+    return_full_curves=False,
     compute_survival_metrics_flag=True
 ):
     """
@@ -433,6 +242,7 @@ def evaluate_model(
             logits,
             time_to_event,
             event_labels,
+            return_full_curves=return_full_curves,
             no_censoring=True
         )
         
@@ -449,8 +259,8 @@ def evaluate_during_training(trainer, epoch, val_buffer, val_losses, config_mana
     epoch_val_metrics = evaluate_model(
         trainer, 
         val_buffer, 
-        config_manager,
         max_samples=max_samples,
+        return_full_curves=False,
         compute_survival_metrics_flag=True
     )
     
@@ -463,6 +273,8 @@ def evaluate_during_training(trainer, epoch, val_buffer, val_losses, config_mana
     
     # Append to validation losses
     for key, value in epoch_val_metrics.items():
+        # 
+
         if type(value) is torch.Tensor:
             if value.shape[0] > 1:
                 value = value.detach().cpu().numpy()
@@ -470,16 +282,16 @@ def evaluate_during_training(trainer, epoch, val_buffer, val_losses, config_mana
         val_losses[key].append(value)
 
 
-def evaluate_final_model(trainer, test_buffer, config_manager):
+def evaluate_final_model(trainer, test_buffer):
     """Evaluate final model on test set."""
     
     # Evaluate on full test set (no sample limit)
     test_metrics = evaluate_model(
         trainer,
         test_buffer,
-        config_manager,
         max_samples=None,
-        compute_survival_metrics_flag=True
+        compute_survival_metrics_flag=True, 
+        return_full_curves=True
     )
     
     logger.info(f"Final test metrics: {test_metrics}")
@@ -547,6 +359,20 @@ def development_training_loop(dataset, config_manager):
     if config_manager.model_type == 'dynamic_deephit':
         # plot the validation C-index and Brier scores over time
         plot_c_and_brier_over_time(test_scores, config_manager)
+
+        # evaluate final model and plot auroc and average precision curves
+        test_buffer = create_buffer(test_processor, config_manager.training_config['batch_size'])
+        final_test_scores = evaluate_final_model(
+            trainer,
+            test_buffer
+            )
+        plot_auroc_prc_curves(
+            final_test_scores['roc_curve'], 
+            final_test_scores['pr_curve'],
+            final_test_scores['prevalence'],
+            config_manager
+            )
+        
 
     logger.info("Development training loop complete.")
     logger.info(f"Test scores: {test_scores}")
@@ -624,13 +450,14 @@ def outer_training_loop(dataset, config_manager):
         ###################   HYPERPARAMETER OPTIMIZATION #############################
         logger.info("Phase 1: Hyperparameter Optimization")
         best_hyperparameters, training_scores, val_scores, n_epochs = optimize_hyperparameters(
-            train_dataset, config_manager, n_inner_folds=n_inner_folds, 
-            outer_fold=outer_fold
+            train_dataset, 
+            config_manager, 
+            n_inner_folds=n_inner_folds
         )
         logger.info(f"Best hyperparameters: {best_hyperparameters}")
 
         # get the max number of epochs used in inner folds
-        n_epochs = max(n_epochs) # for final training
+        n_epochs = np.mean(n_epochs) # for final training
 
         #################### RETRAIN FINAL MODEL #############################
         logger.info("Phase 2: Final Model Training & Evaluation")
@@ -642,8 +469,7 @@ def outer_training_loop(dataset, config_manager):
                         
         final_training_scores, \
         test_scores, \
-        n_epochs, \
-        trainer = train_with_hyperparameters(
+        n_epochs = train_with_hyperparameters(
                 train_processor, 
                 test_processor, 
                 config_manager, 
@@ -693,21 +519,28 @@ def outer_training_loop(dataset, config_manager):
 
 def get_hyperparameter_space(config_manager):
     """Creates hyperparameter space from config_manager."""
-    hyperparameter_space = {k: v for k, v in 
-            config_manager.training_config.items() if isinstance(v, list)}
-    
-    # and also continuous distributions specified as strings
+    hyperparameter_space = {}
+
+    # loop through config_manager.training_config
     for k, v in config_manager.training_config.items():
         if isinstance(v, str) and '(' in v and ')' in v:
             hyperparameter_space[k] = parse_distribution(v)
+        else: # everything else
+            hyperparameter_space[k] = v
     
+    # check if any values are lists or distributions, throw error if not
+    if not any(isinstance(v, list) or (isinstance(v, str) and '(' in v and ')' in v) 
+               for v in config_manager.training_config.values()):
+        raise ValueError("No hyperparameters to optimize. Ensure that config_manager.training_config contains lists of values to search over or distribution strings.")
+
     return hyperparameter_space
 
 
-def optimize_hyperparameters(train_dataset, config_manager,
-                                        n_inner_folds=None, 
-                                            norm_params=None, 
-                                                outer_fold=None):
+def optimize_hyperparameters(
+    train_dataset, 
+    config_manager,
+    n_inner_folds=None
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]], List[int]]:
     """Inner CV loop for hyperparameter optimization."""
     
     loss_metric = config_manager.training_config['loss_metric'] # e.g. actor loss, critic loss etc, depends on algorithm
@@ -715,15 +548,7 @@ def optimize_hyperparameters(train_dataset, config_manager,
     ################################ create hyperparameter space ################################
     # the hyperparameter space to search consists of the parameters that are lists 
     # in config_manager.training_config
-    hyperparameter_space = {k: v for k, v in 
-            config_manager.training_config.items() if isinstance(v, list)}
-    if not hyperparameter_space:
-        raise ValueError("No hyperparameters to optimize. Ensure that config_manager.training_config contains lists of values to search over.")
-    
-    # and also continuous distributions specified as strings
-    for k, v in config_manager.training_config.items():
-        if isinstance(v, str) and '(' in v and ')' in v:
-            hyperparameter_space[k] = parse_distribution(v)
+    hyperparameter_space = get_hyperparameter_space(config_manager)
 
     ############################ initialize best_val_score #############################
     # used to select best hyperparameters
@@ -731,6 +556,7 @@ def optimize_hyperparameters(train_dataset, config_manager,
     
     ##################### loop through hyperparameter combinations #####################
     logger.info(f"Starting hyperparameter optimization with {config_manager.n_search_iterations} iterations...")
+    
     for i in range(config_manager.n_search_iterations):
         ################# select hyperparameters randomly #################
         current_params = select_hyperparameters_randomly(
@@ -795,6 +621,14 @@ def optimize_hyperparameters(train_dataset, config_manager,
     return best_hyperparams, training_scores_best, val_scores_best, n_epochs_best
 
 
+def get_hyperparameter(hyperparams, config_manager, param_name):
+    """Get hyperparameter value from hyperparams or config_manager."""
+    if param_name in hyperparams:
+        return hyperparams[param_name]
+    else:
+        return config_manager.training_config[param_name]
+
+
 def train_with_hyperparameters(
         train_processor, 
         val_test_processor, 
@@ -808,7 +642,7 @@ def train_with_hyperparameters(
     if n_epochs is None:
         n_epochs = config_manager.n_epochs
 
-    batch_size = hyperparams['batch_size']
+    batch_size = get_hyperparameter(hyperparams, config_manager, 'batch_size')
     loss_metric = config_manager.training_config['loss_metric']
 
     # Create replay buffers
@@ -831,6 +665,8 @@ def train_with_hyperparameters(
     
     if not final_model:
         val_losses = defaultdict(list)
+        # evaluate before any training for epoch 0
+        evaluate_during_training(trainer, -1, val_test_buffer, val_losses, config_manager)   
     
     ############################### Training loop #################################
     for epoch in range(n_epochs):
@@ -887,8 +723,7 @@ def train_with_hyperparameters(
     test_losses = \
             evaluate_final_model(
             trainer, 
-            val_test_buffer, 
-            config_manager
+            val_test_buffer
         )
     
     logger.info(f"Final test metrics: {test_losses}")

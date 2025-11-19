@@ -16,9 +16,9 @@ def plot_losses(training_scores, val_scores, test_scores, config_manager):
 
         plt.plot(epochs_range, training_scores[key], color=plt.cm.Blues(0.9), linewidth=2, label='Training Loss')
 
-        val_epochs = np.array(val_scores['epoch'])
+        val_epochs = np.array(val_scores['epoch']) + 1
         val_losses = val_scores[key]
-        plt.plot(val_epochs + 1, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      
+        plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      
         
         if test_scores is not None:
             test_loss = test_scores[key]
@@ -27,8 +27,8 @@ def plot_losses(training_scores, val_scores, test_scores, config_manager):
         if i == len(loss_keys) - 1:
             plt.xlabel('Epochs')
         plt.ylabel(key)
-        plt.xticks(np.arange(1, epochs_range[-1] + 1, step=5))
-        plt.xlim(0.5, np.max(epochs_range))
+        plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
+        plt.xlim(-0.5, np.max(epochs_range)+0.5)
         plt.title(f'{key} over Epochs')
         plt.grid(True)
         plt.legend(
@@ -48,8 +48,8 @@ def plot_losses(training_scores, val_scores, test_scores, config_manager):
 
 def plot_c_and_brier_over_time(test_scores, config_manager):
     
-    metric_keys = ['weighted_C_index', 'ibs_weighted']
-    epochs = test_scores['epoch']
+    metric_keys = ['weighted_C_index', 'ibs_weighted', 'auroc', 'average_precision']
+    epochs = [e+1 for e in test_scores['epoch']]
     n_subplots = len(metric_keys)
     
     plt.figure(figsize=(15, 5 * n_subplots))
@@ -61,14 +61,22 @@ def plot_c_and_brier_over_time(test_scores, config_manager):
         
         plt.subplot(n_subplots, 1, i + 1)
         
-        plt.plot(epochs, metric_values[:,0], color=plt.cm.Blues(0.9), linewidth=2, label=f'{key} - Cause 1')
-        plt.plot(epochs, metric_values[:,1], color=plt.cm.Oranges(0.9), linewidth=2, label=f'{key} - Cause 2')
+        if key in ['weighted_C_index', 'ibs_weighted']:
+            plt.plot(epochs, metric_values[:,0], color=plt.cm.Blues(0.9), linewidth=2, label=f'{key} - Cause 1')
+            plt.plot(epochs, metric_values[:,1], color=plt.cm.Oranges(0.9), linewidth=2, label=f'{key} - Cause 2')
+        else:
+            # for auroc and average_precision, plot single line
+            plt.plot(epochs, metric_values, color=plt.cm.Purples(0.9), linewidth=2, label=f'{key}')
+
+            if key == 'average_precision':
+                prevalence = test_scores['prevalence']
+                plt.plot(epochs, prevalence, color='red', linestyle='--', linewidth=2, label='Prevalence')
 
         if i == len(metric_keys) - 1:
             plt.xlabel('Epochs')
         plt.ylabel(key)
         plt.xticks(epochs)
-        plt.xlim(0.5, np.max(epochs))
+        plt.xlim(-0.5, np.max(epochs))
         plt.title(f'{key} over Epochs')
         plt.grid(True)
         plt.legend(
@@ -82,6 +90,48 @@ def plot_c_and_brier_over_time(test_scores, config_manager):
 
      # Save the plot
     plot_path = Path(config_manager.experiment_dir) / f"c_index_and_brier_score.png"
+    plt.savefig(plot_path)
+    plt.close()
+
+
+
+def plot_auroc_prc_curves(roc_curve, pr_curve, prevalence, config_manager):
+    plot_roc(roc_curve["fpr"], roc_curve["tpr"], config_manager)
+    plot_prc(
+        pr_curve["precision"], 
+        pr_curve["recall"], 
+        prevalence,
+        config_manager
+        )
+
+
+def plot_roc(fpr, tpr, config_manager):
+    plt.figure(figsize=(8, 8))
+    plt.plot(fpr, tpr, color='blue', linewidth=2, label='ROC Curve')
+    plt.plot([0, 1], [0, 1], color='red', linestyle='--', label='Random Classifier')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver Operating Characteristic (ROC) Curve')
+    plt.legend()
+    plt.grid()
+
+    # Save the plot
+    plot_path = Path(config_manager.experiment_dir) / f"roc_curve.png"
+    plt.savefig(plot_path)
+    plt.close()
+
+def plot_prc(precision, recall, prevalence, config_manager):
+    plt.figure(figsize=(8, 8))
+    plt.plot(recall, precision, color='blue', linewidth=2, label='PRC Curve')
+    plt.axhline(y=prevalence, color='red', linestyle='--', label='Prevalence')
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curve')
+    plt.legend()
+    plt.grid()
+
+    # Save the plot
+    plot_path = Path(config_manager.experiment_dir) / f"prc_curve.png"
     plt.savefig(plot_path)
     plt.close()
 

@@ -182,7 +182,7 @@ def main():
         config_manager.set_training_config()
 
         if config_manager.testing:
-            # dataset = dataset.subsample_dataset(0.1)
+            dataset = dataset.subsample_dataset(0.1)
             # print(f"Subsampled dataset to {len(dataset.dataframe)} rows for testing")   
             # dataset = dataset.truncate_trajectories(max_length = 72, window_length=config_manager.training_config['window_length']) # hours
             
@@ -235,9 +235,12 @@ def main():
 
 
         if config_manager.testing:
-            # dataset = dataset.subsample_dataset(0.1)
+            dataset = dataset.subsample_dataset(0.1)
             # print(f"Subsampled dataset to {len(dataset.dataframe)} rows for testing")   
-            dataset = dataset.truncate_trajectories(max_length = 72, window_length=config_manager.training_config['window_length']) # hours
+            # dataset = dataset.truncate_trajectories(max_length = 72, window_length=config_manager.training_config['window_length']) # hours
+            
+            # truncate to 7 days, and try and predict the day of event
+            dataset = dataset.truncate_trajectories(max_length = 168, window_length=config_manager.training_config['window_length']) # hours
         
         # if model type is deep hit, we need to make the time bins and add to the configuration
         if config_manager.model_type == "dynamic_deephit":

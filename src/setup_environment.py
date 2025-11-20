@@ -3,18 +3,29 @@ import socket
 import yaml
 from pathlib import Path
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 def detect_environment():
     """
     Detect if we're running on local machine or HPC.
     """
-    hostname = socket.gethostname()
+    hostname = socket.gethostname().lower()
+    fqdn = socket.getfqdn().lower()
     username = os.getenv('USER', '')
     
     # HPC detection logic (adjust based on your HPC characteristics)
     if 'festus' in hostname.lower() or username.startswith('bt'):
-        return 'hpc'
+        logging.info("Running on Bayreuth HPC")
+        return 'bayreuth_hpc'
+    
+    elif 'cx3.hpc.ic.ac.uk' in fqdn:
+        logging.info("Running on Imperial HPC")
+        return 'imperial_hpc'
+    
     else:
+        logging.info("Running on local machine")
         return 'local'
 
 

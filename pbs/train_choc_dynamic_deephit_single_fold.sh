@@ -1,0 +1,93 @@
+#!/bin/bash
+# pbs/train_choc_dynamic_deephit_single_fold.pbs
+
+# Job name
+#PBS -N choc_dynamic_deephit
+
+# Output and error files
+#PBS -o ~/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/${PBS_JOBNAME}_${PBS_JOBID}.out
+#PBS -e ~/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/${PBS_JOBNAME}_${PBS_JOBID}.err
+
+# Resources: nodes, CPUs, memory
+#PBS -l select=1:ncpus=1:mem=64gb:ngpus=1
+#PBS -l walltime=08:00:00
+
+# Partition / queue
+#PBS -q GPU
+
+# Email notifications
+#PBS -m bea
+#PBS -M j.ormond@imperial.ac.uk
+
+# Exit on any error
+set -e
+
+# Specify fold
+FOLD=1
+
+# Generate a unique start time for this job
+START_TIME=$(date +"%Y%m%d_%H%M%S")
+export START_TIME
+
+# Load modules
+module load miniforge/3
+module load gnu/14.1
+
+# Set environment variables
+export OMP_NUM_THREADS=1   # matches ncpus
+export WANDB_MODE=offline
+export WANDB_DIR=/home/38/bt310238/wandb
+
+# Navigate to project directory
+cd ~/projects/ai_clinician/code/ai_clinician_pediatric_rl
+
+# Create logs directory if missing
+mkdir -p ~/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs
+
+# Activate Conda environment
+eval "$(~/miniforge3/bin/conda shell.bash hook)"
+conda activate rl_env
+
+# Print job information
+echo "========================================="
+echo "Job Information:"
+echo "Job ID: $PBS_JOBID"
+echo "Job Name: $PBS_JOBNAME"
+echo "Node(s): $PBS_NODEFILE"
+echo "CPUs per task: 1"
+echo "Memory: 64GB"
+echo "Start time: $(date)"
+echo "Working directory: $(pwd)"
+echo "Active conda environment: $CONDA_DEFAULT_ENV"
+echo "Python version: $(python --version)"
+echo "CUDA_VISIBLE_DEVICES = $CUDA_VISIBLE_DEVICES"
+nvidia-smi
+echo "========================================="
+
+# Run the training script for this fold
+echo "Starting training..."
+
+python -m src.scripts.supervised.supervised_learning \
+    --hospital choc \
+    --experiment_type supervised_learning \
+    --model_type dynamic_deephit \
+    --prediction_type discharge_mortality_tte \
+    --mode single_fold \
+    --fold $FOLD \
+    --experiment_variant quick_test \
+    --search_variant random_search \
+    --n_epochs 200 \
+    --n_search_iterations 20 \
+    --start_time $START_TIME 
+
+exit_code=$?
+
+echo "========================================="
+echo "End time: $(date)"
+if [ $exit_code -eq 0 ]; then
+    echo "Fold $FOLD completed successfully!"
+else
+    echo "Fold $FOLD failed with exit code $exit_code"
+    exit $exit_code
+fi
+echo "========================================="

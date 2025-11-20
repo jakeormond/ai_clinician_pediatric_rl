@@ -23,7 +23,7 @@
 set -e
 
 # Specify fold
-FOLD=1
+FOLD=3
 
 # Generate a unique start time for this job
 START_TIME=$(date +"%Y%m%d_%H%M%S")

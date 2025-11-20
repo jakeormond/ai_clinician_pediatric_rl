@@ -13,7 +13,7 @@
 #PBS -l walltime=08:00:00
 
 # Partition / queue
-#PBS -q GPU
+#PBS -q v1_gpu72
 
 # Email notifications
 #PBS -m bea

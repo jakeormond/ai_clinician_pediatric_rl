@@ -236,12 +236,13 @@ def main():
 
         if config_manager.testing:
             dataset = dataset.subsample_dataset(0.1)
-            # print(f"Subsampled dataset to {len(dataset.dataframe)} rows for testing")   
+            print(f"Subsampled dataset to {len(dataset.dataframe)} rows for testing")   
             # dataset = dataset.truncate_trajectories(max_length = 72, window_length=config_manager.training_config['window_length']) # hours
             
             # truncate to 7 days, and try and predict the day of event
             dataset = dataset.truncate_trajectories(max_length = 168, window_length=config_manager.training_config['window_length']) # hours
-        
+            print(f"Truncated trajectories to max length of 168 hours for testing")
+            
         # if model type is deep hit, we need to make the time bins and add to the configuration
         if config_manager.model_type == "dynamic_deephit":
             # get lengths of trajectories in dataset.dataframe (by encounter_id)
@@ -256,7 +257,6 @@ def main():
 
         print(f"Running on {config_manager.environment} environment")
         print(f"Experiment directory: {config_manager.experiment_dir}")
-        print(f"Fold directory: {config_manager.fold_dir}")
 
         results = outer_training_loop(dataset, config_manager)
 

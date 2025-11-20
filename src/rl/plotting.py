@@ -18,12 +18,16 @@ def plot_losses(training_scores, val_scores, test_scores, config_manager):
 
         val_epochs = np.array(val_scores['epoch']) + 1
         val_losses = val_scores[key]
-        plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      
+
+        if test_scores is None:
+            plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      
         
-        if test_scores is not None:
+        else:
+            plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Test Loss')     
             test_loss = test_scores[key]
             # plot test loss as horizontal line
-            plt.axhline(y=test_loss, color='green', linestyle='--', linewidth=2, label='Test ' + key)
+            plt.axhline(y=test_loss, color='green', linestyle='--', linewidth=2, label='Test Loss final')
+
         if i == len(loss_keys) - 1:
             plt.xlabel('Epochs')
         plt.ylabel(key)
@@ -116,6 +120,7 @@ def plot_roc(fpr, tpr, config_manager):
     plt.grid()
 
     # Save the plot
+    fold_dir = config_manager.cv_config.get('fold', None)
     plot_path = Path(config_manager.experiment_dir) / f"roc_curve.png"
     plt.savefig(plot_path)
     plt.close()
@@ -131,6 +136,7 @@ def plot_prc(precision, recall, prevalence, config_manager):
     plt.grid()
 
     # Save the plot
+    fold_dir = config_manager.cv_config.get('fold', None)
     plot_path = Path(config_manager.experiment_dir) / f"prc_curve.png"
     plt.savefig(plot_path)
     plt.close()

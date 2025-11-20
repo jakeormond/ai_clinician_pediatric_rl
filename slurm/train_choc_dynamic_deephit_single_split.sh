@@ -68,11 +68,14 @@ python -m src.scripts.supervised.supervised_learning \
     --experiment_type supervised_learning \
     --model_type dynamic_deephit \
     --prediction_type discharge_mortality_tte \
-    --mode single_split \
-    --testing \
-    --search_variant fixed_hyperparameters \
-    --n_epochs 100 \
+    --mode single_fold \
+    --fold $FOLD \
+    --experiment_variant quick_test \
+    --search_variant random_search \
+    --n_epochs 200 \
+    --n_search_iterations 20 \
     --start_time $START_TIME 
+    
 
 exit_code=$?
 

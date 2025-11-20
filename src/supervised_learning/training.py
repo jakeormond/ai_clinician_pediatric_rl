@@ -182,7 +182,6 @@ def append_epoch_losses(
         training_losses[key].append(value)     
 
 
-
 def evaluate_model(
     trainer, 
     dataloader, 
@@ -297,7 +296,6 @@ def evaluate_final_model(trainer, test_buffer):
     logger.info(f"Final test metrics: {test_metrics}")
     
     return test_metrics
-
 
 
 def check_improvement(best_val_loss, current_val_loss, early_stopping):
@@ -415,7 +413,79 @@ def development_training_loop(dataset, config_manager):
     return {
         "training_scores": training_scores,
         "test_scores": test_scores,
-            }
+        }
+
+
+def plot_results(training_losses, val_losses, test_losses, config_manager):
+
+    plot_losses(training_losses, val_losses, test_losses, config_manager)
+
+    if config_manager.model_type == 'dynamic_deephit':
+        # plot the validation C-index and Brier scores over time
+        plot_c_and_brier_over_time(val_losses, config_manager)
+
+        plot_auroc_prc_curves(
+            test_losses['roc_curve'], 
+            test_losses['pr_curve'],
+            test_losses['prevalence'],
+            config_manager
+            )
+        
+
+def save_results(
+        training_scores, 
+        val_scores, 
+        final_training_losses, 
+        val_losses, 
+        test_losses, 
+        best_hyperparameters, 
+        n_epochs, 
+        norm_params, 
+        config_manager
+    ):
+    
+    outer_fold = config_manager.cv_config.get('fold', 'N/A')
+
+    # save the configuration_manager
+    with open(config_manager.experiment_dir / "config_manager.pkl", "wb") as f:
+        pickle.dump(config_manager, f)  
+
+    # create a dictionary to save the scores
+    all_scores = {
+        "inner_training_scores": training_scores,
+        "inner_val_scores": val_scores,
+        "final_training_scores": final_training_losses,
+        "final_test_scores_across_training": val_losses, 
+        "final_test_scores": test_losses,
+        "best_hyperparameters": best_hyperparameters,
+        "n_epochs": n_epochs
+    }
+    with open(config_manager.experiment_dir / "all_scores.pkl", "wb") as f:
+        pickle.dump(all_scores, f)
+
+    # save the normalization parameters as a pkl file
+    with open(config_manager.experiment_dir / "norm_params.pkl", "wb") as f:
+        pickle.dump(norm_params, f)        
+        
+    # Save results for this outer fold
+    results_path = Path(config_manager.experiment_dir) / f"fold_{outer_fold}_results.json"
+    # drop the curves from test_losses for saving
+    if 'roc_curve' in test_losses:
+        test_losses.pop('roc_curve')
+    if 'pr_curve' in test_losses:
+        test_losses.pop('pr_curve')
+
+    with open(results_path, 'w') as f:
+        json.dump(to_json_safe({
+            'outer_fold': outer_fold,
+            'best_hyperparameters': best_hyperparameters,
+            'final_metrics': test_losses,
+            'config': config_manager.training_config
+        }), f, indent=2)
+    
+    logger.info(f"✓ Outer fold {outer_fold} complete. Results saved to {results_path}")
+
+    return all_scores
 
 
 def outer_training_loop(dataset, config_manager): 
@@ -424,12 +494,7 @@ def outer_training_loop(dataset, config_manager):
     logger.info("Starting outer training loop...")
 
     # Get CV configuration
-    n_outer_folds = config_manager.cv_config["n_outer_folds"]
-    n_inner_folds = config_manager.cv_config["n_inner_folds"]
-    target_fold = config_manager.cv_config['fold']  # This comes from job array index when running on HPC
-   
-    if target_fold is None:
-        raise ValueError("target_fold must be specified")
+    n_outer_folds, n_inner_folds, target_fold = config_manager.load_cv_config()
     
     logger.info(f"Processing outer fold {target_fold+1}/{n_outer_folds}")
     
@@ -440,9 +505,7 @@ def outer_training_loop(dataset, config_manager):
     for outer_fold, (outer_train_id, outer_test_id) in enumerate(kf_outer.split(dataset.encounter_ids())):
         if outer_fold != target_fold:
             continue  # Skip other folds
-            
-        logger.info(f"=== OUTER FOLD {outer_fold} ===")
-        
+                   
         # Create outer train/test splits
         train_dataset = dataset.create_subset(dataset.encounter_ids()[outer_train_id])     
         test_dataset = dataset.create_subset(dataset.encounter_ids()[outer_test_id])
@@ -456,8 +519,8 @@ def outer_training_loop(dataset, config_manager):
         )
         logger.info(f"Best hyperparameters: {best_hyperparameters}")
 
-        # get the max number of epochs used in inner folds
-        n_epochs = np.mean(n_epochs) # for final training
+        # get the median number of epochs used in inner folds
+        n_epochs = int(np.median(n_epochs)) # for final training
 
         #################### RETRAIN FINAL MODEL #############################
         logger.info("Phase 2: Final Model Training & Evaluation")
@@ -467,53 +530,33 @@ def outer_training_loop(dataset, config_manager):
                 dataset, outer_train_id, outer_test_id, config_manager
             )        
                         
-        final_training_scores, \
-        test_scores, \
-        n_epochs = train_with_hyperparameters(
-                train_processor, 
-                test_processor, 
-                config_manager, 
-                best_hyperparameters,
-                n_epochs=n_epochs,
-                final_model=True
-            )
+        final_training_losses, \
+        final_val_losses, \
+        test_losses = train_with_hyperparameters(
+            train_processor, 
+            test_processor, 
+            config_manager, 
+            best_hyperparameters,
+            n_epochs=n_epochs,
+            final_model=True
+        )
 
         # PLOT THE TRAINING AND VALIDATION LOSSES
-        plot_losses_cv(training_scores, val_scores, test_scores, outer_fold, config_manager)
+        plot_results(final_training_losses, final_val_losses, test_losses, config_manager)
 
-        
-        # save the configuration_manager
-        with open(config_manager.fold_dir / "config_manager.pkl", "wb") as f:
-            pickle.dump(config_manager, f)  
-
-        # create a dictionary to save the scores
-        all_scores = {
-            "inner_training_scores": training_scores,
-            "inner_val_scores": val_scores,
-            "final_training_scores": final_training_scores,
-            "test_scores": test_scores,
-            "best_hyperparameters": best_hyperparameters,
-            "n_epochs": n_epochs
-        }
-        with open(config_manager.fold_dir / "all_scores.pkl", "wb") as f:
-            pickle.dump(all_scores, f)
-
-        # save the normalization parameters as a pkl file
-        with open(config_manager.fold_dir / "norm_params.pkl", "wb") as f:
-            pickle.dump(norm_params, f)        
-            
-        # Save results for this outer fold
-        results_path = Path(config_manager.experiment_dir) / f"fold_{outer_fold}_results.json"
-        with open(results_path, 'w') as f:
-            json.dump(to_json_safe({
-                'outer_fold': outer_fold,
-                'best_hyperparameters': best_hyperparameters,
-                'final_metrics': test_scores,
-                'config': config_manager.training_config
-            }), f, indent=2)
-        
-        logger.info(f"✓ Outer fold {outer_fold} complete. Results saved to {results_path}")
-        
+        ##################### SAVE RESULTS #############################
+        all_scores = save_results(
+            training_scores,
+            val_scores,
+            final_training_losses,
+            final_val_losses,
+            test_losses,
+            best_hyperparameters,
+            n_epochs,
+            norm_params,
+            config_manager
+        )
+                
         return all_scores
     
 
@@ -663,10 +706,10 @@ def train_with_hyperparameters(
     # Use defaultdict to automatically create new keys
     training_losses = defaultdict(list) 
     
-    if not final_model:
-        val_losses = defaultdict(list)
-        # evaluate before any training for epoch 0
-        evaluate_during_training(trainer, -1, val_test_buffer, val_losses, config_manager)   
+    # Evaluate before training starts to get initial validation loss
+    val_losses = defaultdict(list)
+    # evaluate before any training for epoch 0
+    evaluate_during_training(trainer, -1, val_test_buffer, val_losses, config_manager)   
     
     ############################### Training loop #################################
     for epoch in range(n_epochs):
@@ -682,18 +725,19 @@ def train_with_hyperparameters(
         # Calculate average loss for this epoch and append to training_losses
         append_epoch_losses(epoch_training_losses, training_losses)
 
-        #################### Evaluate during hyperparameter tuning ONLY ####################
-        if not final_model:            
-            # Evaluate periodically
-            if epoch % config_manager.training_config['eval_freq'] == 0 \
-                                                    or epoch == n_epochs - 1:
-                evaluate_during_training(trainer, epoch, val_test_buffer, val_losses, config_manager)
-                
-                # Determine validation loss for early stopping
-                current_val_loss = val_losses[loss_metric][-1]            
-                logger.info(f"Epoch {epoch}: Train {loss_metric}={training_losses[loss_metric][-1]:.4f}, Val {loss_metric}={current_val_loss:.4f}")
-                                
-                
+        #################### Evaluate ####################
+        # note: this evaluation is used for early stopping during hyperparameter tuning,
+        # but only used for visualization during final model training
+        # Evaluate periodically
+        if epoch % config_manager.training_config['eval_freq'] == 0 \
+                                                or epoch == n_epochs - 1:
+            evaluate_during_training(trainer, epoch, val_test_buffer, val_losses, config_manager)
+            
+            # Determine validation loss for early stopping
+            current_val_loss = val_losses[loss_metric][-1]            
+            logger.info(f"Epoch {epoch}: Train {loss_metric}={training_losses[loss_metric][-1]:.4f}, Val {loss_metric}={current_val_loss:.4f}")
+                            
+            if not final_model: 
                 # Check for improvement and copy model parameters if best
                 improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)
 
@@ -720,16 +764,15 @@ def train_with_hyperparameters(
 
     ########################## evaluate on test set after training if final model ##########################
     # note that results df will be None if no targets/predictions were collected during evaluation (i.e.Q learning)
-    test_losses = \
-            evaluate_final_model(
-            trainer, 
-            val_test_buffer
-        )
+    test_losses = evaluate_final_model( # this evaluates on the entire test set (during training we only use a subset for speed)
+        trainer, 
+        val_test_buffer
+    )
     
     logger.info(f"Final test metrics: {test_losses}")
 
     # Save final model if this is the final training
-    model_path = Path(config_manager.fold_dir /  "final_model.pt")
+    model_path = Path(config_manager.experiment_dir /  "final_model.pt")
     torch.save(trainer.model.state_dict(), model_path)
     logger.info(f" Final model saved to {model_path}")
 
@@ -739,5 +782,5 @@ def train_with_hyperparameters(
     #     results_df.to_parquet(results_path)
     #     logger.info(f" Test predictions saved to {results_path}\n")       
 
-    return training_losses, test_losses, n_epochs
+    return training_losses, val_losses, test_losses
 

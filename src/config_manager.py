@@ -204,13 +204,22 @@ class ConfigManager:
 
         # get the filename from cv_config_path
         cv_config_filename = cv_config_path.stem
-        experiment_copy_path = self.expt_config_dir / f"{cv_config_filename}.yaml"
+        experiment_copy_path = self.experiment_dir / f"{cv_config_filename}.yaml"
         if not experiment_copy_path.exists():
             shutil.copy2(cv_config_path, experiment_copy_path)
             print(f"Copied CV config to: {experiment_copy_path}")
         else:
             print(f"CV config already exists at: {experiment_copy_path}, skipping copy")
 
+    def load_cv_config(self):
+        n_outer_folds = self.cv_config.get('n_outer_folds', None)
+        n_inner_folds = self.cv_config.get('n_inner_folds', None)
+        target_fold = self.cv_config.get('fold', None)
+
+        if target_fold is None:
+            raise ValueError("target_fold must be specified")
+
+        return n_outer_folds, n_inner_folds, target_fold     
 
     def set_training_config(self):
         training_config_path = self.get_config_path("training")
@@ -262,8 +271,8 @@ class ConfigManager:
         self.experiment_dir = Path(self.get_experiments_dir) / self.experiment_name
         self.experiment_dir.mkdir(parents=True, exist_ok=True)
         # create a config dir inside the experiment directory
-        self.expt_config_dir = self.experiment_dir / "config"
-        self.expt_config_dir.mkdir(parents=True, exist_ok=True)
+        # self.expt_config_dir = self.experiment_dir / "config"
+        # self.expt_config_dir.mkdir(parents=True, exist_ok=True)
 
     def set_fold_name(self):
         """Add experiment name to the W&B config."""
@@ -273,8 +282,15 @@ class ConfigManager:
 
     def _create_fold_dir(self, experiment_name):
         """Create and return experiment directory path."""
-        self.fold_dir = Path(self.get_experiments_dir) / self.experiment_name / self.fold_name
-        self.fold_dir.mkdir(parents=True, exist_ok=True)
+        fold = self.cv_config.get('fold', None)
+        
+        # append "fold_{fold}" to experiment_dir name
+        new_dir_path = self.experiment_dir.parent / f"{self.experiment_dir.name}_fold_{fold}"
+        
+        # rename experiment_dir to new_dir_path
+        self.experiment_dir.rename(new_dir_path)
+        self.experiment_dir = new_dir_path
+        
 
     def create_single_split_dir(self):
         """Create and return single split experiment directory path."""

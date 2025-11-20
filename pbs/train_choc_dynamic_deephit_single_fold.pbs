@@ -5,8 +5,8 @@
 #PBS -N choc_dynamic_deephit
 
 # Output and error files
-#PBS -o ~/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/${PBS_JOBNAME}_${PBS_JOBID}.out
-#PBS -e ~/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/${PBS_JOBNAME}_${PBS_JOBID}.err
+#PBS -o /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/${PBS_JOBNAME}_${PBS_JOBID}.out
+#PBS -e /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/${PBS_JOBNAME}_${PBS_JOBID}.err
 
 # Resources: nodes, CPUs, memory
 #PBS -l select=1:ncpus=1:mem=64gb:ngpus=1
@@ -35,8 +35,6 @@ module load gnu/14.1
 
 # Set environment variables
 export OMP_NUM_THREADS=1   # matches ncpus
-export WANDB_MODE=offline
-export WANDB_DIR=/home/38/bt310238/wandb
 
 # Navigate to project directory
 cd ~/projects/ai_clinician/code/ai_clinician_pediatric_rl

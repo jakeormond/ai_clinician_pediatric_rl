@@ -85,12 +85,11 @@
                 "--model_type", "dynamic_deephit", 
                 "--prediction_type", "discharge_mortality_tte",
                 "--mode", "single_fold", 
-                "--fold", "0",
-                "--testing",
+                "--fold", "2",
                 "--experiment_variant", "standard",                
                 "--search_variant", "random_search",
-                "--n_epochs", "2",
-                "--n_search_iterations", "2"
+                "--n_epochs", "200",
+                "--n_search_iterations", "20"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

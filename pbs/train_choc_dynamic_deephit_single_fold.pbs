@@ -5,8 +5,8 @@
 #PBS -N choc_dynamic_deephit
 
 # Output and error files
-#PBS -o /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/${PBS_JOBNAME}_${PBS_JOBID}.out
-#PBS -e /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/${PBS_JOBNAME}_${PBS_JOBID}.err
+#PBS -o /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/choc_dynamic_deephit.$PBS_JOBID.out
+#PBS -e /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/choc_dynamic_deephit.$PBS_JOBID.err
 
 # Resources: nodes, CPUs, memory
 #PBS -l select=1:ncpus=1:mem=64gb:ngpus=1

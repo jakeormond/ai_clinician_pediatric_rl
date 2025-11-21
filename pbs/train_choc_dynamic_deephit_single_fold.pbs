@@ -5,8 +5,8 @@
 #PBS -N choc_dynamic_deephit
 
 # Output and error files
-#PBS -o /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/choc_dynamic_deephit.$PBS_JOBID.out
-#PBS -e /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/choc_dynamic_deephit.$PBS_JOBID.err
+#PBS -o /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/choc_dynamic_deephit.out
+#PBS -e /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/choc_dynamic_deephit.err
 
 # Resources: nodes, CPUs, memory
 #PBS -l select=1:ncpus=1:mem=64gb:ngpus=1
@@ -36,10 +36,15 @@ module load miniforge/3
 export OMP_NUM_THREADS=1   # matches ncpus
 
 # Navigate to project directory
-cd ~/projects/ai_clinician/code/ai_clinician_pediatric_rl
+cd /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl
 
 # Create logs directory if missing
-mkdir -p ~/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs
+LOGDIR=/rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs
+mkdir -p $LOGDIR
+
+# Rename log files to include actual PBS_JOBID (only if they exist)
+[ -f $LOGDIR/choc_dynamic_deephit.out ] && mv $LOGDIR/choc_dynamic_deephit.out $LOGDIR/choc_dynamic_deephit.${PBS_JOBID}.out
+[ -f $LOGDIR/choc_dynamic_deephit.err ] && mv $LOGDIR/choc_dynamic_deephit.err $LOGDIR/choc_dynamic_deephit.${PBS_JOBID}.err
 
 # Activate Conda environment
 eval "$(~/miniforge3/bin/conda shell.bash hook)"
@@ -71,10 +76,10 @@ python -m src.scripts.supervised.supervised_learning \
     --prediction_type discharge_mortality_tte \
     --mode single_fold \
     --fold $FOLD \
-    --experiment_variant quick_test \
+    --experiment_variant standard \
     --search_variant random_search \
     --n_epochs 200 \
-    --n_search_iterations 20 \
+    --n_search_iterations 5 \
     --start_time $START_TIME 
 
 exit_code=$?

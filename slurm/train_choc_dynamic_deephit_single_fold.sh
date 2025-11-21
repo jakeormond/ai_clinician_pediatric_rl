@@ -20,7 +20,7 @@
 # Exit on any error
 set -e
 
-FOLD=1
+FOLD=0
 
 # Generate a unique start time for this entire job array
 START_TIME=$(date +"%Y%m%d_%H%M%S")
@@ -70,10 +70,10 @@ python -m src.scripts.supervised.supervised_learning \
     --prediction_type discharge_mortality_tte \
     --mode single_fold \
     --fold $FOLD \
-    --experiment_variant quick_test \
+    --experiment_variant standard \
     --search_variant random_search \
     --n_epochs 200 \
-    --n_search_iterations 20 \
+    --n_search_iterations 5 \
     --start_time $START_TIME 
     
 

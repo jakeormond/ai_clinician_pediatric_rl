@@ -6,8 +6,8 @@ checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save 
 window_length: 72 # Prediction horizon in hours - so 1 month
 device: "cuda"  # Device (cuda or cpu)
 learning_rate: "loguniform(1e-6, 1e-4)"          #      [1e-6]  # Learning rates to try - 1e-4 overfits quickly
-dropout: "uniform(0.2, 0.6)"
-weight_decay: "loguniform(1e-5, 1e-2)"
+dropout: 0.5 # "uniform(0.2, 0.6)"
+weight_decay: 5e-3 # "loguniform(1e-5, 1e-2)"
 use_layernorm: True
 batch_size: 128  # Batch size for all networks
 hidden_dim: 64  # Hidden dimension for all networks

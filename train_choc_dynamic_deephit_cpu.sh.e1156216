@@ -1,0 +1,5 @@
+/var/spool/pbs/mom_priv/jobs/1156216.pbs-7.SC: line 1: Skip: command not found
+/var/spool/pbs/mom_priv/jobs/1156216.pbs-7.SC: line 2: Chat: command not found
+/var/spool/pbs/mom_priv/jobs/1156216.pbs-7.SC: line 4: You: command not found
+/var/spool/pbs/mom_priv/jobs/1156216.pbs-7.SC: line 5: syntax error near unexpected token `)'
+/var/spool/pbs/mom_priv/jobs/1156216.pbs-7.SC: line 5: `i am planning to run some jobs on my university's hpc, which runs on  PBSPro workload manager (I've typically used Slurm in the past). I don't think i organized my home folder. Currently it has a bunch of . folders (i.e. .cache, .conda,  .config, .ipython, .ssh etc). I think those probably should have been in a "code" folder. How should I organize my home directory, and how can I fix the current mess?'

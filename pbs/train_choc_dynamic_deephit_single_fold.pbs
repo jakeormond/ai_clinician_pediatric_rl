@@ -31,7 +31,6 @@ export START_TIME
 
 # Load modules
 module load miniforge/3
-module load gnu/14.1
 
 # Set environment variables
 export OMP_NUM_THREADS=1   # matches ncpus

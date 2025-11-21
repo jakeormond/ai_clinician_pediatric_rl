@@ -1,0 +1,34 @@
+Traceback (most recent call last):
+  File "/rds/general/user/jormond/home/miniforge3/envs/rl_env/lib/python3.10/pathlib.py", line 1175, in mkdir
+    self._accessor.mkdir(self, mode)
+FileNotFoundError: [Errno 2] No such file or directory: '/home/projects/ai_clinician/experiments'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/rds/general/user/jormond/home/miniforge3/envs/rl_env/lib/python3.10/pathlib.py", line 1175, in mkdir
+    self._accessor.mkdir(self, mode)
+FileNotFoundError: [Errno 2] No such file or directory: '/home/projects/ai_clinician'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/rds/general/user/jormond/home/miniforge3/envs/rl_env/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/rds/general/user/jormond/home/miniforge3/envs/rl_env/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/src/scripts/supervised/supervised_learning.py", line 305, in <module>
+    main()
+  File "/rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/src/scripts/supervised/supervised_learning.py", line 160, in main
+    config_manager = ConfigManager(args)
+  File "/rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/src/config_manager.py", line 23, in __init__
+    self.paths, self.environment = load_paths()
+  File "/rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/src/setup_environment.py", line 52, in load_paths
+    path_obj.mkdir(parents=True, exist_ok=True)
+  File "/rds/general/user/jormond/home/miniforge3/envs/rl_env/lib/python3.10/pathlib.py", line 1179, in mkdir
+    self.parent.mkdir(parents=True, exist_ok=True)
+  File "/rds/general/user/jormond/home/miniforge3/envs/rl_env/lib/python3.10/pathlib.py", line 1179, in mkdir
+    self.parent.mkdir(parents=True, exist_ok=True)
+  File "/rds/general/user/jormond/home/miniforge3/envs/rl_env/lib/python3.10/pathlib.py", line 1175, in mkdir
+    self._accessor.mkdir(self, mode)
+PermissionError: [Errno 13] Permission denied: '/home/projects'

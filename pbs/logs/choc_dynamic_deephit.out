@@ -1,0 +1,27 @@
+=========================================
+Job Information:
+Job ID: 1156539.pbs-7
+Job Name: choc_dynamic_deephit_cpu_test
+Node(s): /var/spool/pbs/aux/1156539.pbs-7
+CPUs per task: 2
+Memory: 8GB
+Start time: Fri 21 Nov 10:18:30 GMT 2025
+Working directory: /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl
+Active conda environment: rl_env
+Python version: Python 3.10.16
+=========================================
+Starting training...
+10:18:48 | INFO | __main__: Logging configured (level=INFO)
+10:18:48 | INFO | root: Running on Imperial HPC
+Detected environment: imperial_hpc
+Checking experiments_dir: /rds/general/user/jormond/home/projects/ai_clinician/experiments
+Ensured experiments_dir exists: /rds/general/user/jormond/home/projects/ai_clinician/experiments
+
+====================================
+CPU Time used: 00:00:00
+CPU Percent: 0%
+Memory usage: 0b
+Approx Power usage: 0.0
+Walltime usage: 00:00:32
+
+====================================

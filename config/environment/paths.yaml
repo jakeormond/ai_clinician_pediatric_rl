@@ -9,6 +9,6 @@ bayreuth_hpc:
   code_dir: "/groups/a-faisal/jakeormond/code/choc_code"
 
 imperial_hpc:
-  experiments_dir: "/home/projects/ai_clinician/experiments"
-  data_dir: "/home/projects/ai_clinician/choc_data"
-  code_dir: "/home/projects/ai_clinician/choc_code"
+  experiments_dir: "/rds/general/user/jormond/home/projects/ai_clinician/experiments"
+  data_dir: "/rds/general/user/jormond/home/projects/ai_clinician/data/choc_data"
+  code_dir: "/rds/general/user/jormond/home/projects/ai_clinician/code/choc_code"

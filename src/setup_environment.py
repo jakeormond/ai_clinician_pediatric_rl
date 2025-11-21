@@ -49,6 +49,7 @@ def load_paths():
 
         if path_name == 'experiments_dir':
             # Create experiments_dir if it doesn't exist
+            print(f"Checking {path_name}: {path_value}")
             path_obj.mkdir(parents=True, exist_ok=True)
             print(f"Ensured {path_name} exists: {path_value}")
 

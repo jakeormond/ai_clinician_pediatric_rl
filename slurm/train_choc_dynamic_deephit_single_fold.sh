@@ -73,7 +73,7 @@ python -m src.scripts.supervised.supervised_learning \
     --experiment_variant standard \
     --search_variant random_search \
     --n_epochs 200 \
-    --n_search_iterations 5 \
+    --n_search_iterations 20 \
     --start_time $START_TIME 
     
 

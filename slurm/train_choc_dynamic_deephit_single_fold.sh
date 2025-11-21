@@ -11,9 +11,9 @@
 #SBATCH --time=1-00:00:00
 #SBATCH --partition=normal
 #SBATCH --gres=gpu:l40:1     
-#SBATCH --partition=GPU
+# #SBATCH --partition=GPU
 # #SBATCH --gres=gpu:h100:1     
-# #SBATCH --mail-type=END,FAIL        # Email notifications
+#SBATCH --mail-type=END,FAIL        # Email notifications
 #SBATCH --mail-user=j.ormond@imperial.ac.uk
 
 # Exit on any error

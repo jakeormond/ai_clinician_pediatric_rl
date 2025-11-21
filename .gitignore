@@ -1,5 +1,6 @@
 # Experiment outputs and logs
 slurm/logs/
+pbs/logs/
 results/
 wandb/
 

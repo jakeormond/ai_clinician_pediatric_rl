@@ -11,5 +11,5 @@ Traceback (most recent call last):
     self.paths, self.environment = load_paths()
   File "/rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/src/setup_environment.py", line 59, in load_paths
     raise FileNotFoundError(
-FileNotFoundError: Required directory does not exist: data_dir = /rds/general/user/jormond/home/projects/ai_clinician/choc_data
+FileNotFoundError: Required directory does not exist: code_dir = /rds/general/user/jormond/home/projects/ai_clinician/code/choc_code
 Please ensure this directory exists before running the script.

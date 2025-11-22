@@ -19,7 +19,7 @@
 # Exit on any error
 set -e
 
-FOLD=1
+FOLD=4
 
 # Generate a unique start time for this entire job array
 START_TIME=$(date +"%Y%m%d_%H%M%S")

@@ -20,7 +20,7 @@ class ConfigManager:
         if self.experiment_type != "supervised_learning":
             self.prediction_type = None  # prediction type is for supervised learning only
  
-        self.paths, self.environment = load_paths()
+        self.paths, self.environment = load_paths(self.hospital)
         self.set_data()
 
         if self.mode == "single_fold":        

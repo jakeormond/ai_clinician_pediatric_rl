@@ -68,7 +68,8 @@ def parse_arguments():
                         help='type of prediction to make (default: mortality_all)') 
 
     parser.add_argument('--mode', type=str, default='single_fold',
-                        choices=['save_dataframe', 'single_fold', 'aggregate', 'plot_shap', 'plot_model_results', 'single_split'],
+                        choices=['save_dataframe', 'single_fold', 'aggregate', 'plot_shap', 'plot_model_results', 
+                                 'single_split', 'development_single_split'],
                         help='Mode of training: single_fold or aggregate (default: single_fold)')
     
     # mode-specific arguments    
@@ -173,6 +174,14 @@ def main():
      
     
     elif args.mode == 'single_split':
+        # load data
+        dataset = Dataset(config_manager.data_config)
+        print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
+    
+    
+    
+    
+    elif args.mode == 'development_single_split':
       
         # load data
         dataset = Dataset(config_manager.data_config)
@@ -203,8 +212,7 @@ def main():
 
         results = development_training_loop(dataset, config_manager)
 
-    
-    
+        
     elif args.mode == "single_fold":        
         # set base experiment name and make directory, if it doesn't exist (it will 
         # already if another folder was run)
@@ -224,15 +232,11 @@ def main():
         dataset = Dataset(config_manager.data_config)
         print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
 
-
-
         # Initialize W&B
         # wandb_init(config_manager.wandb_config)
 
         # load training config
         config_manager.set_training_config() # based on model type 
-
-
 
         if config_manager.testing:
             dataset = dataset.subsample_dataset(0.1)

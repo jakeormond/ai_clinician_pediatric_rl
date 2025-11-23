@@ -29,7 +29,7 @@ def detect_environment():
         return 'local'
 
 
-def load_paths():
+def load_paths(hospital=None):
     """
     Load paths based on the detected environment.
     """
@@ -41,7 +41,7 @@ def load_paths():
     env = detect_environment()
     print(f"Detected environment: {env}")
     
-    paths = paths_config[env]
+    paths = paths_config[env][hospital]
     
     # Create directories if they don't exist
     for path_name, path_value in paths.items():

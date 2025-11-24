@@ -4,6 +4,7 @@ All normalization and transformation is done here.
 """
 import yaml
 import copy
+import h5py
 import os
 import glob
 import pandas as pd
@@ -82,6 +83,27 @@ class ShardProcessor:
             self.action_minimum = None
             self.action_maximum = None
             self.action_transformers = None
+
+        for shard_file in self.raw_shard_files:
+            logger.info(f"Normalizing shard file: {shard_file}")
+            # load the shard file
+            with h5py.File(shard_file, 'r') as f:
+                # load the dataframe
+                df = pd.read_hdf(shard_file, key='dataframe')
+        
+        
+                # List all groups/datasets
+                print(list(f.keys()))
+                
+                # Access a dataset
+                # dataset = f['dataset_name'][:]  # Use [:] to read the data into a NumPy array
+                # print(dataset.shape, dataset.dtype)
+        
+        
+        
+        
+        
+        
         
         if dataset.normalize_obs:
             self._normalize_obs(dataset)               

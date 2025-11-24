@@ -4,6 +4,8 @@ All normalization and transformation is done here.
 """
 import yaml
 import copy
+import os
+import glob
 import pandas as pd
 import numpy as np
 import time
@@ -19,19 +21,26 @@ import logging
 from src import config_manager
 logger = logging.getLogger(__name__)
 
-class DataProcessor:
-    def __init__(self, dataset, config_manager, norm_params=None, verbose=False):
-                
-        # self should inherit all the key value pairs from the dataset except the dataframe
-        for key, value in vars(dataset).items():
-            if key != "dataframe":
-                if isinstance(value, (list, dict, set)):
-                    # Deep copy mutable objects
-                    setattr(self, key, copy.deepcopy(value))
-                else:
-                    # Shallow copy is fine for immutable objects (str, int, float, etc.)
-                    setattr(self, key, value)
-                   
+class ShardProcessor:
+    def __init__(
+            self, 
+            config_manager, 
+            split = 'train', 
+            normalize = True,
+            norm_params=None, 
+            verbose=False
+            ):
+        """
+        Unlike with dataframes, with the shards, I've already dropped the features we
+        don't want to use, so we just need to normalize, create binary actions,
+        and then split into the appropriate dataset format.
+        Note that features have already been transformed as well
+        -------------
+        
+        """
+        self.split = split
+        self.norm_params = norm_params
+
         if config_manager.action_mode == 'binary_only' or config_manager.action_mode == 'mixed':
             create_binary_actions = True
         else:
@@ -41,79 +50,27 @@ class DataProcessor:
             self.normalize_actions = False
             self.transform_actions = False           
 
-        # drop any features in self.features_to_drop
-        for feature in self.features_to_drop:
-            if feature in dataset.dataframe.columns:
-                dataset.dataframe = dataset.dataframe.drop(columns=[feature])
-        
-        # before creating the binary actions, we need to make a list of all the input features;
-        # these are the columns minus the reward, the actions and the encounter and time columns
-        if self.model_type == "supervised_learning":
-            self.input_features = [col for col in dataset.dataframe.columns
-                                if col != self.encounter_col and 
-                                col != self.time_col and 
-                                col != 'mortality' and 
-                                col != 'discharge']
-            
 
-        else:
-            self.input_features = [col for col in dataset.dataframe.columns
-                                if col not in dataset.actions and 
-                                col != self.reward_col and 
-                                col != self.encounter_col and 
-                                col != self.time_col and 
-                                col != self.terminal_reward_col]      
-        
+        # find the shards for the given split
+        self.shard_dir = config_manager.data_config['shard_dir']
+        all_files = os.listdir(self.shard_dir)
+        raw_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
+                                f.startswith(self.split) and f.endswith("_shard.h5")]
+        # sort the files to ensure consistent order
+        self.raw_shard_files = sorted(raw_shard_files)
 
-        for f in self.input_features:
-            logger.debug(f"Input feature: {f}")
+        if normalize:
+            normalized_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
+                                    f.startswith(self.split) and f.endswith("_shard_normalized.h5")]
+            # sort the files to ensure consistent order
+            self.normalized_shard_files = sorted(normalized_shard_files)
+
+            if len(self.normalized_shard_files) == 0: # i.e. the files have not been normalized yet
+                self.normalize()
 
 
-        ##### NOTE, NORMALIZATION WAS PREVIOUSLY OCCURING AFTER CREATING THE DATASETS; NOW IT OCCURS BEFORE #####
-        ####### WILL HAVE TO VERIFY THIS DOESN'T CAUSE ISSUES ##########
-        self.norm_params = norm_params
+    def normalize(self):
 
-        if self.normalize_obs or self.normalize_actions or self.transform_actions:
-            self.normalize(dataset)
-
-        if create_binary_actions: # note that this requires zeros to have remained zeros after transformation and normalization
-            self._create_binary_actions(config_manager)
-
-
-        # create datasets based on model type
-        if self.model_type != "dynamic_deephit":
-            # split into dymamic deephit dataset
-            self.dynamic_deephit_dataset = self._split_into_dynamic_deephit_dataset(dataset, config_manager)
-        else:
-            # split into the rl_dataset
-            self.rl_dataset = self._split_into_rl_dataset(dataset, config_manager)           
-                
-        # self.norm_params = norm_params
-
-        # if self.normalize_obs or self.normalize_actions or self.transform_actions:
-        #     self.normalize()
-
-        # if create_binary_actions: # note that this requires zeros to have remained zeros after transformation and normalization
-        #     self._create_binary_actions(config_manager)
-
-    
-    def get_start_states(self):
-        """Get starting states for V0 estimation."""
-        start_ind = np.where(self.rl_dataset["terminated"] == 1)[0] + 1
-        start_ind = start_ind[start_ind < len(self.rl_dataset["terminated"])]
-        start_ind = np.insert(start_ind, 0, 0)  # add the very first index
-
-        starting_states = self.rl_dataset["observations"][start_ind]
-        # make starting states a tensor so it can be passed to the actor and critic networks
-        starting_states = torch.tensor(starting_states, dtype=torch.float32)
-        # move to CUDA device
-        starting_states = starting_states.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-        return starting_states
-
-
-    def normalize(self, dataset):
-
-       
         if self.norm_params is not None:
             # if normalization parameters are provided, use them to normalize the data
             self.obs_norm_dict = self.norm_params['obs_norm_dict']

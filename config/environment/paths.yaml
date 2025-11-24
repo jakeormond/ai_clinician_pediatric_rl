@@ -5,8 +5,8 @@ local:
     code_dir: "/home/jake/Documents/AI_Clinician/choc_code"
   mimic_iv:
     experiments_dir: "/home/jake/Documents/AI_Clinician/experiments"
-    data_dir: "/home/jake/Documents/AI_Clinician/mimic_iv_data"
-    code_dir: "/home/jake/Documents/AI_Clinician/mimic_iv_code"
+    data_dir: "/home/jake/Documents/AI_Clinician//mimic_iv_3.1_data"
+    code_dir: "/home/jake/Documents/AI_Clinician/mimic_iv_3.1_code/mimic_iv_icu_data_processing"
   
 bayreuth_hpc:
   choc:

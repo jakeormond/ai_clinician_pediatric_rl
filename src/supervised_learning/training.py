@@ -329,6 +329,14 @@ def single_split_training(config_manager):
     """
     logger.info("Starting single split training...")
 
+    # Create processors
+    train_processor = ShardProcessor(config_manager, normalize=True, split='train')
+    val_processor = ShardProcessor(config_manager, split='val',
+                                  norm_params=train_processor.get_normalization_params())
+    test_processor = ShardProcessor(config_manager, split='test',
+                                   norm_params=train_processor.get_normalization_params())
+
+
     
 
 

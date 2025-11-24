@@ -34,6 +34,7 @@ import torch.nn.functional as F
 # from .plotting import create_all_plots, create_aggregated_shap_plots
 from ..utils.logging_utilities import wandb_init
 from ..data.data_processor import DataProcessor
+from ..data.data_processor_for_shards import ShardProcessor
 # from .dataset import Dataset
 from ..rl.replay_buffer import DynamicDeepHitDataset
 
@@ -318,6 +319,18 @@ def copy_model_parameters(trainer, config_manager):
 def restore_model_parameters(trainer, best_model_state, config_manager):
     trainer.model.load_state_dict(best_model_state) 
     
+
+def single_split_training(config_manager):
+    """
+    Runs training on a single predefined train/val/test split, with data saved
+    to HDF5 files (i.e. shards).
+    This one doesn't use a Dataset class, just DataProcessors created from the HDF5 files. 
+    On the first call, it normalizes the data and resaves the normalized data to new HDF5 files.
+    """
+    logger.info("Starting single split training...")
+
+    
+
 
 
 def development_training_loop(dataset, config_manager):

@@ -161,7 +161,7 @@ def main():
     config_manager = ConfigManager(args)
 
     if config_manager.model_type == "dynamic_deephit":
-        from ...supervised_learning.training import outer_training_loop, development_training_loop
+        from ...supervised_learning.training import outer_training_loop, development_training_loop, single_split_training
         from ...supervised_learning.models.dynamic_deephit import make_mixed_resolution_time_bins
 
     else:
@@ -174,11 +174,19 @@ def main():
      
     
     elif args.mode == 'single_split':
-        # load data
-        dataset = Dataset(config_manager.data_config)
-        print(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")
+        """
+        this is for the MIMIC IV 
+        Because the data is in hdf5 shards, we can't do much processing here, 
+        instead the data processopr for shards will handle it
+        """
+
+        # set training config
+        config_manager.set_training_config()
+
+        print(f"Running on {config_manager.environment} environment")
+        print(f"Experiment directory: {config_manager.experiment_dir}")
     
-    
+        results = single_split_training(config_manager)
     
     
     elif args.mode == 'development_single_split':

@@ -42,6 +42,9 @@ class ShardProcessor:
         self.split = split
         self.norm_params = norm_params
 
+        # load features to use from config_manager
+        self.features_to_use = pd.read_csv(config_manager.data_config['features_to_use_path'])
+
         if config_manager.action_mode == 'binary_only' or config_manager.action_mode == 'mixed':
             create_binary_actions = True
         else:
@@ -84,36 +87,96 @@ class ShardProcessor:
             self.action_maximum = None
             self.action_transformers = None
 
-        for shard_file in self.raw_shard_files:
+            for i, shard_file in enumerate(self.raw_shard_files):
+                logger.info(f"Normalizing shard file: {shard_file}")
+                # load the shard file
+                with h5py.File(shard_file, 'r') as f:      
+                    # convert feature_names from bytes to strings
+                    feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]
+                    
+                    stay_ids = f['stay_ids'][:]
+
+                    index_ptr = f['index_ptr'][:]
+
+                    trajectories = f['trajectories'][:]             
+                    
+                    if i == 0:
+                        n_features = len(feature_names)
+
+                        sums = np.zeros(n_features)
+                        sq_sums = np.zeros(n_features)
+                        counts = 0
+                        minima = np.full(n_features, np.inf)
+                        maxima = np.full(n_features, -np.inf)
+
+                        # compute sums, squared sums, counts, minima, maxima for each feature
+                    sums += np.sum(trajectories, axis=0)
+                    sq_sums += np.sum(trajectories ** 2, axis=0)
+                    counts += trajectories.shape[0]
+                    minima = np.minimum(minima, np.min(trajectories, axis=0))
+                    maxima = np.maximum(maxima, np.max(trajectories, axis=0))
+
+            means = sums / counts
+            variances = (sq_sums / counts) - (means ** 2)
+            stds = np.sqrt(variances)
+
+            self.obs_norm_dict = {}
+            for i, feature in enumerate(feature_names):
+                self.obs_norm_dict[feature] = {
+                    'min': minima[i],
+                    'max': maxima[i],
+                    'mean': means[i],
+                    'std': stds[i]
+                }
+
+        # now normalize each shard file and save to new file
+        for i, shard_file in enumerate(self.raw_shard_files):
             logger.info(f"Normalizing shard file: {shard_file}")
             # load the shard file
-            with h5py.File(shard_file, 'r') as f:
-                # load the dataframe
-                df = pd.read_hdf(shard_file, key='dataframe')
-        
-        
-                # List all groups/datasets
-                print(list(f.keys()))
+            with h5py.File(shard_file, 'r') as f:      
+                # convert feature_names from bytes to strings
+                feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]
                 
-                # Access a dataset
-                # dataset = f['dataset_name'][:]  # Use [:] to read the data into a NumPy array
-                # print(dataset.shape, dataset.dtype)
-        
-        
-        
-        
-        
-        
-        
-        if dataset.normalize_obs:
-            self._normalize_obs(dataset)               
+                stay_ids = f['stay_ids'][:]
 
-        if dataset.transform_actions: # this has to occur before normalization
-            self._transform_actions()
+                index_ptr = f['index_ptr'][:]
 
-        if dataset.normalize_actions:
-            self._normalize_actions() 
-            
+                trajectories = f['trajectories'][:]
+
+                # normalize the trajectories
+                for j, feature in enumerate(feature_names):
+                    feature_row = self.features_to_use[self.features_to_use['feature'] == feature]
+                    data_type = feature_row['data_type'].values[0]
+                    feature_set = feature_row['feature_set'].values[0]
+
+                    if data_type == 'ordinal' or feature_set == 'medications':
+                        # min-max normalize the feature
+                        max_min_diff = self.obs_norm_dict[feature]['max'] - self.obs_norm_dict[feature]['min']
+                        trajectories[:, j] = (trajectories[:, j] - self.obs_norm_dict[feature]['min']) / max_min_diff  
+                    
+                    elif data_type == 'continuous':
+                        # z-score normalize the feature
+                        trajectories[:, j] = (trajectories[:, j] - self.obs_norm_dict[feature]['mean']) / self.obs_norm_dict[feature]['std']
+                    
+                    # for binary features, do nothing
+                    # throw error if any nans, infs, or valeus greater than 1e6
+                    if np.isnan(trajectories[:, j]).any():
+                        raise ValueError(f"NaNs found in normalized feature {feature} in shard {shard_file}")
+                    if np.isinf(trajectories[:, j]).any():
+                        raise ValueError(f"Infs found in normalized feature {feature} in shard {shard_file}")
+                    if np.abs(trajectories[:, j]).max() > 1e6:
+                        raise ValueError(f"Extreme values found in normalized feature {feature} in shard {shard_file}")
+                      
+            # save the normalized shard file
+            normalized_shard_file = shard_file.replace("_shard.h5", "_shard_normalized.h5")
+            with h5py.File(normalized_shard_file, 'w') as f:
+                f.create_dataset('feature_names', data=[name.encode('utf-8') for name in feature_names])
+                f.create_dataset('stay_ids', data=stay_ids)
+                f.create_dataset('index_ptr', data=index_ptr)
+                f.create_dataset('trajectories', data=trajectories)
+
+            logger.info(f"Saved normalized shard file: {normalized_shard_file}")
+
         
     def _split_into_dynamic_deephit_dataset(self, dataset, config_manager):
         """

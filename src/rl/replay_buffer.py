@@ -80,10 +80,19 @@ class DynamicDeepHit_Lazy(Dataset):
     """
     For "lazy loading" large datasets that don't fit into memory.
     """
-    def __init__(self, index_df, h5_paths, window_size=72):
-        self.index = index_df.reset_index(drop=True)
-        self.h5_paths = h5_paths
-        self.window = window_size
+    def __init__(
+            self, 
+            data_processor,
+            config_manager
+            ):
+        self.traj_index = data_processor.traj_index_table.set_index('stay_id')
+        self.window_index = data_processor.window_index_table
+        self.h5_paths = data_processor.normalized_shard_files
+        self.window_length = config_manager.training_config['window_length']
+        self.time_bins = config_manager.time_bins
+        
+        # Create mapping from file path to index for fast lookup
+        self.path_to_idx = {path: i for i, path in enumerate(self.h5_paths)}
         
         # File handles will be created per worker
         self.files = None
@@ -91,42 +100,74 @@ class DynamicDeepHit_Lazy(Dataset):
     def _init_files(self):
         """Only open file handles if they haven't been created yet."""
         if self.files is None:
-            self.files = [h5py.File(p, "r") for p in self.h5_paths]
+            self.files = [h5py.File(path, "r") for path in self.h5_paths]
 
     def __len__(self):
-        return len(self.index)
+        return len(self.window_index)
 
     def __getitem__(self, idx):
+        # Make sure H5 files exist in this worker
         self._init_files()
 
-        row = self.index.iloc[idx]
+        row = self.window_index.iloc[idx]
+
+        stay_id = row.stay_id
+        window_end = row.window_end  
+        time_to_event = row.time_to_event
+        event_raw = row.event_raw
+        event = event_raw + 1 # convert to 1 or 2 (0 is censored, though we aren't using censored data here)
+
+        # ---- Retrieve trajectory location ----
+        traj_info = self.traj_index.loc[stay_id]
         
-        file = self.files[row.file_id]
-        features = file["features"]
-
-        # Random window start
-        T = row.length
-        start_in_traj = np.random.randint(0, T - self.window + 1)
-        end_in_traj = start_in_traj + self.window
+        traj_start = int(traj_info.start_index)
+        shard_file = traj_info.shard_file
+        # Get shard index from path
+        shard_idx = self.path_to_idx[shard_file]
         
-        # Convert to absolute indices
-        abs_start = row.start + start_in_traj
-        abs_end = abs_start + self.window
+        # Compute window start/end inside trajectory
+        window_end_abs = window_end
+        window_start = max(0, window_end_abs - self.window_length + 1)
+                
+        # Absolute indices into the H5 feature array
+        abs_start = traj_start + window_start
+        abs_end = traj_start + window_end_abs
         
-        # Lazy load window
-        x = features[abs_start:abs_end]     # (window_size, num_features)
+        # load feature slice
+        features = self.files[shard_idx]['trajectories'][abs_start:abs_end+1]
+        features = np.asarray(features)   # (slice_len, num_features)
 
-        # Compute time to event
-        time_to_event = (T - 1) - (end_in_traj - 1)
+        slice_len = features.shape[0]
+        
+        # ---- Pad if needed (repeat first timestep) ----
+        if slice_len < self.window_length:
+            pad = self.window_length - slice_len
+            first_step = features[0:1]
+            pad_block = np.repeat(first_step, pad, axis=0)
+            window_feat = np.vstack([pad_block, features])
+        else:
+            window_feat = features
+        
+        # Convert to float32 torch tensor
+        window_feat = torch.from_numpy(window_feat).float()
 
-        event_label = row.event_label
+        # ---- Mask (actual content only) ----
+        mask = torch.ones(self.window_length, dtype=torch.float32)  # this isn't necessary, but needs to 
+                                                                    # be removed from model as well.
+        # ---- Time-to-event binning ----
+        # Right boundary inclusive, then shift to 0-based bins
+        tte_bin = np.digitize(time_to_event, self.time_bins, right=True) - 1
 
-        return (
-            torch.tensor(x, dtype=torch.float32), 
-            torch.tensor(event_label, dtype=torch.long),
-            torch.tensor(time_to_event, dtype=torch.long)
-        )
-
+        # ---- Package output ----
+        return {
+            "features": window_feat,                  # (window_length, F)
+            "mask": mask,                             # (window_length,)
+            "event": torch.tensor(event, dtype=torch.long),
+            "time_to_event": torch.tensor(tte_bin, dtype=torch.long),
+            "stay_id": stay_id                    # useful for debugging
+        }
+        
+        
 
 def worker_init_fn(worker_id):
     """Initialize each worker with its own file handles."""

@@ -29,8 +29,7 @@ class ShardProcessor:
             split = 'train', 
             normalize = True,
             norm_params=None, 
-            verbose=False
-            ):
+        ):
         """
         Unlike with dataframes, with the shards, I've already dropped the features we
         don't want to use, so we just need to normalize, create binary actions,
@@ -75,9 +74,43 @@ class ShardProcessor:
         else:
             # raise NotImplementedError("Non-normalized shard processing not implemented yet.")
             raise NotImplementedError()
+        
+        # get physiological feature indices for dynamic deephit model
+        # load 'feature_names' from the first h5 file
+        with h5py.File(self.normalized_shard_files[0], 'r') as f:
+            feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))] 
 
-        # create index table
-        self.create_index_table()
+        self.physiological_feature_ind = [] # for dynamic deephit model, which tries to predict next physiological features
+        self.physiological_feature_type = []
+
+        physiological_feature_sets = [
+            'hemodynamics', 'labs', 'neurological', 'routine_vital_signs'
+            ]
+        
+        for i, feature in enumerate(feature_names):
+            feature_row = self.features_to_use[self.features_to_use['feature'] == feature]            
+            feature_set = feature_row['feature_set'].values[0]
+            data_type = feature_row['data_type'].values[0]
+            if feature_set in physiological_feature_sets:
+                self.physiological_feature_ind.append(i)
+                self.physiological_feature_type.append(data_type)
+
+
+        self.index_table_path = os.path.join(self.shard_dir, f"{self.split}_index_table.parquet")
+        if os.path.exists(self.index_table_path):
+            logger.info(f"Loading existing index table from {self.index_table_path}")
+            self.traj_index_table = pd.read_parquet(self.index_table_path)
+        else:
+            # create index table
+            self.create_index_table()
+
+        # create window index table
+        window_index_table_path = os.path.join(self.shard_dir, f"{self.split}_window_index_table.parquet")
+        if os.path.exists(window_index_table_path):
+            logger.info(f"Loading existing window index table from {window_index_table_path}")
+            self.window_index_table = pd.read_parquet(window_index_table_path)
+        else:
+            self.create_index_table_for_window_sampling(config_manager)
 
 
     def create_index_table(self):
@@ -111,13 +144,72 @@ class ShardProcessor:
             else:
                 df = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
 
-        self.index_table = df
+        self.traj_index_table = df
 
         # save the index table to the shard dir
         index_table_path = os.path.join(self.shard_dir, f"{self.split}_index_table.parquet")
         df.to_parquet(index_table_path)
         logger.info(f"Saved index table to {index_table_path}")
-            
+
+
+    def create_index_table_for_window_sampling(self, config_manager):
+        seed = config_manager.training_config.get('random_seed', 42)
+        rng = np.random.default_rng(seed)
+        
+        rows = []
+
+        self.window_length = config_manager.training_config['window_length']
+        self.time_bins = config_manager.time_bins
+
+        min_gap = int(np.floor(np.min(np.diff(self.time_bins))))
+        min_gap = max(min_gap, 1)
+        n_windows_per_bin = max(int(min_gap / 4), 1)
+
+        for _, row in self.traj_index_table.iterrows():
+            stay_id = row['stay_id']
+            traj_length = row['length']
+
+            if traj_length > config_manager.max_encounter_length:
+                continue
+
+            event_raw = row['event'] # will convert to 1 for survival, 2 for death to be consistent with existing code
+
+            time_to_event = np.arange(traj_length, 0, -1)
+
+            for b in range(len(self.time_bins) - 1):
+                lower_bound = self.time_bins[b]
+                upper_bound = self.time_bins[b+1]
+
+                indices_in_bin = np.where((time_to_event <= upper_bound) & 
+                                          (time_to_event > lower_bound))[0]
+                
+                if len(indices_in_bin) == 0:
+                    continue
+
+                n_to_sample = min(n_windows_per_bin, len(indices_in_bin))
+                sampled = rng.choice(indices_in_bin, size=n_to_sample, replace=False)
+
+                for idx in sampled:
+                    tte = time_to_event[idx]   # identical to your logic
+                    rows.append({
+                        "stay_id": stay_id,
+                        "window_end": int(idx),         # end index (0-based)
+                        "time_to_event": int(tte),
+                        "event_raw": event_raw
+                    })
+
+        # build dataframe
+        window_index_table = pd.DataFrame(rows)
+
+        # sort by stay_id and window_end   
+        self.window_index_table = window_index_table.sort_values(by=['stay_id', 'window_end']).reset_index(drop=True)
+
+        # save the window index table to the shard dir
+        window_index_table_path = os.path.join(self.shard_dir, f"{self.split}_window_index_table.parquet")
+        self.window_index_table.to_parquet(window_index_table_path)
+        logger.info(f"Saved window index table to {window_index_table_path}")
+
+
                 
     def normalize(self):
 
@@ -792,6 +884,11 @@ class ShardProcessor:
 
     
     def get_normalization_params(self):
+
+        # check if self has the "obs_norm_dict" attribute
+        if not hasattr(self, 'obs_norm_dict'):
+            return None
+
         return {
             "obs_norm_dict": self.obs_norm_dict,
             "action_minimum": self.action_minimum,
@@ -800,9 +897,6 @@ class ShardProcessor:
         }
                 
         
-
-
-
 def main():
     pass
 

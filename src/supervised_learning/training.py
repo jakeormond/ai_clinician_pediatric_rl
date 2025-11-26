@@ -36,7 +36,7 @@ from ..utils.logging_utilities import wandb_init
 from ..data.data_processor import DataProcessor
 from ..data.data_processor_for_shards import ShardProcessor
 # from .dataset import Dataset
-from ..rl.replay_buffer import DynamicDeepHitDataset
+from ..rl.replay_buffer import DynamicDeepHitDataset, DynamicDeepHit_Lazy, worker_init_fn
 
 from ..utils.utilities import set_seed
 from ..rl.plotting import plot_losses,plot_losses_cv, plot_c_and_brier_over_time, plot_auroc_prc_curves
@@ -139,9 +139,34 @@ def create_processors(dataset, train_id, val_id, config_manager):
     return train_processor, val_processor, norm_params
 
 
-def create_buffer(processor, batch_size):
-    dataset = DynamicDeepHitDataset(processor.dynamic_deephit_dataset)
-    buffer = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+def create_processor_from_shards(config_manager, normalize=True):
+    train_processor = ShardProcessor(config_manager, normalize=normalize, split='train')
+    val_processor = ShardProcessor(config_manager, split='val',
+                                  norm_params=train_processor.get_normalization_params())
+    test_processor = ShardProcessor(config_manager, split='test',
+                                   norm_params=train_processor.get_normalization_params())
+
+    return train_processor, val_processor, test_processor
+
+def create_buffer(processor, batch_size, config_manager):
+    if config_manager.hospital == 'choc':
+        dataset = DynamicDeepHitDataset(processor.dynamic_deephit_dataset)
+        buffer = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    elif config_manager.hospital == 'mimic_iv':
+        dataset = DynamicDeepHit_Lazy(
+            processor,
+            config_manager
+        )
+        buffer = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=4, # set to 0 for debugging; increase for performance
+            worker_init_fn=worker_init_fn,
+            pin_memory=True
+        )
+    
     return buffer
 
 
@@ -330,16 +355,33 @@ def single_split_training(config_manager):
     logger.info("Starting single split training...")
 
     # Create processors
-    train_processor = ShardProcessor(config_manager, normalize=True, split='train')
-    val_processor = ShardProcessor(config_manager, split='val',
-                                  norm_params=train_processor.get_normalization_params())
-    test_processor = ShardProcessor(config_manager, split='test',
-                                   norm_params=train_processor.get_normalization_params())
-    
-    
+    train_processor, val_processor, test_processor = create_processor_from_shards(
+        config_manager, 
+        normalize=True
+        )
+
+    hyperparameters = get_fixed_hyperparameters(config_manager)
+
+
 
 
     
+
+    dataset = DynamicDeepHit_Lazy(train_processor, config_manager)   
+
+    loader = DataLoader(
+        dataset,
+        batch_size=config_manager.training_config['batch_size'],
+        shuffle=True,
+        num_workers=4, # set to 0 for debugging; increase for performance
+        worker_init_fn=worker_init_fn,
+        pin_memory=True
+    )
+
+    batch = next(iter(loader))
+
+
+    pass
 
 
 
@@ -382,7 +424,7 @@ def development_training_loop(dataset, config_manager):
         plot_c_and_brier_over_time(test_scores, config_manager)
 
         # evaluate final model and plot auroc and average precision curves
-        test_buffer = create_buffer(test_processor, config_manager.training_config['batch_size'])
+        test_buffer = create_buffer(test_processor, config_manager.training_config['batch_size'], config_manager)
         final_test_scores = evaluate_final_model(
             trainer,
             test_buffer
@@ -712,8 +754,8 @@ def train_with_hyperparameters(
     loss_metric = config_manager.training_config['loss_metric']
 
     # Create replay buffers
-    training_buffer = create_buffer(train_processor, batch_size)
-    val_test_buffer = create_buffer(val_test_processor, batch_size)
+    training_buffer = create_buffer(train_processor, batch_size, config_manager)
+    val_test_buffer = create_buffer(val_test_processor, batch_size, config_manager)
     
     # create trainer
     trainer = create_trainer(train_processor, hyperparams, config_manager)

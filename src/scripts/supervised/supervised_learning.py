@@ -183,6 +183,14 @@ def main():
         # set training config
         config_manager.set_training_config()
 
+        if config_manager.model_type == "dynamic_deephit":
+
+            # set max encounter length as 2 months
+            max_encounter_length = 24 * 60  # hours
+            time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
+            config_manager.max_encounter_length = max_encounter_length
+            config_manager.time_bins = time_bins
+
         print(f"Running on {config_manager.environment} environment")
         print(f"Experiment directory: {config_manager.experiment_dir}")
     

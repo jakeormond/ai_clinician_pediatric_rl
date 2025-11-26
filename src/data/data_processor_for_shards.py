@@ -109,16 +109,19 @@ class ShardProcessor:
                         minima = np.full(n_features, np.inf)
                         maxima = np.full(n_features, -np.inf)
 
-                        # compute sums, squared sums, counts, minima, maxima for each feature
-                    sums += np.sum(trajectories, axis=0)
-                    sq_sums += np.sum(trajectories ** 2, axis=0)
+                    # compute sums, squared sums, counts, minima, maxima for 1 feature at a time to avoid floating point catastophic cancellation
+                    for j in range(n_features):
+                        feature_trajectories = trajectories[:, j]
+                        sums[j] += np.sum(feature_trajectories)
+                        sq_sums[j] += np.sum(feature_trajectories ** 2)
+                        minima[j] = np.minimum(minima[j], np.min(feature_trajectories))
+                        maxima[j] = np.maximum(maxima[j], np.max(feature_trajectories))
                     counts += trajectories.shape[0]
-                    minima = np.minimum(minima, np.min(trajectories, axis=0))
-                    maxima = np.maximum(maxima, np.max(trajectories, axis=0))
 
             means = sums / counts
             variances = (sq_sums / counts) - (means ** 2)
-            stds = np.sqrt(variances)
+            # elementwise clamp variances at 0 to avoid tiny negative values from numerical precision
+            stds = np.sqrt(np.maximum(variances, 0.0))  # avoid negative variance due to numerical issues
 
             self.obs_norm_dict = {}
             for i, feature in enumerate(feature_names):
@@ -173,7 +176,7 @@ class ShardProcessor:
                 f.create_dataset('feature_names', data=[name.encode('utf-8') for name in feature_names])
                 f.create_dataset('stay_ids', data=stay_ids)
                 f.create_dataset('index_ptr', data=index_ptr)
-                f.create_dataset('trajectories', data=trajectories)
+                f.create_dataset('trajectories', data=trajectories.astype(np.float32))
 
             logger.info(f"Saved normalized shard file: {normalized_shard_file}")
 

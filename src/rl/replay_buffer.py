@@ -10,6 +10,7 @@ from typing import Dict, List
 
 import numpy as np
 import pandas as pd
+import h5py
 import torch
 from torch.utils.data import Dataset
 
@@ -75,8 +76,63 @@ class DynamicDeepHitDataset(Dataset):
         ]
     
 
+class DynamicDeepHit_Lazy(Dataset):
+    """
+    For "lazy loading" large datasets that don't fit into memory.
+    """
+    def __init__(self, index_df, h5_paths, window_size=72):
+        self.index = index_df.reset_index(drop=True)
+        self.h5_paths = h5_paths
+        self.window = window_size
+        
+        # File handles will be created per worker
+        self.files = None
+
+    def _init_files(self):
+        """Only open file handles if they haven't been created yet."""
+        if self.files is None:
+            self.files = [h5py.File(p, "r") for p in self.h5_paths]
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, idx):
+        self._init_files()
+
+        row = self.index.iloc[idx]
+        
+        file = self.files[row.file_id]
+        features = file["features"]
+
+        # Random window start
+        T = row.length
+        start_in_traj = np.random.randint(0, T - self.window + 1)
+        end_in_traj = start_in_traj + self.window
+        
+        # Convert to absolute indices
+        abs_start = row.start + start_in_traj
+        abs_end = abs_start + self.window
+        
+        # Lazy load window
+        x = features[abs_start:abs_end]     # (window_size, num_features)
+
+        # Compute time to event
+        time_to_event = (T - 1) - (end_in_traj - 1)
+
+        event_label = row.event_label
+
+        return (
+            torch.tensor(x, dtype=torch.float32), 
+            torch.tensor(event_label, dtype=torch.long),
+            torch.tensor(time_to_event, dtype=torch.long)
+        )
 
 
+def worker_init_fn(worker_id):
+    """Initialize each worker with its own file handles."""
+    worker_info = torch.utils.data.get_worker_info()
+    dataset = worker_info.dataset
+    dataset.files = None
 
 
 

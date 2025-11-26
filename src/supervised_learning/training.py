@@ -335,6 +335,8 @@ def single_split_training(config_manager):
                                   norm_params=train_processor.get_normalization_params())
     test_processor = ShardProcessor(config_manager, split='test',
                                    norm_params=train_processor.get_normalization_params())
+    
+    
 
 
     

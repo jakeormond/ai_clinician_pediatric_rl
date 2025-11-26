@@ -72,7 +72,53 @@ class ShardProcessor:
             if len(self.normalized_shard_files) == 0: # i.e. the files have not been normalized yet
                 self.normalize()
 
+        else:
+            # raise NotImplementedError("Non-normalized shard processing not implemented yet.")
+            raise NotImplementedError()
 
+        # create index table
+        self.create_index_table()
+
+
+    def create_index_table(self):
+        # create an index table mapping from global index to (shard_file, local_index)
+        for i, file_path in enumerate(self.normalized_shard_files):
+            with h5py.File(file_path, 'r') as f:
+                feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]                    
+                stay_ids = f['stay_ids'][:]
+                index_ptr = f['index_ptr'][:]
+                trajectories = f['trajectories'][:]     
+
+            # get events, which are the "death" feature in the final row of each trajectory
+            death_feature_index = feature_names.index('death')
+            end_indices = index_ptr[1:] - 1
+            events = trajectories[end_indices, death_feature_index].astype(int)
+
+            lengths = np.diff(index_ptr).astype(int)
+
+            rows = []
+            for stay_id, start, length, event in zip(stay_ids, index_ptr[:-1], lengths, events):
+                rows.append({
+                    'stay_id': stay_id,
+                    'shard_file': file_path,
+                    'start_index': start,
+                    'length': length,
+                    'event': event
+                })
+            
+            if i == 0:
+                df = pd.DataFrame(rows)
+            else:
+                df = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
+
+        self.index_table = df
+
+        # save the index table to the shard dir
+        index_table_path = os.path.join(self.shard_dir, f"{self.split}_index_table.parquet")
+        df.to_parquet(index_table_path)
+        logger.info(f"Saved index table to {index_table_path}")
+            
+                
     def normalize(self):
 
         if self.norm_params is not None:
@@ -250,14 +296,6 @@ class ShardProcessor:
                     sampled_indices = np.random.choice(indices_in_bin, size=n_to_sample, replace=False).tolist()
                     window_ind += sampled_indices
 
-            # # additonally, we need to train on partial windows from the start of the trajectory
-            # if traj_length > self.window_length: # then we need to sample additional partial windows from trajectory start
-            #     early_window_end_indices = np.random.choice(
-            #         np.arange(0, self.window_length), 
-            #         size=min(n_early_windows, self.window_length), 
-            #         replace=False).tolist()
-            #     window_ind += early_window_end_indices
-
             window_ind = list(set(window_ind))  # remove duplicates
             window_ind = sorted(window_ind)
 
@@ -293,11 +331,6 @@ class ShardProcessor:
                 # Pad using the first column from window_features if needed
                 if window_len < self.window_length:
                     pad_width = self.window_length - window_len
-                    # window_features = np.pad(window_features, 
-                    #                         ((pad_width, 0), (0, 0)), 
-                    #                         mode='constant', 
-                    #                         constant_values=0)
-                    # mask_array[array_ind, pad_width:] = 1
                     padding = np.tile(window_features[0], (pad_width, 1))
                     window_features = np.vstack((padding, window_features))
                     mask_array[array_ind, :] = 1

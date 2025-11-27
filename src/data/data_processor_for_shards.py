@@ -40,6 +40,7 @@ class ShardProcessor:
         """
         self.split = split
         self.norm_params = norm_params
+        self.window_length = config_manager.training_config['window_length']
 
         # load features to use from config_manager
         self.features_to_use = pd.read_csv(config_manager.data_config['features_to_use_path'])
@@ -70,6 +71,11 @@ class ShardProcessor:
 
             if len(self.normalized_shard_files) == 0: # i.e. the files have not been normalized yet
                 self.normalize()
+                all_files = os.listdir(self.shard_dir)
+                normalized_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
+                                    f.startswith(self.split) and f.endswith("_shard_normalized.h5")]
+                # sort the files to ensure consistent order
+                self.normalized_shard_files = sorted(normalized_shard_files)
 
         else:
             # raise NotImplementedError("Non-normalized shard processing not implemented yet.")
@@ -79,7 +85,7 @@ class ShardProcessor:
         # load 'feature_names' from the first h5 file
         with h5py.File(self.normalized_shard_files[0], 'r') as f:
             feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))] 
-            self.feature_dim = f['trajectories'].shape[1]
+            self.feature_dim = f['trajectories'].shape[2]
 
         self.physiological_feature_ind = [] # for dynamic deephit model, which tries to predict next physiological features
         self.physiological_feature_type = []
@@ -116,7 +122,8 @@ class ShardProcessor:
 
     def create_index_table(self):
         # create an index table mapping from global index to (shard_file, local_index)
-        for i, file_path in enumerate(self.normalized_shard_files):
+        for i, file_path in enumerate(self.raw_shard_files):
+            # get death feature and lengths from the raw files
             with h5py.File(file_path, 'r') as f:
                 feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]                    
                 stay_ids = f['stay_ids'][:]
@@ -127,15 +134,25 @@ class ShardProcessor:
             death_feature_index = feature_names.index('death')
             end_indices = index_ptr[1:] - 1
             events = trajectories[end_indices, death_feature_index].astype(int)
-
             lengths = np.diff(index_ptr).astype(int)
 
+            # then open the normalized file to get the correct indices
+            file_path = self.normalized_shard_files[i]
+            with h5py.File(file_path, 'r') as f:
+                feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]
+                stay_ids = f['stay_ids'][:]
+                window_ptr = f['window_ptr'][:]
+                first_window_start_idx = f['first_window_start_idx'][:]
+                trajectories = f['trajectories'][:]
+
             rows = []
-            for stay_id, start, length, event in zip(stay_ids, index_ptr[:-1], lengths, events):
+            for stay_id, start_window, start_index, length, event in \
+                zip(stay_ids, window_ptr[:-1], first_window_start_idx, lengths, events):
                 rows.append({
                     'stay_id': stay_id,
                     'shard_file': file_path,
-                    'start_index': start,
+                    'window_idx': start_window,
+                    'start_index': start_index, # first window
                     'length': length,
                     'event': event
                 })
@@ -159,7 +176,6 @@ class ShardProcessor:
         
         rows = []
 
-        self.window_length = config_manager.training_config['window_length']
         self.time_bins = config_manager.time_bins
 
         min_gap = int(np.floor(np.min(np.diff(self.time_bins))))
@@ -169,6 +185,8 @@ class ShardProcessor:
         for _, row in self.traj_index_table.iterrows():
             stay_id = row['stay_id']
             traj_length = row['length']
+            window_idx = row['window_idx']
+            start_idx = row['start_index']
 
             if traj_length > config_manager.max_encounter_length:
                 continue
@@ -192,9 +210,35 @@ class ShardProcessor:
 
                 for idx in sampled:
                     tte = time_to_event[idx]   # identical to your logic
+                    sample_end_idx = start_idx + idx
+                    sample_end_window_idx = np.floor(sample_end_idx/self.window_length)
+                    
+                    if sample_end_window_idx > 0:
+                        window_length = self.window_length
+                        sample_end_idx = sample_end_idx - (sample_end_window_idx * self.window_length)
+                        sample_start_idx = sample_end_idx - self.window_length + 1
+                        
+                        if sample_start_idx < 0:
+                            sample_start_window_idx = sample_end_window_idx - 1
+                            sample_start_idx = self.window_length + sample_start_idx
+                        else:
+                            sample_start_window_idx = sample_end_window_idx
+
+                    else:
+                        sample_start_window_idx = 0
+                        sample_start_idx = 0 
+                        window_length = sample_end_idx + 1               
+             
+                    sample_start_window_idx += window_idx
+                    sample_end_window_idx += window_idx
+
                     rows.append({
                         "stay_id": stay_id,
-                        "window_end": int(idx),         # end index (0-based)
+                        "window_start": int(sample_start_window_idx), # start index (0-based)
+                        "window_end": int(sample_end_window_idx),         # end index (0-based)
+                        "start_index": int(sample_start_idx),         # start index within window
+                        "end_index": int(sample_end_idx),             # end index within window
+                        "window_length": int(window_length),
                         "time_to_event": int(tte),
                         "event_raw": event_raw
                     })
@@ -203,7 +247,7 @@ class ShardProcessor:
         window_index_table = pd.DataFrame(rows)
 
         # sort by stay_id and window_end   
-        self.window_index_table = window_index_table.sort_values(by=['stay_id', 'window_end']).reset_index(drop=True)
+        self.window_index_table = window_index_table.sort_values(by=['stay_id', 'window_end', 'end_index']).reset_index(drop=True)
 
         # save the window index table to the shard dir
         window_index_table_path = os.path.join(self.shard_dir, f"{self.split}_window_index_table.parquet")
@@ -220,6 +264,7 @@ class ShardProcessor:
             self.action_minimum = self.norm_params['action_minimum']
             self.action_maximum = self.norm_params['action_maximum']
             self.action_transformers = self.norm_params['action_transformers']
+
         else:
             self.obs_norm_dict = None
             self.action_minimum = None
@@ -231,13 +276,16 @@ class ShardProcessor:
                 # load the shard file
                 with h5py.File(shard_file, 'r') as f:      
                     # convert feature_names from bytes to strings
-                    feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]
-                    
+                    feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]                
                     stay_ids = f['stay_ids'][:]
-
                     index_ptr = f['index_ptr'][:]
-
                     trajectories = f['trajectories'][:]             
+                    
+                    # get the index of the death feature, and drop it from the trajectories
+                    death_feature_index = feature_names.index('death')
+                    # update feature_names
+                    feature_names.pop(death_feature_index)
+                    trajectories = np.delete(trajectories, death_feature_index, axis=1)
                     
                     if i == 0:
                         n_features = len(feature_names)
@@ -277,13 +325,17 @@ class ShardProcessor:
             # load the shard file
             with h5py.File(shard_file, 'r') as f:      
                 # convert feature_names from bytes to strings
-                feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]
-                
+                feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]                
                 stay_ids = f['stay_ids'][:]
-
                 index_ptr = f['index_ptr'][:]
-
                 trajectories = f['trajectories'][:]
+
+                # get the index of the death feature, and drop it from the trajectories
+                death_feature_index = feature_names.index('death')
+                # update feature_names
+                feature_names.pop(death_feature_index)
+                n_features = len(feature_names)
+                trajectories = np.delete(trajectories, death_feature_index, axis=1)
 
                 # normalize the trajectories
                 for j, feature in enumerate(feature_names):
@@ -309,13 +361,60 @@ class ShardProcessor:
                     if np.abs(trajectories[:, j]).max() > 1e6:
                         raise ValueError(f"Extreme values found in normalized feature {feature} in shard {shard_file}")
                       
+            
+            # split into windows for faster loading later
+            seq_buffer = []
+            first_window_start_idx = [] # because most trajectory lengths will not be perfectly divisible by window_size
+                                        # we need to pad   
+            window_ptr = [0]
+                                         
+
+            for i, stay_id in enumerate(stay_ids):
+                start_idx = index_ptr[i]
+                length = index_ptr[i+1] - index_ptr[i]
+                end_idx = start_idx + length
+
+                traj = trajectories[start_idx:end_idx]
+
+                # compute number of windows
+                n_windows = int(np.ceil(length / self.window_length))
+
+                # compute total length after padding
+                total_length = n_windows * self.window_length
+
+                # pad traj if needed (repeat first timestep)
+                if total_length > length:
+                    pad_length = total_length - length
+                    padding = np.tile(traj[0], (pad_length, 1))
+                    traj = np.vstack((padding, traj))
+                else:
+                    pad_length = 0
+                
+                # Reshape into (n_windows, window_size, n_features)
+                windows = traj.reshape(n_windows, self.window_length, traj.shape[1])  
+
+                seq_buffer.append(windows)
+                first_window_start_idx.append(pad_length)
+                window_ptr.append(window_ptr[-1] + n_windows)
+            
+            # concatenate all windows into a single array
+            seq_array = np.concatenate(seq_buffer, axis=0)
+            window_ptr = np.array(window_ptr, dtype=np.int32)
+            first_window_start_idx = np.array(first_window_start_idx, dtype=np.int32)
+
             # save the normalized shard file
             normalized_shard_file = shard_file.replace("_shard.h5", "_shard_normalized.h5")
             with h5py.File(normalized_shard_file, 'w') as f:
                 f.create_dataset('feature_names', data=[name.encode('utf-8') for name in feature_names])
-                f.create_dataset('stay_ids', data=stay_ids)
-                f.create_dataset('index_ptr', data=index_ptr)
-                f.create_dataset('trajectories', data=trajectories.astype(np.float32))
+                f.create_dataset('stay_ids', data=stay_ids, dtype=np.int32)
+                f.create_dataset('window_ptr', data=window_ptr, dtype=np.int32)
+                f.create_dataset('first_window_start_idx', data=first_window_start_idx, dtype=np.int32)
+                f.create_dataset(
+                    'trajectories', 
+                    data=seq_array.astype(np.float32), 
+                    compression="lzf",
+                    chunks=(1, self.window_length, n_features)
+                )
 
             logger.info(f"Saved normalized shard file: {normalized_shard_file}")
 

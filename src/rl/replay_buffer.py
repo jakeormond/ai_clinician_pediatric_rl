@@ -112,7 +112,11 @@ class DynamicDeepHit_Lazy(Dataset):
         row = self.window_index.iloc[idx]
 
         stay_id = row.stay_id
+        window_start = row.window_start
         window_end = row.window_end  
+        start_index = row.start_index
+        end_index = row.end_index
+        window_length = row.window_length
         time_to_event = row.time_to_event
         event_raw = row.event_raw
         event = event_raw + 1 # convert to 1 or 2 (0 is censored, though we aren't using censored data here)
@@ -120,28 +124,30 @@ class DynamicDeepHit_Lazy(Dataset):
         # ---- Retrieve trajectory location ----
         traj_info = self.traj_index.loc[stay_id]
         
-        traj_start = int(traj_info.start_index)
         shard_file = traj_info.shard_file
         # Get shard index from path
         shard_idx = self.path_to_idx[shard_file]
-        
-        # Compute window start/end inside trajectory
-        window_end_abs = window_end
-        window_start = max(0, window_end_abs - self.window_length + 1)
-                
-        # Absolute indices into the H5 feature array
-        abs_start = traj_start + window_start
-        abs_end = traj_start + window_end_abs
-        
+               
         # load feature slice
-        features = self.files[shard_idx]['trajectories'][abs_start:abs_end+1]
-        features = np.asarray(features)   # (slice_len, num_features)
+        if window_start == window_end:
+            # all in one window
+            features = self.files[shard_idx]['trajectories'][window_start, :, :]
+            features = features[start_index:end_index+1]
+        else:
+            # spans two windows
+            first_window = self.files[shard_idx]['trajectories'][window_start, :, :]
+            second_window = self.files[shard_idx]['trajectories'][window_end, :, :]
 
-        slice_len = features.shape[0]
+            first_part = first_window[start_index:]
+            second_part = second_window[:end_index+1]
+
+            features = np.vstack([first_part, second_part])
+
+        features = np.asarray(features)   # (slice_len, num_features)
         
         # ---- Pad if needed (repeat first timestep) ----
-        if slice_len < self.window_length:
-            pad = self.window_length - slice_len
+        if window_length < self.window_length:
+            pad = self.window_length - window_length
             first_step = features[0:1]
             pad_block = np.repeat(first_step, pad, axis=0)
             window_feat = np.vstack([pad_block, features])

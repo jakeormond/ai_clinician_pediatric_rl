@@ -71,6 +71,8 @@ class DataProcessor:
                                 col != self.terminal_reward_col]      
         
 
+        self.feature_dim = len(self.input_features)
+
         for f in self.input_features:
             logger.debug(f"Input feature: {f}")
 

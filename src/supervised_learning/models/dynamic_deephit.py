@@ -345,10 +345,14 @@ class DynamicDeepHitTrainer:
         self.model.train() # set model to train mode
 
         # unpack batch
-        X = batch[0].to(self.device)      # [batch_size, n_ts, n_features]
-        time_to_event = batch[1].to(self.device)      # [batch_size]
-        event_label = batch[2].to(self.device)      # [batch_size]
-        mask = batch[3].to(self.device) 
+        # X = batch[0].to(self.device)      # [batch_size, n_ts, n_features]
+        X = batch['features'].to(self.device)
+        # time_to_event = batch[1].to(self.device)      # [batch_size]
+        time_to_event = batch['time_to_event'].to(self.device)
+        # event_label = batch[2].to(self.device)      # [batch_size]
+        event_label = batch['event'].to(self.device)
+        # mask = batch[3].to(self.device)
+        mask = batch['mask'].to(self.device)
 
         # Zero gradients
         self.optimizer.zero_grad()
@@ -406,10 +410,14 @@ class DynamicDeepHitTrainer:
         self.model.eval()  # set model to eval mode
         
         # unpack batch
-        X = batch[0].to(self.device)      # [batch_size, n_ts, n_features]
-        time_to_event = batch[1].to(self.device)      # [batch_size]
-        event_label = batch[2].to(self.device)      # [batch_size]
-        mask = batch[3].to(self.device) 
+        # X = batch[0].to(self.device)      # [batch_size, n_ts, n_features]
+        X = batch['features'].to(self.device)
+        # time_to_event = batch[1].to(self.device)      # [batch_size]
+        time_to_event = batch['time_to_event'].to(self.device)
+        # event_label = batch[2].to(self.device)      # [batch_size]
+        event_label = batch['event'].to(self.device)
+        # mask = batch[3].to(self.device)
+        mask = batch['mask'].to(self.device)
 
         # Forward pass
         with torch.no_grad():

@@ -75,10 +75,11 @@ class ShardProcessor:
             # raise NotImplementedError("Non-normalized shard processing not implemented yet.")
             raise NotImplementedError()
         
-        # get physiological feature indices for dynamic deephit model
+        # get physiological feature indices for dynamic deephit model, and feature_dim
         # load 'feature_names' from the first h5 file
         with h5py.File(self.normalized_shard_files[0], 'r') as f:
             feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))] 
+            self.feature_dim = f['trajectories'].shape[1]
 
         self.physiological_feature_ind = [] # for dynamic deephit model, which tries to predict next physiological features
         self.physiological_feature_type = []

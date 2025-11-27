@@ -172,7 +172,8 @@ def create_buffer(processor, batch_size, config_manager):
 
 def create_trainer(train_processor, hyperparams, config_manager):
 
-    feature_dim = train_processor.dynamic_deephit_dataset["features"].shape[2]
+    # feature_dim = train_processor.dynamic_deephit_dataset["features"].shape[2]
+    feature_dim = train_processor.feature_dim
     num_risks = 2 # hardcode for now
 
     model_type = config_manager.model_type
@@ -249,10 +250,13 @@ def evaluate_model(
         # Collect data for survival metrics
         if logits is not None and compute_survival_metrics_flag:
             all_logits.append(logits.cpu())
-            all_time_to_event.append(batch[1].cpu())
-            all_event_labels.append(batch[2].cpu())
+            # all_time_to_event.append(batch[1].cpu())
+            all_time_to_event.append(batch['time_to_event'].cpu())
+            # all_event_labels.append(batch[2].cpu())
+            all_event_labels.append(batch['event'].cpu())
         
-        num_samples += batch[0].size(0)
+        # num_samples += batch[0].size(0)
+        num_samples += batch['features'].size(0)
     
     # Calculate average losses
     avg_losses = {key: np.mean(values) for key, values in eval_losses.items()}
@@ -361,7 +365,14 @@ def single_split_training(config_manager):
         )
 
     hyperparameters = get_fixed_hyperparameters(config_manager)
-
+    training_scores, test_scores, n_epochs, trainer = train_with_hyperparameters(
+            train_processor, 
+            val_processor, 
+            config_manager, 
+            hyperparameters,
+            n_epochs=config_manager.n_epochs,
+            final_model=False
+        )
 
 
 

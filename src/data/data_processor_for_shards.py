@@ -56,7 +56,8 @@ class ShardProcessor:
 
 
         # find the shards for the given split
-        self.shard_dir = config_manager.data_config['shard_dir']
+        self.shard_dir = os.path.join(config_manager.paths['data_dir'], 
+                                      config_manager.data_config['shard_dir'])
         all_files = os.listdir(self.shard_dir)
         raw_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
                                 f.startswith(self.split) and f.endswith("_shard.h5")]

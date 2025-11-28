@@ -25,5 +25,5 @@ imperial_hpc:
     code_dir: "/rds/general/user/jormond/home/projects/ai_clinician/code/choc_code"
   mimic_iv:
     experiments_dir: "/rds/general/user/jormond/home/projects/ai_clinician/experiments"
-    data_dir: "/rds/general/user/jormond/home/projects/ai_clinician/data/mimic_iv_data"
-    code_dir: "/rds/general/user/jormond/home/projects/ai_clinician/code/mimic_iv_code"
+    data_dir: "/rds/general/user/jormond/home/projects/ai_clinician/data/mimic_iv_3.1_data"
+    code_dir: "/rds/general/user/jormond/home/projects/ai_clinician/code/mimic_iv_icu_data_processing"

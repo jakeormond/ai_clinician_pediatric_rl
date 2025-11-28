@@ -147,11 +147,12 @@ class ShardProcessor:
                 trajectories = f['trajectories'][:]
 
             rows = []
+            file_name = os.path.basename(file_path)
             for stay_id, start_window, start_index, length, event in \
                 zip(stay_ids, window_ptr[:-1], first_window_start_idx, lengths, events):
                 rows.append({
                     'stay_id': stay_id,
-                    'shard_file': file_path,
+                    'shard_file': file_name,
                     'window_idx': start_window,
                     'start_index': start_index, # first window
                     'length': length,

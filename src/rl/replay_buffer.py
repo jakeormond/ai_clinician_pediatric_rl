@@ -90,6 +90,7 @@ class DynamicDeepHit_Lazy(Dataset):
         self.h5_paths = data_processor.normalized_shard_files
         self.window_length = config_manager.training_config['window_length']
         self.time_bins = config_manager.time_bins
+        self.shard_dir = data_processor.shard_dir
         
         # Create mapping from file path to index for fast lookup
         self.path_to_idx = {path: i for i, path in enumerate(self.h5_paths)}
@@ -126,7 +127,7 @@ class DynamicDeepHit_Lazy(Dataset):
         
         shard_file = traj_info.shard_file
         # Get shard index from path
-        shard_idx = self.path_to_idx[shard_file]
+        shard_idx = self.path_to_idx[os.path.join(self.shard_dir, shard_file)]
                
         # load feature slice
         if window_start == window_end:

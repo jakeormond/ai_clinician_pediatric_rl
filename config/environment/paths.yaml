@@ -15,8 +15,8 @@ bayreuth_hpc:
     code_dir: "/groups/a-faisal/jakeormond/code/choc_code"
   mimic_iv:
     experiments_dir: "/groups/a-faisal/jakeormond/experiments"
-    data_dir: "/groups/a-faisal/jakeormond/data/mimic_iv_data"
-    code_dir: "/groups/a-faisal/jakeormond/code/mimic_iv_code"
+    data_dir: "/groups/a-faisal/jakeormond/data/mimic_iv_3.1_data"
+    code_dir: "/groups/a-faisal/jakeormond/code/mimic_iv_icu_data_processing"
 
 imperial_hpc:
   choc:

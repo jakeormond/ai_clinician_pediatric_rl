@@ -1,0 +1,83 @@
+#!/bin/bash
+# pbs/train_choc_dynamic_deephit_single_fold.pbs
+
+# Job name
+#PBS -N choc_dynamic_deephit
+
+# Output and error files
+#PBS -o /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs
+#PBS -e /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs
+
+# Resources: nodes, CPUs, memory
+#PBS -l select=1:ncpus=1:mem=64gb:ngpus=1
+#PBS -l walltime=36:00:00
+
+# Partition / queue
+#PBS -q v1_gpu72
+
+# Email notifications
+#PBS -m bea
+#PBS -M j.ormond@imperial.ac.uk
+
+# Exit on any error
+set -e
+
+# Generate a unique start time for this job
+START_TIME=$(date +"%Y%m%d_%H%M%S")
+export START_TIME
+
+# Load modules
+module load miniforge/3
+
+# Set environment variables
+export OMP_NUM_THREADS=1   # matches ncpus
+export PYTHONUNBUFFERED=1  
+
+# Navigate to project directory
+cd /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl
+
+# Activate Conda environment
+eval "$(~/miniforge3/bin/conda shell.bash hook)"
+conda activate rl_env
+
+# Print job information
+echo "========================================="
+echo "Job Information:"
+echo "Job ID: $PBS_JOBID"
+echo "Job Name: $PBS_JOBNAME"
+echo "Node(s): $PBS_NODEFILE"
+echo "CPUs per task: 1"
+echo "Memory: 64GB"
+echo "Start time: $(date)"
+echo "Working directory: $(pwd)"
+echo "Active conda environment: $CONDA_DEFAULT_ENV"
+echo "Python version: $(python --version)"
+echo "CUDA_VISIBLE_DEVICES = $CUDA_VISIBLE_DEVICES"
+nvidia-smi
+echo "========================================="
+
+# Run the training script for this fold
+echo "Starting training..."
+
+python -u -m src.scripts.supervised.supervised_learning \
+    --hospital mimic_iv \
+    --experiment_type supervised_learning \
+    --model_type dynamic_deephit \
+    --prediction_type discharge_mortality_tte \
+    --mode single_split \
+    --search_variant random_search \
+    --n_epochs 50 \
+    --n_search_iterations 9 \
+    --start_time $START_TIME 
+
+exit_code=$?
+
+echo "========================================="
+echo "End time: $(date)"
+if [ $exit_code -eq 0 ]; then
+    echo "Training completed successfully!"
+else
+    echo "Training failed with exit code $exit_code"
+    exit $exit_code
+fi
+echo "========================================="

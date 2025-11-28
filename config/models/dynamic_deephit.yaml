@@ -9,7 +9,7 @@ learning_rate: "loguniform(1e-6, 1e-4)"          #      [1e-6]  # Learning rates
 dropout: "uniform(0.2, 0.6)"
 weight_decay: "loguniform(1e-5, 1e-2)"
 use_layernorm: True
-batch_size: 128  # Batch size for all networks
+batch_size: 1024  # Batch size for all networks
 hidden_dim: 64  # Hidden dimension for all networks
 attn_hidden_dim: 64
 n_layers: 2

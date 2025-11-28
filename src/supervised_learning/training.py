@@ -214,6 +214,7 @@ def append_epoch_losses(
 def evaluate_model(
     trainer, 
     dataloader, 
+    config_manager,
     max_samples=None,
     return_full_curves=False,
     compute_survival_metrics_flag=True
@@ -238,6 +239,7 @@ def evaluate_model(
     
     num_samples = 0
     
+    testing = getattr(config_manager, 'testing', False)
     for batch_idx, batch in enumerate(dataloader):
         # Check if we've reached max samples
         if max_samples is not None and num_samples >= max_samples:
@@ -259,7 +261,10 @@ def evaluate_model(
         
         # num_samples += batch[0].size(0)
         num_samples += batch['features'].size(0)
-    
+
+        if testing and batch_idx >= 10:
+            break  # Limit to 2 batches in testing mode
+
     # Calculate average losses
     avg_losses = {key: np.mean(values) for key, values in eval_losses.items()}
     
@@ -290,6 +295,7 @@ def evaluate_during_training(trainer, epoch, val_buffer, val_losses, config_mana
     epoch_val_metrics = evaluate_model(
         trainer, 
         val_buffer, 
+        config_manager,
         max_samples=max_samples,
         return_full_curves=False,
         compute_survival_metrics_flag=True
@@ -313,13 +319,14 @@ def evaluate_during_training(trainer, epoch, val_buffer, val_losses, config_mana
         val_losses[key].append(value)
 
 
-def evaluate_final_model(trainer, test_buffer):
+def evaluate_final_model(trainer, test_buffer, config_manager):
     """Evaluate final model on test set."""
     
     # Evaluate on full test set (no sample limit)
     test_metrics = evaluate_model(
         trainer,
         test_buffer,
+        config_manager,
         max_samples=None,
         compute_survival_metrics_flag=True, 
         return_full_curves=True
@@ -366,36 +373,41 @@ def single_split_training(config_manager):
         normalize=True
         )
 
-    hyperparameters = get_fixed_hyperparameters(config_manager)
-    training_scores, test_scores, n_epochs, trainer = train_with_hyperparameters(
-            train_processor, 
-            val_processor, 
-            config_manager, 
-            hyperparameters,
-            n_epochs=config_manager.n_epochs,
-            final_model=False
-        )
-
-
-
-    
-
-    dataset = DynamicDeepHit_Lazy(train_processor, config_manager)   
-
-    loader = DataLoader(
-        dataset,
-        batch_size=config_manager.training_config['batch_size'],
-        shuffle=True,
-        num_workers=4, # set to 0 for debugging; increase for performance
-        worker_init_fn=worker_init_fn,
-        pin_memory=True
+    # hyperparameter optimization
+    trainer, hyperparams, training_scores, val_scores, n_epochs = optimize_hyperparameters(
+        train_processor, 
+        val_processor, 
+        config_manager
     )
 
-    batch = next(iter(loader))
+    test_buffer = create_buffer(test_processor, config_manager.training_config['batch_size'], config_manager)
+    test_losses = evaluate_final_model( # this evaluates on the entire test set (during training we only use a subset for speed)
+        trainer, 
+        test_buffer, 
+        config_manager
+    )
+    
+    logger.info(f"Final test metrics: {test_losses}")
 
+    # Save final model if this is the final training
+    model_path = Path(config_manager.experiment_dir /  "final_model.pt")
+    torch.save(trainer.model.state_dict(), model_path)
+    logger.info(f" Final model saved to {model_path}")
 
-    pass
+    # plot losses
+    plot_results(training_scores, val_scores, test_losses, config_manager)
 
+    # save results
+    all_scores = save_results(
+        training_scores,
+        val_scores,
+        test_losses,
+        hyperparams,
+        n_epochs,
+        config_manager
+    )
+
+    return all_scores
 
 
 def development_training_loop(dataset, config_manager):
@@ -440,7 +452,8 @@ def development_training_loop(dataset, config_manager):
         test_buffer = create_buffer(test_processor, config_manager.training_config['batch_size'], config_manager)
         final_test_scores = evaluate_final_model(
             trainer,
-            test_buffer
+            test_buffer,
+            config_manager
             )
         plot_auroc_prc_curves(
             final_test_scores['roc_curve'], 
@@ -511,6 +524,50 @@ def plot_results(training_losses, val_losses, test_losses, config_manager):
         
 
 def save_results(
+        training_scores,
+        val_scores,
+        test_scores, 
+        hyperparameters,
+        n_epochs,
+        config_manager
+    ):
+
+    # save the configuration_manager
+    with open(config_manager.experiment_dir / "config_manager.pkl", "wb") as f:
+        pickle.dump(config_manager, f)  
+
+    # create a dictionary to save the scores
+    all_scores = {
+        "training_scores": training_scores,
+        "val_scores": val_scores,
+        "test_scores": test_scores,
+        "hyperparameters": hyperparameters,
+        "n_epochs": n_epochs
+    }
+    with open(config_manager.experiment_dir / "all_scores.pkl", "wb") as f:
+        pickle.dump(all_scores, f)
+
+    # Save results for this outer fold
+    results_path = Path(config_manager.experiment_dir) / f"results.json"
+    # drop the curves from test_losses for saving
+    if 'roc_curve' in test_scores:
+        test_scores.pop('roc_curve')
+    if 'pr_curve' in test_scores:
+        test_scores.pop('pr_curve')
+
+    with open(results_path, 'w') as f:
+        json.dump(to_json_safe({
+            'best_hyperparameters': hyperparameters,
+            'final_metrics': test_scores,
+            'config': config_manager.training_config
+        }), f, indent=2)
+    
+    logger.info(f"✓ Training complete. Results saved to {results_path}")
+
+    return all_scores
+
+
+def save_results_cv(
         training_scores, 
         val_scores, 
         final_training_losses, 
@@ -561,7 +618,10 @@ def save_results(
             'config': config_manager.training_config
         }), f, indent=2)
     
-    logger.info(f"✓ Outer fold {outer_fold} complete. Results saved to {results_path}")
+    if outer_fold != 'N/A':
+        logger.info(f"✓ Outer fold {outer_fold} complete. Results saved to {results_path}")
+    else:
+        logger.info(f"✓ Training complete. Results saved to {results_path}")
 
     return all_scores
 
@@ -590,7 +650,7 @@ def outer_training_loop(dataset, config_manager):
 
         ###################   HYPERPARAMETER OPTIMIZATION #############################
         logger.info("Phase 1: Hyperparameter Optimization")
-        best_hyperparameters, training_scores, val_scores, n_epochs = optimize_hyperparameters(
+        best_hyperparameters, training_scores, val_scores, n_epochs = optimize_hyperparameters_cv(
             train_dataset, 
             config_manager, 
             n_inner_folds=n_inner_folds
@@ -623,7 +683,7 @@ def outer_training_loop(dataset, config_manager):
         plot_results(final_training_losses, final_val_losses, test_losses, config_manager)
 
         ##################### SAVE RESULTS #############################
-        all_scores = save_results(
+        all_scores = save_results_cv(
             training_scores,
             val_scores,
             final_training_losses,
@@ -657,7 +717,63 @@ def get_hyperparameter_space(config_manager):
     return hyperparameter_space
 
 
-def optimize_hyperparameters(
+
+def optimize_hyperparameters(train_processor, val_processor, config_manager):
+    """
+    For single train and val splits. Returns the best model and hyperparameters.
+    Evaluation on test is done separately. 
+    """    
+    # create hyperparameter space
+    hyperparameter_space = get_hyperparameter_space(config_manager)
+
+    # initialize best_val_score
+    loss_metric = config_manager.training_config['loss_metric'] 
+    best_val_loss = float('inf') 
+
+    ##################### loop through hyperparameter combinations #####################
+    logger.info(f"Starting hyperparameter optimization with {config_manager.n_search_iterations} iterations...")
+    
+    for i in range(config_manager.n_search_iterations):
+        ################# select hyperparameters randomly #################
+        current_params = select_hyperparameters_randomly(
+            hyperparameter_space, config_manager
+        )       
+        logger.info(f"Testing hyperparameters {i+1}/{config_manager.n_search_iterations}: {current_params}")
+        
+        ################# Train with current hyperparameters #################       
+        training_scores, val_scores, n_epochs, trainer = train_with_hyperparameters(
+            train_processor, 
+            val_processor, 
+            config_manager, 
+            current_params,
+            final_model=False
+        )
+        current_val_loss = min(val_scores[loss_metric])
+        logger.info(f"Search iteration {i+1} validation {loss_metric}: {current_val_loss:.4f}")
+
+        ###################### Evaluate and update best hyperparameters ########################
+        if current_val_loss < best_val_loss:
+            improvement = best_val_loss - current_val_loss
+            logger.info(f" New best hyperparameters found! (improvement: {improvement:.4f})\n")
+            best_trainer = trainer
+            best_val_loss = current_val_loss
+            best_hyperparams = current_params.copy()
+            training_scores_best = training_scores
+            val_scores_best = val_scores
+            n_epochs_best = n_epochs
+        else:
+            logger.info(f"No improvement (current best: {best_val_loss:.4f})\n")
+
+    ############################ Summarize hyperparameter optimization results #############################
+    logger.info(f"Best hyperparameters after {config_manager.n_search_iterations} iterations: {best_hyperparams}")
+    logger.info(f"\n                 Hyperparameter optimization complete!")
+
+    return best_trainer, best_hyperparams, training_scores_best, val_scores_best, n_epochs_best
+
+
+
+
+def optimize_hyperparameters_cv(
     train_dataset, 
     config_manager,
     n_inner_folds=None
@@ -790,6 +906,11 @@ def train_with_hyperparameters(
     evaluate_during_training(trainer, -1, val_test_buffer, val_losses, config_manager)   
     
     ############################### Training loop #################################
+    testing = getattr(config_manager, 'testing', False)
+    if testing:
+        logger.info(" Testing mode enabled: will limit training to 10 epochs and 100 batches per epoch.")
+        n_epochs = min(n_epochs, 5)
+    
     for epoch in range(n_epochs):
         epoch_training_losses = defaultdict(list)
 
@@ -799,6 +920,11 @@ def train_with_hyperparameters(
             # Automatically append all metrics - creates new keys if needed
             for key, value in batch_losses.items():
                 epoch_training_losses[key].append(value)
+
+            # check if we are simply testing the training loop, in which case we break after 100 batches
+            if batch_idx >= 10 and testing:
+                logger.info(" Testing mode: breaking after 10 batches.")
+                break
 
         # Calculate average loss for this epoch and append to training_losses
         append_epoch_losses(epoch_training_losses, training_losses)
@@ -844,7 +970,8 @@ def train_with_hyperparameters(
     # note that results df will be None if no targets/predictions were collected during evaluation (i.e.Q learning)
     test_losses = evaluate_final_model( # this evaluates on the entire test set (during training we only use a subset for speed)
         trainer, 
-        val_test_buffer
+        val_test_buffer,
+        config_manager
     )
     
     logger.info(f"Final test metrics: {test_losses}")

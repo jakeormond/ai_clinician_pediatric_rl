@@ -120,7 +120,6 @@ def plot_roc(fpr, tpr, config_manager):
     plt.grid()
 
     # Save the plot
-    fold_dir = config_manager.cv_config.get('fold', None)
     plot_path = Path(config_manager.experiment_dir) / f"roc_curve.png"
     plt.savefig(plot_path)
     plt.close()
@@ -136,7 +135,6 @@ def plot_prc(precision, recall, prevalence, config_manager):
     plt.grid()
 
     # Save the plot
-    fold_dir = config_manager.cv_config.get('fold', None)
     plot_path = Path(config_manager.experiment_dir) / f"prc_curve.png"
     plt.savefig(plot_path)
     plt.close()

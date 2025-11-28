@@ -412,7 +412,6 @@ class ShardProcessor:
                 f.create_dataset(
                     'trajectories', 
                     data=seq_array.astype(np.float32), 
-                    compression="lzf",
                     chunks=(1, self.window_length, n_features)
                 )
 

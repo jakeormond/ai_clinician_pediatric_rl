@@ -162,9 +162,11 @@ def create_buffer(processor, batch_size, config_manager):
             dataset,
             batch_size=batch_size,
             shuffle=True,
-            num_workers=4, # set to 0 for debugging; increase for performance (e.g., 4 or 8)
+            num_workers=8, # set to 0 for debugging; increase for performance (e.g., 4 or 8)
             worker_init_fn=worker_init_fn,
-            pin_memory=True
+            pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=4,
         )
     
     return buffer

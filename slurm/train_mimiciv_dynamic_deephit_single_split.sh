@@ -61,7 +61,7 @@ echo "========================================="
 echo "Starting training..."
 
 python -m src.scripts.supervised.supervised_learning \
-    --hospital choc \
+    --hospital mimic_iv \
     --experiment_type supervised_learning \
     --model_type dynamic_deephit \
     --prediction_type discharge_mortality_tte \

@@ -41,6 +41,7 @@ class ShardProcessor:
         self.split = split
         self.norm_params = norm_params
         self.window_length = config_manager.training_config['window_length']
+        self.time_bins = config_manager.time_bins
 
         # load features to use from config_manager
         self.features_to_use = pd.read_csv(config_manager.data_config['features_to_use_path'])
@@ -59,6 +60,10 @@ class ShardProcessor:
         self.shard_dir = os.path.join(config_manager.paths['data_dir'], 
                                       config_manager.data_config['shard_dir'])
         all_files = os.listdir(self.shard_dir)
+        
+        if self.split == 'train' and config_manager.training_config['tuning']:
+            self.split = 'tuning'
+        
         raw_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
                                 f.startswith(self.split) and f.endswith("_shard.h5")]
         # sort the files to ensure consistent order
@@ -82,6 +87,37 @@ class ShardProcessor:
             # raise NotImplementedError("Non-normalized shard processing not implemented yet.")
             raise NotImplementedError()
         
+        # load the normalized shard files and store in a dynamic_deephit_dataset attribute
+        self.dynamic_deephit_dataset = {}
+        for i, shard_file in enumerate(self.normalized_shard_files):
+            logger.info(f"Loading normalized shard file into memory for tuning: {shard_file}")
+            # load the shard file
+            with h5py.File(shard_file, 'r') as f:      
+                # convert feature_names from bytes to strings
+                feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]                
+                stay_ids = f['stay_ids'][:]
+                window_ptr = f['window_ptr'][:]
+                first_window_start_idx = f['first_window_start_idx'][:]
+                trajectories = f['trajectories'][:]             
+
+            if i == 0:
+                self.dynamic_deephit_dataset['feature_names'] = [name.encode('utf-8') for name in feature_names]
+                self.dynamic_deephit_dataset['stay_ids'] = stay_ids
+                self.dynamic_deephit_dataset['window_ptr'] = window_ptr
+                self.dynamic_deephit_dataset['first_window_start_idx'] = first_window_start_idx
+                self.dynamic_deephit_dataset['trajectories'] = trajectories.astype(np.float32)
+            else:
+                self.dynamic_deephit_dataset['stay_ids'] = np.concatenate(
+                    (self.dynamic_deephit_dataset['stay_ids'], stay_ids), axis=0)
+                self.dynamic_deephit_dataset['window_ptr'] = np.concatenate(
+                    (self.dynamic_deephit_dataset['window_ptr'], 
+                        window_ptr[1:] + self.dynamic_deephit_dataset['window_ptr'][-1]), axis=0)
+                self.dynamic_deephit_dataset['first_window_start_idx'] = np.concatenate(
+                    (self.dynamic_deephit_dataset['first_window_start_idx'], first_window_start_idx), axis=0)
+                self.dynamic_deephit_dataset['trajectories'] = np.concatenate(
+                    (self.dynamic_deephit_dataset['trajectories'], trajectories.astype(np.float32)), axis=0)
+
+
         # get physiological feature indices for dynamic deephit model, and feature_dim
         # load 'feature_names' from the first h5 file
         with h5py.File(self.normalized_shard_files[0], 'r') as f:
@@ -121,6 +157,30 @@ class ShardProcessor:
         #     self.create_index_table_for_window_sampling(config_manager)
         # gemerate everytime because it may change based on time bins
         self.create_index_table_for_window_sampling(config_manager)
+
+        if config_manager.training_config['use_windows_from_memory']:
+            logger.info("Using windows loaded into memory for training.")
+
+            self.window_file_path = os.path.join(self.shard_dir, f"{self.split}_windows.h5")
+
+            if not os.path.exists(self.window_file_path):
+                # create the file 
+                self.create_windows()
+
+            else:
+                # load the windows from file
+                self.load_windows()
+
+            # clear the dynamic_deephit_dataset to save memory
+            self.dynamic_deephit_dataset = {}
+
+            # load the precomputed windows into self.dynamic_deephit_dataset
+            with h5py.File(self.window_file_path, 'r') as f:
+                self.dynamic_deephit_dataset['features'] = f['features'][:]
+                self.dynamic_deephit_dataset['mask'] = f['mask'][:]
+                self.dynamic_deephit_dataset['event'] = f['event'][:]
+                self.dynamic_deephit_dataset['time_to_event'] = f['time_to_event'][:]
+                self.dynamic_deephit_dataset['stay_id'] = f['stay_id'][:]
 
 
     def create_index_table(self):
@@ -179,8 +239,6 @@ class ShardProcessor:
         rng = np.random.default_rng(seed)
         
         rows = []
-
-        self.time_bins = config_manager.time_bins
 
         min_gap = int(np.floor(np.min(np.diff(self.time_bins))))
         min_gap = max(min_gap, 1)
@@ -259,7 +317,112 @@ class ShardProcessor:
         logger.info(f"Saved window index table to {window_index_table_path}")
 
 
-                
+    def create_windows(self):
+        """
+        Create windows from the normalized shard files and save to new h5 file
+        """
+        # iterate through self.window_index_table and extract the windows from the appropriate shard files
+        features_all = []
+        mask_all = []
+        event_all = []
+        time_to_event_all = []
+        stay_id_all = []
+        
+        # convert self.traj_index_table index to stay_id for faster lookup
+        self.traj_index_table = self.traj_index_table.set_index('stay_id')
+
+        for i, row in self.window_index_table.iterrows():
+            stay_id = row.stay_id
+            window_start = row.window_start
+            window_end = row.window_end  
+            start_index = row.start_index
+            end_index = row.end_index
+            window_length = row.window_length
+            time_to_event = row.time_to_event
+            event_raw = row.event_raw
+            event = event_raw + 1 # con
+
+            # ---- Retrieve trajectory location ----
+            traj_info = self.traj_index_table.loc[stay_id]
+
+            # load feature slice
+            if window_start == window_end:
+                # all in one window
+                features = self.dynamic_deephit_dataset['trajectories'][window_start, :, :]
+                features = features[start_index:end_index+1]
+            else:
+                # spans two windows
+                first_window = self.dynamic_deephit_dataset['trajectories'][window_start, :, :]
+                second_window = self.dynamic_deephit_dataset['trajectories'][window_end, :, :]
+
+                first_part = first_window[start_index:]
+                second_part = second_window[:end_index+1]
+
+                features = np.vstack([first_part, second_part])
+
+            features = np.asarray(features)   # (slice_len, num_features)
+        
+            # ---- Pad if needed (repeat first timestep) ----
+            if window_length < self.window_length:
+                pad = self.window_length - window_length
+                first_step = features[0:1]
+                pad_block = np.repeat(first_step, pad, axis=0)
+                window_feat = np.vstack([pad_block, features])
+            else:
+                window_feat = features
+            
+            # Convert to float32 torch tensor
+            window_feat = torch.from_numpy(window_feat).float()
+
+            # ---- Mask (actual content only) ----
+            mask = torch.ones(self.window_length, dtype=torch.float32)  # this isn't necessary, but needs to 
+                                                                        # be removed from model as well.
+            # ---- Time-to-event binning ----
+            # Right boundary inclusive, then shift to 0-based bins
+            tte_bin = np.digitize(time_to_event, self.time_bins, right=True) - 1
+
+            # add to lists
+            features_all.append(window_feat)
+            mask_all.append(mask)
+            event_all.append(event)
+            time_to_event_all.append(tte_bin)
+            stay_id_all.append(stay_id)
+
+        # concatenate all data to np arrays and save to h5 file
+        features_all = np.stack(features_all, axis=0).astype(np.float32)
+        mask_all = np.stack(mask_all, axis=0).astype(np.float32)
+        event_all = np.array(event_all, dtype=np.int32)
+        time_to_event_all = np.array(time_to_event_all, dtype=np.int32)
+        stay_id_all = np.array(stay_id_all, dtype=np.int32)
+
+        with h5py.File(self.window_file_path, 'w') as f:
+            f.create_dataset('features', data=features_all, dtype=np.float32, 
+                             chunks=(1, self.window_length, features_all.shape[2]))
+            f.create_dataset('mask', data=mask_all, dtype=np.float32, 
+                             chunks=(1, self.window_length))
+            f.create_dataset('event', data=event_all, dtype=np.int32)
+            f.create_dataset('time_to_event', data=time_to_event_all, dtype=np.int32)
+            f.create_dataset('stay_id', data=stay_id_all, dtype=np.int32)
+
+
+    def load_windows(self):
+        """
+        Load windows from precomputed h5 file
+        """
+        self.window_file_path = os.path.join(self.shard_dir, f"{self.split}_windows.h5")
+
+        if not os.path.exists(self.window_file_path):
+            raise FileNotFoundError(f"Window file {self.window_file_path} not found.")
+
+        logger.info(f"Loading windows from {self.window_file_path}")
+        
+        with h5py.File(self.window_file_path, 'r') as f:
+            self.dynamic_deephit_dataset['features'] = f['features'][:]
+            self.dynamic_deephit_dataset['mask'] = f['mask'][:]
+            self.dynamic_deephit_dataset['event'] = f['event'][:]
+            self.dynamic_deephit_dataset['time_to_event'] = f['time_to_event'][:]
+            self.dynamic_deephit_dataset['stay_id'] = f['stay_id'][:]
+
     def normalize(self):
 
         if self.norm_params is not None:

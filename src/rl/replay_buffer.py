@@ -76,6 +76,128 @@ class DynamicDeepHitDataset(Dataset):
         ]
     
 
+class DynamicDeepHit_InMemory(Dataset):
+    """
+    For datasets that fit into memory.
+    """
+    def __init__(
+            self, 
+            data_processor,
+            config_manager
+            ):
+        
+        dynamic_deephit_dataset = data_processor.dynamic_deephit_dataset
+        self.time_bins = config_manager.time_bins
+        self.features = dynamic_deephit_dataset['features']  # (num_windows, window_length, num_features)
+        self.mask = dynamic_deephit_dataset['mask']          # (num_windows, window_length)
+        self.event = dynamic_deephit_dataset['event']        # (num_windows,)
+        self.time_to_event = dynamic_deephit_dataset['time_to_event']  # (num_windows,)
+        self.stay_ids = dynamic_deephit_dataset['stay_id']  # (num_windows,)
+    
+    def __len__(self):
+        return len(self.event)
+
+    def __getitem__(self, idx):
+        window_feat = torch.from_numpy(self.features[idx]).float()
+        mask = torch.from_numpy(self.mask[idx]).float()
+        stay_id = self.stay_ids[idx]
+
+        return {
+            "features": window_feat,                  # (window_length, F)
+            "mask": mask,                             # (window_length,)
+            "event": torch.tensor(self.event[idx], dtype=torch.long),
+            "time_to_event": torch.tensor(self.time_to_event[idx], dtype=torch.long),
+            "stay_id": stay_id                    # useful for debugging
+        }
+
+
+class DynamicDeepHit_InMemory_v1(Dataset):
+    """
+    For datasets that fit into memory.
+    """
+    def __init__(
+            self, 
+            data_processor,
+            config_manager
+            ):
+        
+        dynamic_deephit_dataset = data_processor.dynamic_deephit_dataset
+
+        self.feature_names = dynamic_deephit_dataset['feature_names']
+        self.stay_ids = dynamic_deephit_dataset['stay_ids']
+        self.window_ptr = dynamic_deephit_dataset['window_ptr']
+        self.first_window_start_idx = dynamic_deephit_dataset['first_window_start_idx']
+        self.trajectories = dynamic_deephit_dataset['trajectories']  # (num_windows, window_length, num_features)
+
+        self.traj_index = data_processor.traj_index_table.set_index('stay_id')
+        self.window_index = data_processor.window_index_table
+        self.window_length = config_manager.training_config['window_length']
+        self.time_bins = config_manager.time_bins
+        
+
+    def __len__(self):
+        return len(self.window_index)
+    
+    def __getitem__(self, idx):
+        row = self.window_index.iloc[idx]
+
+        stay_id = row.stay_id
+        window_start = row.window_start
+        window_end = row.window_end  
+        start_index = row.start_index
+        end_index = row.end_index
+        window_length = row.window_length
+        time_to_event = row.time_to_event
+        event_raw = row.event_raw
+        event = event_raw + 1 # convert to 1 or 2 (0 is censored, though we aren't using censored data here)
+              
+        # load feature slice
+        if window_start == window_end:
+            # all in one window
+            features = self.trajectories[window_start, :, :]
+            features = features[start_index:end_index+1]
+        else:
+            # spans two windows
+            first_window = self.trajectories[window_start, :, :]
+            second_window = self.trajectories[window_end, :, :]
+
+            first_part = first_window[start_index:]
+            second_part = second_window[:end_index+1]
+
+            features = np.vstack([first_part, second_part])
+
+        features = np.asarray(features)   # (slice_len, num_features)
+        
+        # ---- Pad if needed (repeat first timestep) ----
+        if window_length < self.window_length:
+            pad = self.window_length - window_length
+            first_step = features[0:1]
+            pad_block = np.repeat(first_step, pad, axis=0)
+            window_feat = np.vstack([pad_block, features])
+        else:
+            window_feat = features
+        
+        # Convert to float32 torch tensor
+        window_feat = torch.from_numpy(window_feat).float()
+
+        # ---- Mask (actual content only) ----
+        mask = torch.ones(self.window_length, dtype=torch.float32)  # this isn't necessary, but needs to 
+                                                                    # be removed from model as well.
+        # ---- Time-to-event binning ----
+        # Right boundary inclusive, then shift to 0-based bins
+        tte_bin = np.digitize(time_to_event, self.time_bins, right=True) - 1
+
+        # ---- Package output ----
+        return {
+            "features": window_feat,                  # (window_length, F)
+            "mask": mask,                             # (window_length,)
+            "event": torch.tensor(event, dtype=torch.long),
+            "time_to_event": torch.tensor(tte_bin, dtype=torch.long),
+            "stay_id": stay_id                    # useful for debugging
+        }
+
+
+
 class DynamicDeepHit_Lazy(Dataset):
     """
     For "lazy loading" large datasets that don't fit into memory.

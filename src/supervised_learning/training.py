@@ -36,7 +36,7 @@ from ..utils.logging_utilities import wandb_init
 from ..data.data_processor import DataProcessor
 from ..data.data_processor_for_shards import ShardProcessor
 # from .dataset import Dataset
-from ..rl.replay_buffer import DynamicDeepHitDataset, DynamicDeepHit_Lazy, worker_init_fn
+from ..rl.replay_buffer import DynamicDeepHitDataset, DynamicDeepHit_Lazy, worker_init_fn, DynamicDeepHit_InMemory
 
 from ..utils.utilities import set_seed
 from ..rl.plotting import plot_losses,plot_losses_cv, plot_c_and_brier_over_time, plot_auroc_prc_curves
@@ -152,6 +152,18 @@ def create_buffer(processor, batch_size, config_manager):
     if config_manager.hospital == 'choc':
         dataset = DynamicDeepHitDataset(processor.dynamic_deephit_dataset)
         buffer = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    elif config_manager.hospital == 'mimic_iv' and config_manager.training_config['tuning']:
+        dataset = DynamicDeepHit_InMemory(
+            processor,
+            config_manager
+        )
+
+        buffer = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True
+        )
 
     elif config_manager.hospital == 'mimic_iv':
         dataset = DynamicDeepHit_Lazy(

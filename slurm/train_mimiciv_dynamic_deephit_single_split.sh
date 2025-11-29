@@ -1,7 +1,7 @@
 #!/bin/bash
 # slurm/train_mimiciv_dynamic_deephit_single_split.sh
 
-#SBATCH --job-name=choc_dynamic_deephit
+#SBATCH --job-name=mimiciv_dynamic_deephit
 #SBATCH --output=slurm/logs/%x_%j.out
 #SBATCH --error=slurm/logs/%x_%j.err
 #SBATCH --nodes=1

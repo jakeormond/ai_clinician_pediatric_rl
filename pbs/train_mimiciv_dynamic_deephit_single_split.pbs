@@ -9,7 +9,7 @@
 #PBS -e /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs
 
 # Resources: nodes, CPUs, memory
-#PBS -l select=1:ncpus=1:mem=64gb:ngpus=1
+#PBS -l select=1:ncpus=8:mem=64gb:ngpus=1
 #PBS -l walltime=3:00:00
 
 # Partition / queue

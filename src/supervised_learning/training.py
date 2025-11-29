@@ -159,69 +159,16 @@ def create_buffer(processor, batch_size, config_manager):
             config_manager
         )
         
-        # Dynamically configure workers based on number of shards
-        num_shards = len(processor.normalized_shard_files)
-        
-        # Detect available CPUs across different environments
-        max_cpus = None
-        
-        # Try SLURM first
-        if 'SLURM_CPUS_PER_TASK' in os.environ:
-            max_cpus = int(os.environ['SLURM_CPUS_PER_TASK'])
-            logger.info(f"Detected SLURM environment: {max_cpus} CPUs")
-        
-        # Try PBS Pro
-        elif 'PBS_NUM_PPN' in os.environ:
-            max_cpus = int(os.environ['PBS_NUM_PPN'])
-            logger.info(f"Detected PBS Pro environment: {max_cpus} CPUs")
-        elif 'NCPUS' in os.environ:  # Alternative PBS variable
-            max_cpus = int(os.environ['NCPUS'])
-            logger.info(f"Detected PBS Pro environment: {max_cpus} CPUs")
-        
-        # Fall back to OMP_NUM_THREADS or physical CPU count
-        if max_cpus is None:
-            if 'OMP_NUM_THREADS' in os.environ:
-                max_cpus = int(os.environ['OMP_NUM_THREADS'])
-                logger.info(f"Using OMP_NUM_THREADS: {max_cpus} CPUs")
-            else:
-                max_cpus = os.cpu_count() or 1
-                logger.info(f"Using physical CPU count: {max_cpus} CPUs")
-        
-        # Allow config override
-        max_cpus = config_manager.training_config.get('max_dataloader_workers', max_cpus)
-        
-        # Set workers: use 1 per shard, but cap at available CPUs
-        # Subtract 1 to leave main process free
-        num_workers = min(num_shards, max(max_cpus - 1, 0))
-        
-        # For single shard, use main process (num_workers=0)
-        if num_shards == 1:
-            num_workers = 0   
-
-        logger.info(f"DataLoader config: {num_shards} shards, {max_cpus} CPUs available, using {num_workers} workers")     
-        
-        if num_workers == 0:
-            # Main process loading - simplest config
-            buffer = DataLoader(
-                dataset,
-                batch_size=batch_size,
-                shuffle=True,
-                num_workers=0,
-                pin_memory=True,
-            )
-        else:
-            # Multi-worker loading - need worker init and prefetching
-            buffer = DataLoader(
-                dataset,
-                batch_size=batch_size,
-                shuffle=True,
-                num_workers=num_workers,
-                worker_init_fn=worker_init_fn,
-                pin_memory=True,
-                persistent_workers=True,  # Keep workers alive between epochs
-                prefetch_factor=2,  # Each worker prefetches 2 batches
-                multiprocessing_context='spawn' if num_workers > 0 else None,  # More stable than fork
-            )
+        buffer = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=8, # set to 0 for debugging; increase for performance (e.g., 4 or 8)
+            worker_init_fn=worker_init_fn,
+            pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=4,
+        )
     
     return buffer
 

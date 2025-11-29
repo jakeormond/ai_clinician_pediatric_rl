@@ -2,7 +2,7 @@
 # pbs/train_mimiciv_dynamic_deephit_single_split.pbs
 
 # Job name
-#PBS -N choc_dynamic_deephit
+#PBS -N mimiciv_dynamic_deephit
 
 # Output and error files
 #PBS -o /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs

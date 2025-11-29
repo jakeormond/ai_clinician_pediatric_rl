@@ -67,8 +67,8 @@ python -m src.scripts.supervised.supervised_learning \
     --prediction_type discharge_mortality_tte \
     --mode single_split \
     --search_variant random_search \
-    --n_epochs 100 \
-    --n_search_iterations 5 \
+    --n_epochs 10 \
+    --n_search_iterations 2 \
     --start_time $START_TIME     
 
 exit_code=$?

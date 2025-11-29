@@ -559,6 +559,7 @@ def save_results(
     with open(results_path, 'w') as f:
         json.dump(to_json_safe({
             'best_hyperparameters': hyperparameters,
+            'time_bins': config_manager.time_bins,
             'final_metrics': test_scores,
             'config': config_manager.training_config
         }), f, indent=2)

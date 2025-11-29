@@ -113,12 +113,14 @@ class ShardProcessor:
             self.create_index_table()
 
         # create window index table
-        window_index_table_path = os.path.join(self.shard_dir, f"{self.split}_window_index_table.parquet")
-        if os.path.exists(window_index_table_path):
-            logger.info(f"Loading existing window index table from {window_index_table_path}")
-            self.window_index_table = pd.read_parquet(window_index_table_path)
-        else:
-            self.create_index_table_for_window_sampling(config_manager)
+        # window_index_table_path = os.path.join(self.shard_dir, f"{self.split}_window_index_table.parquet")
+        # if os.path.exists(window_index_table_path):
+        #     logger.info(f"Loading existing window index table from {window_index_table_path}")
+        #     self.window_index_table = pd.read_parquet(window_index_table_path)
+        # else:
+        #     self.create_index_table_for_window_sampling(config_manager)
+        # gemerate everytime because it may change based on time bins
+        self.create_index_table_for_window_sampling(config_manager)
 
 
     def create_index_table(self):
@@ -182,7 +184,7 @@ class ShardProcessor:
 
         min_gap = int(np.floor(np.min(np.diff(self.time_bins))))
         min_gap = max(min_gap, 1)
-        n_windows_per_bin = max(int(min_gap / 4), 1)
+        n_windows_per_bin = max(int(min_gap / 4), 4)
 
         for _, row in self.traj_index_table.iterrows():
             stay_id = row['stay_id']

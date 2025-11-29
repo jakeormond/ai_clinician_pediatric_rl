@@ -9,8 +9,8 @@
 #PBS -e /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs
 
 # Resources: nodes, CPUs, memory
-#PBS -l select=1:ncpus=8:mem=64gb:ngpus=1
-#PBS -l walltime=3:00:00
+#PBS -l select=1:ncpus=1:mem=64gb:ngpus=1
+#PBS -l walltime=24:00:00
 
 # Partition / queue
 #PBS -q v1_gpu72
@@ -66,8 +66,8 @@ python -u -m src.scripts.supervised.supervised_learning \
     --prediction_type discharge_mortality_tte \
     --mode single_split \
     --search_variant random_search \
-    --n_epochs 2 \
-    --n_search_iterations 1 \
+    --n_epochs 200 \
+    --n_search_iterations 12 \
     --start_time $START_TIME 
 
 exit_code=$?

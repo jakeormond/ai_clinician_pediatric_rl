@@ -6,7 +6,7 @@
 #SBATCH --error=slurm/logs/%x_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=1
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=1-00:00:00
 #SBATCH --partition=normal
@@ -67,7 +67,7 @@ python -m src.scripts.supervised.supervised_learning \
     --prediction_type discharge_mortality_tte \
     --mode single_split \
     --search_variant random_search \
-    --n_epochs 50 \
+    --n_epochs 10 \
     --n_search_iterations 1 \
     --start_time $START_TIME     
 

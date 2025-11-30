@@ -46,6 +46,7 @@ class DynamicDeepHitMulti(nn.Module):
         self.num_layers = int(num_layers)
         self.num_time_bins = int(num_time_bins)
         self.num_risks = int(num_risks)
+        self.dropout = dropout
 
         self.predict_covariates = predict_covariates if predict_covariates else []
         self.project_features = project_features
@@ -53,31 +54,30 @@ class DynamicDeepHitMulti(nn.Module):
         # --- Temporal encoder ---
         if rnn_type.upper() == "LSTM":
             self.rnn = nn.LSTM(
-                input_size=feature_dim,
-                hidden_size=hidden_dim,
-                num_layers=num_layers,
+                input_size=self.feature_dim,
+                hidden_size=self.hidden_size,
+                num_layers=self.num_layers,
                 batch_first=True,
-                dropout=dropout if num_layers > 1 else 0.0,
+                dropout=self.dropout if num_layers > 1 else 0.0,
             )
-        else:
-            self.rnn = nn.GRU(
-                input_size=feature_dim,
-                hidden_size=hidden_dim,
-                num_layers=num_layers,
+        else:            self.rnn = nn.GRU(
+                input_size=self.feature_dim,
+                hidden_size=self.hidden_size,
+                num_layers=self.num_layers,
                 batch_first=True,
-                dropout=dropout if num_layers > 1 else 0.0,
+                dropout=self.dropout if num_layers > 1 else 0.0,
             )
 
         # LayerNorm after RNN — KEY for stability at higher LR
-        self.rnn_ln = nn.LayerNorm(hidden_dim)
+        self.rnn_ln = nn.LayerNorm(self.hidden_size)
 
         # prediction head for step-ahead covariate prediction 
         if len(self.predict_covariates) > 0:
             self.covariate_predictor = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim),
+                nn.Linear(self.hidden_size, self.hidden_size),
                 nn.ReLU(),
                 nn.Dropout(dropout),
-                nn.Linear(hidden_dim, len(self.predict_covariates))
+                nn.Linear(self.hidden_size, len(self.predict_covariates))
             )
         else:
             self.covariate_predictor = None
@@ -87,7 +87,7 @@ class DynamicDeepHitMulti(nn.Module):
         self.attn = TemporalAttention(
             hidden_size=self.hidden_size, 
             feature_size=self.feature_dim, 
-            attn_size=attn_hidden_dim, 
+            attn_size=self.attn_hidden_dim, 
             dropout=attn_dropout,
             use_layernorm=use_layernorm
             )
@@ -97,19 +97,19 @@ class DynamicDeepHitMulti(nn.Module):
         
         # feature projection, recommended when feature_dim is large - CURRENTLY, feature_dim IS LESS THAN hidden_dim, SO THIS IS UNUSED
         if self.project_features:
-            self.feat_proj = nn.Linear(feature_dim, hidden_dim)
-            head_input_dim = hidden_dim + hidden_dim
+            self.feat_proj = nn.Linear(self.feature_dim, self.hidden_size)
+            head_input_dim = self.hidden_size + self.hidden_size
         else:
-            head_input_dim = hidden_dim + feature_dim
+            head_input_dim = self.hidden_size + self.feature_dim
 
         # --- Event-specific heads ---
         self.heads = nn.ModuleList([
             nn.Sequential(
-                nn.Linear(head_input_dim, hidden_dim),
-                nn.LayerNorm(hidden_dim),
+                nn.Linear(head_input_dim, self.hidden_size),
+                nn.LayerNorm(self.hidden_size),
                 nn.ReLU(),
                 nn.Dropout(dropout),
-                nn.Linear(hidden_dim, num_time_bins)
+                nn.Linear(self.hidden_size, num_time_bins)
             )
             for _ in range(num_risks)
         ])

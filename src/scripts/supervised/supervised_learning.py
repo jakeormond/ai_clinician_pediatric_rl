@@ -13,6 +13,7 @@ import argparse
 import pandas as pd
 import numpy as np
 import time
+from datetime import datetime
 import wandb
 import logging
 import sys
@@ -122,9 +123,11 @@ def parse_arguments():
     
     args = parser.parse_args()
 
-    # If start_time is not provided, generate a timestamp
-    if args.start_time is None:
-        args.start_time = time.strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    job_id = (os.environ.get("SLURM_JOB_ID")
+                or os.environ.get("PBS_JOBID")
+                or os.getpid())
+    args.start_time = f"{ts}_job{job_id}"
 
     return args
 

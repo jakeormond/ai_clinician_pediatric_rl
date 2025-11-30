@@ -39,12 +39,14 @@ class DynamicDeepHitMulti(nn.Module):
             predict_covariates: list of indices of covariates to predict for regularization
         """
         super().__init__()
-        self.feature_dim = feature_dim
-        self.hidden_size = hidden_dim
-        self.attn_hidden_dim = attn_hidden_dim
-        self.num_layers = num_layers
-        self.num_time_bins = num_time_bins
-        self.num_risks = num_risks
+
+        self.feature_dim = int(feature_dim)
+        self.hidden_size = int(hidden_dim)
+        self.attn_hidden_dim = int(attn_hidden_dim)
+        self.num_layers = int(num_layers)
+        self.num_time_bins = int(num_time_bins)
+        self.num_risks = int(num_risks)
+
         self.predict_covariates = predict_covariates if predict_covariates else []
         self.project_features = project_features
 

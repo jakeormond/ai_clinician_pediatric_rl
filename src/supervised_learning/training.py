@@ -153,7 +153,7 @@ def create_buffer(processor, batch_size, config_manager):
         dataset = DynamicDeepHitDataset(processor.dynamic_deephit_dataset)
         buffer = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    elif config_manager.hospital == 'mimic_iv' and config_manager.training_config['tuning']:
+    elif config_manager.hospital == 'mimic_iv' and config_manager.training_config['in_memory_dataset']:
         dataset = DynamicDeepHit_InMemory(
             processor,
             config_manager
@@ -165,7 +165,7 @@ def create_buffer(processor, batch_size, config_manager):
             shuffle=True
         )
 
-    elif config_manager.hospital == 'mimic_iv':
+    elif config_manager.hospital == 'mimic_iv' and not config_manager.training_config['in_memory_dataset']:
         dataset = DynamicDeepHit_Lazy(
             processor,
             config_manager
@@ -385,13 +385,32 @@ def single_split_training(config_manager):
         config_manager, 
         normalize=True
         )
+    
+    if config_manager.training_config['tuning']:
+        logger.info(" Hyperparameter tuning mode enabled.")
 
-    # hyperparameter optimization
-    trainer, hyperparams, training_scores, val_scores, n_epochs = optimize_hyperparameters(
-        train_processor, 
-        val_processor, 
-        config_manager
-    )
+        # hyperparameter optimization
+        trainer, hyperparams, training_scores, val_scores, n_epochs = optimize_hyperparameters(
+            train_processor, 
+            val_processor, 
+            config_manager
+        )
+
+    else:
+        logger.info(" Fixed hyperparameter training mode enabled.")
+
+        # get fixed hyperparameters
+        hyperparams = get_fixed_hyperparameters(config_manager)
+
+        # train final model
+        training_scores, val_scores, n_epochs, trainer = train_with_hyperparameters(
+            train_processor, 
+            val_processor, 
+            config_manager, 
+            hyperparams,
+            n_epochs=config_manager.n_epochs,
+            final_model=False
+        )
 
     test_buffer = create_buffer(test_processor, config_manager.training_config['batch_size'], config_manager)
     test_losses = evaluate_final_model( # this evaluates on the entire test set (during training we only use a subset for speed)

@@ -55,14 +55,18 @@ class ShardProcessor:
             self.normalize_actions = False
             self.transform_actions = False           
 
-
-        # find the shards for the given split
-        self.shard_dir = os.path.join(config_manager.paths['data_dir'], 
-                                      config_manager.data_config['shard_dir'])
-        all_files = os.listdir(self.shard_dir)
-        
         if self.split == 'train' and config_manager.training_config['tuning']:
             self.split = 'tuning'
+
+        # find the shards for the given split
+        if not config_manager.training_config['tuning']:
+            self.shard_dir = os.path.join(config_manager.paths['data_dir'], 
+                        config_manager.data_config['shard_dir'], 'training_set')
+        else:
+            self.shard_dir = os.path.join(config_manager.paths['data_dir'], 
+                        config_manager.data_config['shard_dir'], 'tuning_set')
+
+        all_files = os.listdir(self.shard_dir)                
         
         raw_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
                                 f.startswith(self.split) and f.endswith("_shard.h5")]

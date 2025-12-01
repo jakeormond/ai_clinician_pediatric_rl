@@ -153,7 +153,7 @@ def create_buffer(processor, batch_size, config_manager):
         dataset = DynamicDeepHitDataset(processor.dynamic_deephit_dataset)
         buffer = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    elif config_manager.hospital == 'mimic_iv' and config_manager.training_config['in_memory_dataset']:
+    elif config_manager.hospital == 'mimic_iv' and config_manager.training_config['use_windows_from_memory']:
         dataset = DynamicDeepHit_InMemory(
             processor,
             config_manager
@@ -165,7 +165,7 @@ def create_buffer(processor, batch_size, config_manager):
             shuffle=True
         )
 
-    elif config_manager.hospital == 'mimic_iv' and not config_manager.training_config['in_memory_dataset']:
+    elif config_manager.hospital == 'mimic_iv' and not config_manager.training_config['use_windows_from_memory']:
         dataset = DynamicDeepHit_Lazy(
             processor,
             config_manager

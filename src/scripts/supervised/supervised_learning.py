@@ -89,7 +89,7 @@ def parse_arguments():
 
 
     parser.add_argument('--experiment_variant', type=str, default='standard',
-                       choices=['standard', 'quick_test', 'full_search', 'production'],
+                       choices=['standard', 'quick_test', 'full_search', 'prediction'],
                        help='Experiment variant determines config defaults')
 
     parser.add_argument('--search_variant', type=str, default=None,
@@ -176,9 +176,9 @@ def main():
         dataframe_path = dataset.save_dataframe(config_manager)
      
     
-    elif args.mode == 'single_split':
+    elif args.mode == 'single_split' and args.experiment_variant != 'prediction':
         """
-        this is for the MIMIC IV 
+        this is for training on the MIMIC IV dataset with a single train/val/test split.
         Because the data is in hdf5 shards, we can't do much processing here, 
         instead the data processopr for shards will handle it
         """
@@ -198,7 +198,13 @@ def main():
         print(f"Experiment directory: {config_manager.experiment_dir}")
     
         results = single_split_training(config_manager)
-    
+
+
+    elif args.mode == 'single_split' and args.experiment_variant == 'prediction':
+        """
+        this is for generating predictions on the MIMIC IV dataset with a single train/val/test split.
+        """
+
     
     elif args.mode == 'development_single_split':
       

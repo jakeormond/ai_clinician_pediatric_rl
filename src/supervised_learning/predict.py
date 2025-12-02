@@ -12,7 +12,7 @@ import pandas as pd
 
 
 
-def main():
+def predict():
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--test_data", required=True)
@@ -42,6 +42,11 @@ def main():
     }
     with open(args.output + ".meta.json", "w") as f:
         json.dump(meta, f, indent=2)
+
+
+def main():
+    predict()
+
 
 if __name__ == "__main__":
     main()

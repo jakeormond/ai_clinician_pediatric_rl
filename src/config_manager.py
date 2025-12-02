@@ -22,7 +22,7 @@ class ConfigManager:
  
         self.paths, self.environment = load_paths(self.hospital)
         self.set_data()
-
+        
         if self.mode == "single_fold":        
             
             self.set_experiment_name()
@@ -32,7 +32,18 @@ class ConfigManager:
             self.add_fold(self.fold)
 
         elif self.mode == "single_split":
-            self.create_single_split_dir()
+            if self.experiment_variant == "prediction":
+                # find model directory
+                results_dir = self.paths['final_model_dir']
+                # get the path to the folder inside the results_dir
+                model_folders = [f for f in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, f))]
+                if len(model_folders) > 1:
+                    raise ValueError("Multiple model folders found in final_model_dir, please specify one")
+                model_folder = model_folders[0]
+                self.experiment_dir = Path(results_dir) / model_folder
+
+            else:
+                self.create_single_split_dir()
 
         elif self.mode == "analyse_features":
             self.set_experiment_name()

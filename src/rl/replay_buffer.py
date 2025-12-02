@@ -293,6 +293,7 @@ class DynamicDeepHit_Lazy(Dataset):
             "mask": mask,                             # (window_length,)
             "event": torch.tensor(event, dtype=torch.long),
             "time_to_event": torch.tensor(tte_bin, dtype=torch.long),
+            "tte_raw": torch.tensor(time_to_event, dtype=torch.long),
             "stay_id": stay_id                    # useful for debugging
         }
         

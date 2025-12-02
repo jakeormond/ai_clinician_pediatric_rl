@@ -160,7 +160,11 @@ class ShardProcessor:
         # else:
         #     self.create_index_table_for_window_sampling(config_manager)
         # gemerate everytime because it may change based on time bins
-        self.create_index_table_for_window_sampling(config_manager)
+        
+        if config_manager.experiment_variant == 'prediction':
+            self.create_index_table_for_all_windows(config_manager)
+        else:
+            self.create_index_table_for_window_sampling(config_manager)
 
         if config_manager.training_config['use_windows_from_memory']:
             logger.info("Using windows loaded into memory for training.")
@@ -236,9 +240,89 @@ class ShardProcessor:
         index_table_path = os.path.join(self.shard_dir, f"{self.split}_index_table.parquet")
         df.to_parquet(index_table_path)
         logger.info(f"Saved index table to {index_table_path}")
+   
+    
+    def create_index_table_for_all_windows(self, config_manager):
+        """
+        For generating predictions at all time points, we need to create an index table for 
+        all windows in the dataset.
+        """
+        window_index_table_path = os.path.join(self.shard_dir, f"{self.split}_all_windows_index_table.parquet")
+        if os.path.exists(window_index_table_path):
+            self.window_index_table = pd.read_parquet(window_index_table_path) 
+            logger.info(f"loaded window index table from {window_index_table_path}")
+            return
+        
+        rows = []
+
+        for _, row in self.traj_index_table.iterrows():
+            stay_id = row['stay_id']
+            traj_length = row['length']
+            window_idx = row['window_idx']
+            start_idx = row['start_index']
+        
+            if traj_length > config_manager.max_encounter_length:
+                continue
+
+            event_raw = row['event'] # will convert to 1 for survival, 2 for death to be consistent with existing code
+            time_to_event = np.arange(traj_length, 0, -1)
+
+            for idx in range(len(time_to_event)):                
+                
+                tte = time_to_event[idx]   # identical to your logic
+                sample_end_idx = start_idx + idx
+                sample_end_window_idx = np.floor(sample_end_idx/self.window_length)
+
+                if sample_end_window_idx > 0:
+                    window_length = self.window_length
+                    sample_end_idx = sample_end_idx - (sample_end_window_idx * self.window_length)
+                    sample_start_idx = sample_end_idx - self.window_length + 1
+                    
+                    if sample_start_idx < 0:
+                        sample_start_window_idx = sample_end_window_idx - 1
+                        sample_start_idx = self.window_length + sample_start_idx
+                    else:
+                        sample_start_window_idx = sample_end_window_idx
+
+                else:
+                    sample_start_window_idx = 0
+                    sample_start_idx = 0 
+                    window_length = sample_end_idx + 1               
+            
+                sample_start_window_idx += window_idx
+                sample_end_window_idx += window_idx
+
+                rows.append({
+                    "stay_id": stay_id,
+                    "window_start": int(sample_start_window_idx), # start index (0-based)
+                    "window_end": int(sample_end_window_idx),         # end index (0-based)
+                    "start_index": int(sample_start_idx),         # start index within window
+                    "end_index": int(sample_end_idx),             # end index within window
+                    "window_length": int(window_length),
+                    "time_to_event": int(tte),
+                    "event_raw": event_raw
+                })
+
+        # build dataframe
+        window_index_table = pd.DataFrame(rows)
+
+        # sort by stay_id and window_end   
+        self.window_index_table = window_index_table.sort_values(by=['stay_id', 'window_end', 'end_index']).reset_index(drop=True)
+
+        # save the window index table to the shard dir
+        self.window_index_table.to_parquet(window_index_table_path)
+        logger.info(f"Saved window index table to {window_index_table_path}")
 
 
     def create_index_table_for_window_sampling(self, config_manager):
+        
+        window_index_table_path = os.path.join(self.shard_dir, f"{self.split}_window_index_table.parquet")
+        # if file already exists, load it
+        if os.path.exists(window_index_table_path):
+            self.window_index_table = pd.read_parquet(window_index_table_path) 
+            logger.info(f"loaded window index table from {window_index_table_path}")
+            return
+
         seed = config_manager.training_config.get('random_seed', 42)
         rng = np.random.default_rng(seed)
         
@@ -316,7 +400,6 @@ class ShardProcessor:
         self.window_index_table = window_index_table.sort_values(by=['stay_id', 'window_end', 'end_index']).reset_index(drop=True)
 
         # save the window index table to the shard dir
-        window_index_table_path = os.path.join(self.shard_dir, f"{self.split}_window_index_table.parquet")
         self.window_index_table.to_parquet(window_index_table_path)
         logger.info(f"Saved window index table to {window_index_table_path}")
 

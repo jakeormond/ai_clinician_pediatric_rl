@@ -166,6 +166,7 @@ def main():
     if config_manager.model_type == "dynamic_deephit":
         from ...supervised_learning.training import outer_training_loop, development_training_loop, single_split_training
         from ...supervised_learning.models.dynamic_deephit import make_mixed_resolution_time_bins
+        from ...supervised_learning.predict import predict
 
     else:
         from ...supervised_learning.training_scikitlearn import outer_training_loop, \
@@ -176,37 +177,39 @@ def main():
         dataframe_path = dataset.save_dataframe(config_manager)
      
     
-    elif args.mode == 'single_split' and args.experiment_variant != 'prediction':
-        """
-        this is for training on the MIMIC IV dataset with a single train/val/test split.
-        Because the data is in hdf5 shards, we can't do much processing here, 
-        instead the data processopr for shards will handle it
-        """
-
-        # set training config
-        config_manager.set_training_config()
-
+    elif args.mode == 'single_split':
         if config_manager.model_type == "dynamic_deephit":
-
+            # set training config
+            config_manager.set_training_config()
+            
             # set max encounter length as 2 months
             max_encounter_length = 24 * 60  # hours
             time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
             config_manager.max_encounter_length = max_encounter_length
-            config_manager.time_bins = time_bins
+            config_manager.time_bins = time_bins  
 
-        print(f"Running on {config_manager.environment} environment")
-        print(f"Experiment directory: {config_manager.experiment_dir}")
-    
-        results = single_split_training(config_manager)
+            print(f"Running on {config_manager.environment} environment")    
 
-
-    elif args.mode == 'single_split' and args.experiment_variant == 'prediction':
-        """
-        this is for generating predictions on the MIMIC IV dataset with a single train/val/test split.
-        """
+        if args.experiment_variant != 'prediction':      
+            """
+            this is for training on the MIMIC IV dataset with a single train/val/test split.
+            Because the data is in hdf5 shards, we can't do much processing here, 
+            instead the data processopr for shards will handle it
+            """      
+            print(f"Experiment directory: {config_manager.experiment_dir}")
         
-        pass
+            results = single_split_training(config_manager)
 
+
+        elif args.mode == 'single_split' and args.experiment_variant == 'prediction':
+            """
+            this is for generating predictions on the MIMIC IV dataset with a single train/val/test split.
+            """
+            # make sure config_manager.training_config["use_windows_from_memory"] is False
+            config_manager.training_config["use_windows_from_memory"] = False
+
+            predict(config_manager)
+            
     
     elif args.mode == 'development_single_split':
       

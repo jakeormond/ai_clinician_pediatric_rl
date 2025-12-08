@@ -67,6 +67,9 @@ class TransformerDeepHitMulti(nn.Module):
         self.dropout = dropout
         self.max_seq_len = max_seq_len
         self.predict_covariates = predict_covariates if predict_covariates else []
+
+        # Pre-calculate the fixed-size Causal Mask
+        self.register_buffer('causal_mask', self.generate_square_subsequent_mask(max_seq_len))
         
         # --- 1. Input Embedding ---
         # Map input features to the Transformer's model dimension (d_model)
@@ -132,12 +135,23 @@ class TransformerDeepHitMulti(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor = None):
+
+    def generate_square_subsequent_mask(self, sz: int) -> torch.Tensor:
+        """Generates an upper-triangular matrix of -inf, which prevents attention to future positions."""
+        # PyTorch helper function creates a matrix where T means blocked
+        mask = torch.triu(torch.ones(sz, sz), diagonal=1).bool()
+        return mask
+
+    
+    def forward(self, x: torch.Tensor, padding_mask: torch.Tensor = None):
         """
         Args:
             x: Tensor of shape [batch_size, seq_len, feature_dim]
             mask: Boolean mask of shape [batch_size, seq_len] where True indicates padded (ignored) elements.
         """
+        # Ensure we only use the part of the pre-calculated mask relevant to the batch sequence length
+        batch_size, seq_len, _ = x.shape
+        
         # 1. Project and encode features
         x = self.input_projection(x) # [B, T, feature_dim] -> [B, T, d_model]
         
@@ -147,29 +161,38 @@ class TransformerDeepHitMulti(nn.Module):
         # 3. Transformer Encoder
         # The attention mask (src_key_padding_mask) needs to be passed to the encoder.
         # PyTorch Transformer expects mask to be a boolean tensor where True means to IGNORE the key.
-        if mask is not None:
+        if padding_mask is not None:
             # Mask should be True where padding exists (you should ensure your padding logic creates this mask)
-            output = self.transformer_encoder(x, src_key_padding_mask=mask) # [B, T, d_model]
+            output = self.transformer_encoder(
+                x, 
+                mask=self.causal_mask[:seq_len, :seq_len], # Causal Mask
+                src_key_padding_mask=padding_mask
+            ) # [B, T, d_model]
         else:
-            output = self.transformer_encoder(x)
+            output = self.transformer_encoder(
+                x,
+                mask=self.causal_mask[:seq_len, :seq_len] # Causal Mask
+            )
         
-        # 4. Extract final representation
-        # Since we are predicting conditional survival from the final timestep, 
-        # we use the output corresponding to the last measurement.
-        # output[:, -1, :] is the representation of the final timestep.
-        final_rep = output[:, -1, :] # [B, d_model]
+        # 4. Process all timesteps
+        # Flatten the output to treat every timestep of every sequence as a separate prediction point
+        # Output shape is now [B * T, d_model]
+        all_timesteps_rep = output.reshape(batch_size * seq_len, self.d_model)
         
         # 5. Covariate Prediction (If enabled)
         covariate_pred = None
         if self.covariate_predictor:
-            # Use the penultimate hidden state to predict the next covariate
-            # This is optional and often used as a regularization term
-            covariate_pred = self.covariate_predictor(output[:, -2, :])
+            # this needs to be handled differently than with the GRU version
+            pass
             
         # 6. Event-specific heads
         risk_logits = []
         for head in self.heads:
-            logits = head(final_rep) # [B, num_time_bins]
+            # Apply the heads to the flattened representation
+            logits = head(all_timesteps_rep) # [B * T, num_time_bins]
+            
+            # Reshape the logits back to sequence form for loss calculation
+            logits = logits.reshape(batch_size, seq_len, self.num_time_bins) # [B, T, num_time_bins]
             risk_logits.append(logits)
             
         return risk_logits, covariate_pred

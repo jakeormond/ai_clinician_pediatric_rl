@@ -198,332 +198,7 @@ class TransformerDeepHitMulti(nn.Module):
         return risk_logits, covariate_pred
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-class DynamicDeepHitMulti(nn.Module):
-    def __init__(
-        self,
-        feature_dim: int,
-        hidden_dim: int,
-        attn_hidden_dim: int,
-        num_layers: int,
-        num_time_bins: int,
-        num_risks: int,
-        dropout: float = 0.3,
-        use_layernorm: bool = False,
-        attn_dropout: float = 0.1,
-        rnn_type: str = "GRU",
-        project_features: bool = False,
-        predict_covariates: list = None,
-    ):
-        """
-        Args:
-            input_dim: number of covariates per time step
-            hidden_dim: RNN hidden size
-            num_layers: number of RNN layers
-            num_time_bins: number of discrete time bins
-            num_risks: number of competing risks (e.g. 2 for death, discharge)
-            dropout: dropout rate
-            rnn_type: 'GRU' or 'LSTM',
-            predict_covariates: list of indices of covariates to predict for regularization
-        """
-        super().__init__()
-
-        self.feature_dim = int(feature_dim)
-        self.hidden_size = int(hidden_dim)
-        self.attn_hidden_dim = int(attn_hidden_dim)
-        self.num_layers = int(num_layers)
-        self.num_time_bins = int(num_time_bins)
-        self.num_risks = int(num_risks)
-        self.dropout = dropout
-
-        self.predict_covariates = predict_covariates if predict_covariates else []
-        self.project_features = project_features
-
-        # --- Temporal encoder ---
-        if rnn_type.upper() == "LSTM":
-            self.rnn = nn.LSTM(
-                input_size=self.feature_dim,
-                hidden_size=self.hidden_size,
-                num_layers=self.num_layers,
-                batch_first=True,
-                dropout=self.dropout if num_layers > 1 else 0.0,
-            )
-        else:            self.rnn = nn.GRU(
-                input_size=self.feature_dim,
-                hidden_size=self.hidden_size,
-                num_layers=self.num_layers,
-                batch_first=True,
-                dropout=self.dropout if num_layers > 1 else 0.0,
-            )
-
-        # LayerNorm after RNN — KEY for stability at higher LR
-        self.rnn_ln = nn.LayerNorm(self.hidden_size)
-
-        # prediction head for step-ahead covariate prediction 
-        if len(self.predict_covariates) > 0:
-            self.covariate_predictor = nn.Sequential(
-                nn.Linear(self.hidden_size, self.hidden_size),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(self.hidden_size, len(self.predict_covariates))
-            )
-        else:
-            self.covariate_predictor = None
-
-
-        # temporal attention
-        self.attn = TemporalAttention(
-            hidden_size=self.hidden_size, 
-            feature_size=self.feature_dim, 
-            attn_size=self.attn_hidden_dim, 
-            dropout=attn_dropout,
-            use_layernorm=use_layernorm
-            )
-        
-        # Additional dropout after attention (reduces hazard overfitting)
-        self.post_attn_dropout = nn.Dropout(dropout)
-        
-        # feature projection, recommended when feature_dim is large - CURRENTLY, feature_dim IS LESS THAN hidden_dim, SO THIS IS UNUSED
-        if self.project_features:
-            self.feat_proj = nn.Linear(self.feature_dim, self.hidden_size)
-            head_input_dim = self.hidden_size + self.hidden_size
-        else:
-            head_input_dim = self.hidden_size + self.feature_dim
-
-        # --- Event-specific heads ---
-        self.heads = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(head_input_dim, self.hidden_size),
-                nn.LayerNorm(self.hidden_size),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(self.hidden_size, num_time_bins)
-            )
-            for _ in range(num_risks)
-        ])
-        
-
-    def forward(self, x, mask=None, return_predictions=False):
-        """
-        Args:
-            x: [batch, seq_len, input_dim]
-            mask: [batch, seq_len] with 1 for valid timesteps, 0 for padding
-        Returns:
-            out: list of [batch, num_time_bins] tensors, one per risk
-        """
-        # --- Pack padded sequences if mask provided ---
-        if mask is not None:
-            lengths = mask.sum(dim=1).cpu()
-            packed = nn.utils.rnn.pack_padded_sequence(
-                x, lengths, batch_first=True, enforce_sorted=False
-            )
-            h_packed, _ = self.rnn(packed)
-            h, _ = nn.utils.rnn.pad_packed_sequence(h_packed, batch_first=True)
-        else:
-            h, _ = self.rnn(x)
-
-        # LayerNorm on RNN outputs
-        h = self.rnn_ln(h)
-
-        # Optionally zero-out padding representations after LN
-        if mask is not None:
-            h = h * mask.unsqueeze(-1)  # (B, T, H)
-
-        # ------ note that h comes out padded at the end not the beginning for shorter windows -------
-        # generate right-padded mask
-        device = h.device
-        batch_size, max_len, _ = h.shape
-        lengths = lengths.to(device)
-        new_mask = torch.arange(max_len, device=device).expand(batch_size, max_len) < lengths.unsqueeze(1)  
-        
-        # --- NEW: Generate step-ahead predictions from GRU hidden states ---
-        predictions = None
-        if self.covariate_predictor is not None and return_predictions:
-            # Use hidden states from timesteps 0 to seq_len-2 to predict timesteps 1 to seq_len-1
-            # h: [batch, seq_len, hidden_dim]
-            h_for_pred = h[:, :-1, :]  # [batch, seq_len-1, hidden_dim]
-            predictions = self.covariate_predictor(h_for_pred)  # [batch, seq_len-1, num_predict_covariates]
-            # apply mask to predictions
-            pred_mask = new_mask[:, 1:] # need to remove as many predictions as zeros in the mask  
-            predictions = predictions * pred_mask.unsqueeze(-1).float()  # Zero out padded predictions
-
-        # ----temporal attention--------
-        #  pass hidden states through temporal attention
-        
-        # move padding from left to right for x
-        feature_dim = x.shape[2]
-        x_right_padded = torch.zeros((batch_size, max_len, feature_dim), device=device, dtype=x.dtype)
-        for i in range(batch_size):
-            L = lengths[i].long()
-            # Copy the last L timesteps (the valid ones) to the front of the new array
-            x_right_padded[i, :L] = x[i, -L:]        
-        
-        context, attn_weights = self.attn(h, x_right_padded, new_mask)  # [batch_size, hidden_dim]
-
-        # --- Event-specific hazard outputs ---
-        # Note that here we use the left padded data so the last measurement corresponds to the last time step
-        last_measurement = x[:, -1, :]      # [batch, 80] - just the last timestep
-
-        if self.project_features: # only if feature_dim > hidden_dim
-            feat_vec = self.feat_proj(last_measurement)             # (B, H)
-        else:
-            feat_vec = last_measurement                             # (B, F)
-        
-        # Input to cause-specific subnetworks
-        subnetwork_input = torch.cat([context, feat_vec], dim=-1)
-        
-        logits = torch.stack([head(subnetwork_input) for head in self.heads], dim=1)
-        B, K, T = logits.shape
-        logits_flat = logits.view(B, -1)                # [B, K*T]
-        probs_flat = F.softmax(logits_flat, dim=-1)     # each row sums to 1
-        probs = probs_flat.view(B, K, T)   
-
-        if return_predictions:
-            return logits, probs, predictions, x_right_padded, new_mask  # [B, K, T], [B, K, T], [B, seq_len-1, num_predict_covariates]
-        else:
-            return logits, probs, _, x_right_padded, new_mask  # [B, K, T], [B, K, T]
-        
-
-class TemporalAttention(nn.Module):
-    """
-    Simple temporal attention over RNN hidden states.
-    Computes scalar score for each time step and returns:
-      - context: [B, H]  (weighted sum of h over time)
-      - attn_weights: [B, T]
-    Masking ensures padded timesteps receive zero weight.
-    """
-    def __init__(
-            self, 
-            hidden_size: int, 
-            feature_size: int, 
-            attn_size: int = None, 
-            dropout: float = None,
-            use_layernorm: bool = True
-            ):
-
-        super().__init__()
-        
-        self.hidden_size = hidden_size
-        self.feature_size = feature_size
-
-        if attn_size is None:
-            attn_size = self.hidden_size // 2 if self.hidden_size >= 4 else self.hidden_size
-        self.attn_size = attn_size
-                
-        self.W_h = nn.Linear(self.hidden_size, self.attn_size, bias=False)
-        self.W_x = nn.Linear(self.feature_size, self.attn_size, bias=False)
-        self.v = nn.Linear(self.attn_size, 1, bias=False)  #
-        
-        self.b = nn.Parameter(torch.zeros(attn_size))
-        
-        self.intermediate_dropout = nn.Dropout(dropout)
-        self.attn_dropout = nn.Dropout(dropout)  # separate name for clarity
-        self.post_attn_dropout = nn.Dropout(dropout) # dropout on final context
-        
-        # LayerNorm should normalize across the last (feature) dimension.
-        # For h: last dim = hidden_size; for x: last dim = feature_size.
-        self.use_layernorm = use_layernorm
-        if use_layernorm:
-            self.ln_h = nn.LayerNorm(self.hidden_size)
-            self.ln_x = nn.LayerNorm(self.feature_size)
-        
-        # weight init (optional but recommended)
-        nn.init.xavier_uniform_(self.W_h.weight)
-        nn.init.xavier_uniform_(self.W_x.weight)
-        nn.init.xavier_uniform_(self.v.weight)
-     
-
-    def forward(
-            self, h: torch.Tensor, 
-            x: torch.Tensor, 
-            mask: torch.Tensor = None, 
-            ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        h: [B, T, H] RNN outputs / hidden states (batch_first)
-        mask: [B, T] boolean or float (1 for valid, 0 for pad)
-        returns: context [B, H], attn_weights [B, T]
-        """
-        # Optional LayerNorm applied per timestep across feature dim
-        if self.use_layernorm:
-            # LayerNorm works on last dim, so this will normalize per-timestep vectors
-            h_norm = self.ln_h(h)         # [B, T, H]
-            x_norm = self.ln_x(x)         # [B, T, F]
-        else:
-            h_norm = h
-            x_norm = x
-
-        # compute intermediate: [B, T, attn_hidden]
-        Wh = self.W_h(h_norm)    # [B, T, A]
-        Wx = self.W_x(x_norm)    # [B, T, A]
-        
-        u = torch.tanh(Wh + Wx + self.b)    # [B, T, A]
-        u = self.intermediate_dropout(u)  # regularize attention intermediate
-                       
-        scores = self.v(u).squeeze(-1)           # [B, T]
-
-        # mask: convert to float (1.0 valid, 0.0 pad)
-        if mask.dtype != torch.bool:
-            mask_bool = mask.bool()
-        else:
-            mask_bool = mask
-        
-        # set scores of padded positions to a large negative number before softmax
-        # numerical stable softmax: subtract max per row
-        scores_masked = scores.masked_fill(~mask_bool, float("-1e9"))
-        # compute normalized attention
-        attn_weights = F.softmax(scores_masked, dim=-1)   # [B, T], padded positions ~0
-        attn_weights = self.attn_dropout(attn_weights)  # attention dropout
-
-        # weighted sum => context
-        context = (attn_weights.unsqueeze(-1) * h).sum(dim=1)
-        context = self.post_attn_dropout(context)
-
-        return context, attn_weights
-
-
-class DynamicDeepHitTrainer:
+class TransformerDeepHitTrainer:
     def __init__(
         self,
         model,
@@ -533,10 +208,6 @@ class DynamicDeepHitTrainer:
         num_time_bins = 100,
         loss_fn=None,
         grad_clip=1.0,
-        alpha_rank = None,
-        alpha_pred = None,
-        alpha_class = None,
-        sigma = None,
         scheduler=None,
         verbose=True,
         physiological_feature_type = None,
@@ -562,10 +233,6 @@ class DynamicDeepHitTrainer:
         self.num_time_bins = num_time_bins
         self.loss_fn = loss_fn
         self.grad_clip = grad_clip
-        self.alpha_class = alpha_class
-        self.alpha_rank = alpha_rank
-        self.alpha_pred = alpha_pred
-        self.sigma = sigma
         self.scheduler = scheduler
         self.verbose = verbose
         self.physiological_feature_type = physiological_feature_type
@@ -590,21 +257,31 @@ class DynamicDeepHitTrainer:
         self.optimizer.zero_grad()
 
         # Forward pass
-        # Model should output: [batch_size, num_risks, num_time_bins]
-        logits, _, predictions, x_right_padded , new_mask = self.model(X, mask=mask, return_predictions=True)
+        # risk_logits: list of tensors, where each tensor is [B, T_cap, num_time_bins]
+        # covariate_pred: None (or [B, T_cap, num_covariates] if implemented)
+        risk_logits, covariate_pred = self.model(X, padding_mask=mask)
+        
+        # We need to restructure the risk_logits for the loss function:
+        # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_risks, num_time_bins]
+        logits = torch.stack(risk_logits, dim=2)
+
+        # 2. Reshape to [B * T_cap, num_risks, num_time_bins] for the loss function
+        #    (Assuming your existing loss function expects a flattened batch/time dimension)
+        B, T_cap, R, D = logits.shape
+        logits_flat = logits.reshape(B * T_cap, R, D)
+
+        # 3. Create flattened versions of the targets and masks
+        time_to_event_flat = time_to_event.reshape(B * T_cap)
+        event_label_flat = event_label.reshape(B * T_cap)
+        mask_flat = mask.reshape(B * T_cap) # This is the key for excluding padded steps
 
         # Compute log loss and ranking loss
         loss, lik_loss, class_loss, rank_loss, pred_loss = self.loss_fn(
             logits, 
-            predictions, 
-            time_to_event, 
-            event_label, 
-            x_right_padded,
-            new_mask,
-            alpha_class = self.alpha_class,
-            alpha_rank = self.alpha_rank,
-            alpha_pred = self.alpha_pred,
-            sigma = self.sigma,
+            covariate_pred, 
+            time_to_event_flat, 
+            event_label_flat, 
+            mask_flat, # The new mask is the key to exclude padded/invalid steps
             predict_covariates=self.model.predict_covariates,
             physiological_feature_type=self.physiological_feature_type
             )
@@ -768,7 +445,6 @@ def dynamic_deephit_loss(
         alpha: weight for ranking loss
         eps: numerical stability
 
-        NOTES: SIGMA of 0.01 leads to all NaNs in predictions - why?
 
 
     Returns:

@@ -477,27 +477,39 @@ def dynamic_deephit_loss(
     v_predictions = predictions[valid_indices]
     v_time_to_event = time_to_event[valid_indices]
     v_event_label = event_label[valid_indices]
+
+    # --- 2. Compute DeepHit Component Losses ---
+    # Because we filtered, these functions now see a "batch" of size N_valid
+    lik_loss = log_likelihood_loss(v_logits, v_time_to_event, v_event_label, no_censoring)
+    classification_loss = event_classification_loss(v_logits, v_event_label, no_censoring)
     
+    # Ranking loss evaluates pairs. With multi-timestep, it compares risk 
+    # across different patients AND different hours within the stay.
+    rank_loss = ranking_loss(v_logits, v_time_to_event, v_event_label, no_censoring=no_censoring, sigma=sigma)
 
+    # --- 3. Auxiliary Prediction Loss ---
+    # If you are doing step-ahead covariate prediction, you need to filter 
+    # the feature tensors as well. 
+    if alpha_pred > 0 and len(predict_covariates) > 0 and x_right_padded is not None:
+        # Flatten x_right_padded to [B * T, feature_dim] to match mask
+        x_flat = x_right_padded.view(-1, x_right_padded.shape[-1])
+        v_x = x_flat[valid_indices]
+        
+        pred_loss = prediction_loss(
+                v_x,
+                v_predictions, 
+                torch.ones_like(v_event_label), # Already filtered, so all are valid (1)
+                predict_covariates, 
+                physiological_feature_type
+                ) 
+    else:
+        pred_loss = torch.tensor(0.0, device=logits.device)
 
-
-
-
-    lik_loss = log_likelihood_loss(logits, time_to_event, event_label, no_censoring)
-    classification_loss = event_classification_loss(logits, event_label, no_censoring)
-    rank_loss = ranking_loss(logits, time_to_event, event_label, no_censoring=no_censoring, sigma=sigma)
-    
-    pred_loss = prediction_loss(
-            x_right_padded,
-            predictions, 
-            mask, 
-            predict_covariates, 
-            physiological_feature_type
-            ) 
-      
-    # --- Combine ---
+    # --- 4. Combine ---
     loss = lik_loss + alpha_class * classification_loss + alpha_rank * rank_loss + alpha_pred * pred_loss
+    
     return loss, lik_loss, classification_loss, rank_loss, pred_loss
+
 
 
 def log_likelihood_loss(logits, time_to_event, event_label, no_censoring=True):

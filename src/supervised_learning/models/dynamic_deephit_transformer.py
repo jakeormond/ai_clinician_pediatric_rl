@@ -282,6 +282,10 @@ class TransformerDeepHitTrainer:
             time_to_event_flat, 
             event_label_flat, 
             mask_flat, # The new mask is the key to exclude padded/invalid steps
+            alpha_class = self.alpha_class,
+            alpha_rank = self.alpha_rank,
+            alpha_pred = self.alpha_pred,
+            sigma = self.sigma,
             predict_covariates=self.model.predict_covariates,
             physiological_feature_type=self.physiological_feature_type
             )
@@ -330,16 +334,29 @@ class TransformerDeepHitTrainer:
 
         # Forward pass
         with torch.no_grad():
-            logits, _, predictions, x_right_padded , new_mask = self.model(X, mask=mask, return_predictions=True)
+            risk_logits, covariate_pred = self.model(X, padding_mask=mask)
+
+            # We need to restructure the risk_logits for the loss function:
+            # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_risks, num_time_bins]
+            logits = torch.stack(risk_logits, dim=2)
+
+            # 2. Reshape to [B * T_cap, num_risks, num_time_bins] for the loss function
+            #    (Assuming your existing loss function expects a flattened batch/time dimension)
+            B, T_cap, R, D = logits.shape
+            logits_flat = logits.reshape(B * T_cap, R, D)
+
+            # 3. Create flattened versions of the targets and masks
+            time_to_event_flat = time_to_event.reshape(B * T_cap)
+            event_label_flat = event_label.reshape(B * T_cap)
+            mask_flat = mask.reshape(B * T_cap) # This is the key for excluding padded steps
 
             # Compute log loss and ranking loss
             loss, lik_loss, class_loss, rank_loss, pred_loss = self.loss_fn(
                 logits, 
-                predictions, 
-                time_to_event, 
-                event_label, 
-                x_right_padded,
-                new_mask,
+                covariate_pred, 
+                time_to_event_flat, 
+                event_label_flat, 
+                mask_flat, # The new mask is the key to exclude padded/invalid steps
                 alpha_class = self.alpha_class,
                 alpha_rank = self.alpha_rank,
                 alpha_pred = self.alpha_pred,
@@ -369,17 +386,17 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
 
     num_risks = 2 # hardcoded for death vs discharge
 
-    dynamic_deephit_model = DynamicDeepHitMulti(
-        feature_dim,
-        hyperparams['hidden_dim'],
-        hyperparams['attn_hidden_dim'],
-        hyperparams['n_layers'],
-        n_time_bins,
-        num_risks,
+    dynamic_deephit_model = TransformerDeepHitMulti(
+        feature_dim=feature_dim,
+        d_model=hyperparams['d_model'],               # e.g., 128 or 256
+        nhead=hyperparams['nhead'],                   # e.g., 4 or 8
+        num_encoder_layers=hyperparams['n_layers'],   # e.g., 3 or 6
+        num_time_bins=n_time_bins,
+        num_risks=num_risks,
         dropout=hyperparams['dropout'],
-        use_layernorm=hyperparams['use_layernorm'],
-        rnn_type="GRU",
-        predict_covariates=train_processor.physiological_feature_ind,
+        dim_feedforward=hyperparams.get('dim_feedforward', 512), # Usually 4 * d_model
+        max_seq_len=hyperparams.get('max_seq_len', 768),         # Our chosen T_cap
+        predict_covariates=train_processor.physiological_feature_ind,       
     ).to(config_manager.training_config['device'])
 
     # Collect L1 parameters: classification head weights only
@@ -394,7 +411,7 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
         weight_decay = float(hyperparams['weight_decay'])
     )
 
-    trainer = DynamicDeepHitTrainer(
+    trainer = TransformerDeepHitTrainer(
             dynamic_deephit_model,
             deephit_optimizer,
             device=config_manager.training_config['device'],
@@ -422,7 +439,7 @@ def dynamic_deephit_loss(
         predictions,
         time_to_event, 
         event_label,
-        x_right_padded, 
+        x_right_padded, # might not need this anymore, check!
         mask, # right padded
         predict_covariates: list = [],
         physiological_feature_type: list = [],
@@ -450,7 +467,22 @@ def dynamic_deephit_loss(
     Returns:
         scalar loss tensor
     """
+    # --- 1. Filter Padded Timesteps ---
+    # We only want to compute loss for timesteps that are NOT padding.
+    # mask is assumed to be 1/True for valid steps.
+    valid_indices = torch.where(mask.bool())[0]
+
+    # Filter all relevant tensors to keep only the valid "active" hours
+    v_logits = logits[valid_indices]
+    v_predictions = predictions[valid_indices]
+    v_time_to_event = time_to_event[valid_indices]
+    v_event_label = event_label[valid_indices]
     
+
+
+
+
+
     lik_loss = log_likelihood_loss(logits, time_to_event, event_label, no_censoring)
     classification_loss = event_classification_loss(logits, event_label, no_censoring)
     rank_loss = ranking_loss(logits, time_to_event, event_label, no_censoring=no_censoring, sigma=sigma)

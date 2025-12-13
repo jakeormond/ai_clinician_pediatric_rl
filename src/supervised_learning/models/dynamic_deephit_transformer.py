@@ -513,7 +513,7 @@ def dynamic_deephit_loss(
 
 
 def log_likelihood_loss(logits, time_to_event, event_label, no_censoring=True):
-    B, K, T = logits.shape
+    B, K, T = logits.shape # note that T is num_time_bins here, that may not be consistent with the model naming where T may be sequence length
 
     # subtract 1 from event_label if no censoring
     event_label = event_label -1 if no_censoring else event_label   
@@ -708,8 +708,8 @@ def make_mixed_resolution_time_bins(max_time_hours=3000):
     # manual bins
     # all_bins = np.array([0, 24, 48, 168])
     if max_time_hours <= 336:
-        all_bins = np.array([0, 6, 12, 24, 48, 168]) # testing with fewer bins
+        all_bins = np.array([0, 6, 12, 24, 48, 72, 168]) # testing with fewer bins
     else:
-        all_bins = np.array([0, 6, 12, 24, 48, 168, 336, max_time_hours])
+        all_bins = np.array([0, 6, 12, 24, 48, 72, 168, 336, max_time_hours])
 
     return all_bins

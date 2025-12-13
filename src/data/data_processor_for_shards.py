@@ -74,8 +74,13 @@ class ShardProcessor:
         self.raw_shard_files = sorted(raw_shard_files)
 
         if normalize:
-            normalized_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
-                                    f.startswith(self.split) and f.endswith("_shard_normalized.h5")]
+            # normalized shard files are different for standard and transformer based dynamic deephit
+            if config_manager.model_type == "dynamic_deephit_transformer":
+                normalized_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
+                                    f.startswith(self.split) and f.endswith("_shard_normalized_transformer.h5")]
+            else:
+                normalized_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
+                                        f.startswith(self.split) and f.endswith("_shard_normalized.h5")]
             # sort the files to ensure consistent order
             self.normalized_shard_files = sorted(normalized_shard_files)
 
@@ -638,9 +643,16 @@ class ShardProcessor:
 
                 # pad traj if needed (repeat first timestep)
                 if total_length > length:
-                    pad_length = total_length - length
-                    padding = np.tile(traj[0], (pad_length, 1))
-                    traj = np.vstack((padding, traj))
+                    if config_manager.model_type == "dynamic_deephit_transformer":
+                        # for transformer model, pad at the end
+                        pad_length = total_length - length
+                        # pad with zeros
+                        padding = np.tile(np.zeros(traj.shape[1]), (pad_length, 1))
+                        traj = np.vstack((traj, padding))
+                    else:
+                        pad_length = total_length - length
+                        padding = np.tile(traj[0], (pad_length, 1))
+                        traj = np.vstack((padding, traj))
                 else:
                     pad_length = 0
                 

@@ -85,7 +85,7 @@ class ShardProcessor:
             self.normalized_shard_files = sorted(normalized_shard_files)
 
             if len(self.normalized_shard_files) == 0: # i.e. the files have not been normalized yet
-                self.normalize()
+                self.normalize(config_manager=config_manager)
                 all_files = os.listdir(self.shard_dir)
                 normalized_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
                                     f.startswith(self.split) and f.endswith("_shard_normalized.h5")]
@@ -97,6 +97,11 @@ class ShardProcessor:
             raise NotImplementedError()
         
         # load the normalized shard files and store in a dynamic_deephit_dataset attribute
+        if config_manager.model_type == "dynamic_deephit_transformer":
+            index_type = 'window_end_idx'
+        else:
+            index_type = 'first_window_start_idx'
+        
         self.dynamic_deephit_dataset = {}
         for i, shard_file in enumerate(self.normalized_shard_files):
             logger.info(f"Loading normalized shard file into memory for tuning: {shard_file}")
@@ -106,14 +111,14 @@ class ShardProcessor:
                 feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]                
                 stay_ids = f['stay_ids'][:]
                 window_ptr = f['window_ptr'][:]
-                first_window_start_idx = f['first_window_start_idx'][:]
+                window_start_or_end_idx = f[index_type][:]
                 trajectories = f['trajectories'][:]             
 
             if i == 0:
                 self.dynamic_deephit_dataset['feature_names'] = [name.encode('utf-8') for name in feature_names]
                 self.dynamic_deephit_dataset['stay_ids'] = stay_ids
                 self.dynamic_deephit_dataset['window_ptr'] = window_ptr
-                self.dynamic_deephit_dataset['first_window_start_idx'] = first_window_start_idx
+                self.dynamic_deephit_dataset[index_type] = window_start_or_end_idx
                 self.dynamic_deephit_dataset['trajectories'] = trajectories.astype(np.float32)
             else:
                 self.dynamic_deephit_dataset['stay_ids'] = np.concatenate(
@@ -121,8 +126,8 @@ class ShardProcessor:
                 self.dynamic_deephit_dataset['window_ptr'] = np.concatenate(
                     (self.dynamic_deephit_dataset['window_ptr'], 
                         window_ptr[1:] + self.dynamic_deephit_dataset['window_ptr'][-1]), axis=0)
-                self.dynamic_deephit_dataset['first_window_start_idx'] = np.concatenate(
-                    (self.dynamic_deephit_dataset['first_window_start_idx'], first_window_start_idx), axis=0)
+                self.dynamic_deephit_dataset[index_type] = np.concatenate(
+                    (self.dynamic_deephit_dataset[index_type], window_start_or_end_idx), axis=0)
                 self.dynamic_deephit_dataset['trajectories'] = np.concatenate(
                     (self.dynamic_deephit_dataset['trajectories'], trajectories.astype(np.float32)), axis=0)
 
@@ -149,13 +154,16 @@ class ShardProcessor:
                 self.physiological_feature_type.append(data_type)
 
 
-        self.index_table_path = os.path.join(self.shard_dir, f"{self.split}_index_table.parquet")
+        if config_manager.model_type == "dynamic_deephit_transformer":
+            self.index_table_path = os.path.join(self.shard_dir, f"{self.split}_index_table_transformer.parquet")
+        else:
+            self.index_table_path = os.path.join(self.shard_dir, f"{self.split}_index_table.parquet")
         if os.path.exists(self.index_table_path):
             logger.info(f"Loading existing index table from {self.index_table_path}")
             self.traj_index_table = pd.read_parquet(self.index_table_path)
         else:
             # create index table
-            self.create_index_table()
+            self.create_index_table(config_manager)
 
         # create window index table
         # window_index_table_path = os.path.join(self.shard_dir, f"{self.split}_window_index_table.parquet")
@@ -167,7 +175,9 @@ class ShardProcessor:
         # gemerate everytime because it may change based on time bins
         
         if config_manager.experiment_variant == 'prediction':
-            self.create_index_table_for_all_windows(config_manager)
+            self.create_index_table_for_all_windows(config_manager)           
+        elif config_manager.model_type == "dynamic_deephit_transformer":
+            self.create_index_table_for_transformer_windows(config_manager)
         else:
             self.create_index_table_for_window_sampling(config_manager)
 
@@ -196,7 +206,7 @@ class ShardProcessor:
                 self.dynamic_deephit_dataset['stay_id'] = f['stay_id'][:]
 
 
-    def create_index_table(self):
+    def create_index_table(self, config_manager):
         # create an index table mapping from global index to (shard_file, local_index)
         for i, file_path in enumerate(self.raw_shard_files):
             # get death feature and lengths from the raw files
@@ -214,22 +224,27 @@ class ShardProcessor:
 
             # then open the normalized file to get the correct indices
             file_path = self.normalized_shard_files[i]
+            if config_manager.model_type == "dynamic_deephit_transformer":
+                index_type = 'window_end_idx'
+            else:
+                index_type = 'first_window_start_idx'
+            
             with h5py.File(file_path, 'r') as f:
                 feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]
                 stay_ids = f['stay_ids'][:]
                 window_ptr = f['window_ptr'][:]
-                first_window_start_idx = f['first_window_start_idx'][:]
+                start_or_end_idx = f[index_type][:]
                 trajectories = f['trajectories'][:]
 
             rows = []
             file_name = os.path.basename(file_path)
-            for stay_id, start_window, start_index, length, event in \
-                zip(stay_ids, window_ptr[:-1], first_window_start_idx, lengths, events):
+            for stay_id, start_window, start_or_end_idx, length, event in \
+                zip(stay_ids, window_ptr[:-1], start_or_end_idx, lengths, events):
                 rows.append({
                     'stay_id': stay_id,
                     'shard_file': file_name,
                     'window_idx': start_window,
-                    'start_index': start_index, # first window
+                    f"{index_type}": start_or_end_idx, # first window
                     'length': length,
                     'event': event
                 })
@@ -242,17 +257,91 @@ class ShardProcessor:
         self.traj_index_table = df
 
         # save the index table to the shard dir
-        index_table_path = os.path.join(self.shard_dir, f"{self.split}_index_table.parquet")
+        if config_manager.model_type == "dynamic_deephit_transformer":
+            index_table_path = os.path.join(self.shard_dir, f"{self.split}_index_table_transformer.parquet")
+        else:
+            index_table_path = os.path.join(self.shard_dir, f"{self.split}_index_table.parquet")
         df.to_parquet(index_table_path)
         logger.info(f"Saved index table to {index_table_path}")
    
     
+    def create_index_table_for_transformer_windows(self, config_manager):
+        """
+        For transformer based dynamic deephit model, we need to create an index table for 
+        all windows in the dataset.
+        """
+        window_index_table_path = os.path.join(self.shard_dir, f"{self.split}_all_windows_index_table_transformer.parquet")
+        
+        if os.path.exists(window_index_table_path):
+            self.window_index_table = pd.read_parquet(window_index_table_path) 
+            logger.info(f"loaded window index table from {window_index_table_path}")
+            return
+        
+        rows = []
+
+        for _, row in self.traj_index_table.iterrows():
+            stay_id = row['stay_id']
+            traj_length = row['length']
+            first_window_idx = row['window_idx']
+            end_idx = row['window_end_idx']
+        
+            if traj_length > config_manager.max_encounter_length:
+                continue
+
+            n_windows = int(np.ceil(traj_length / self.window_length))
+
+            event_raw = row['event'] # will convert to 1 for survival, 2 for death to be consistent with existing code
+            time_to_event = np.arange(traj_length, 0, -1)
+
+            for window in range(n_windows):        
+                if window == n_windows:
+                    tte = time_to_event[end_idx]
+                    sample_end_idx = end_idx
+                    
+                else:
+                    tte = time_to_event[self.window_length * window - 1]
+                    sample_end_idx = self.window_length-1
+
+                sample_end_window_idx = np.floor(sample_end_idx/self.window_length)
+                window_idx = first_window_idx + window
+
+                if sample_end_window_idx > 0:
+                    window_length = self.window_length
+                    sample_end_idx = sample_end_idx - (sample_end_window_idx * self.window_length)
+                    sample_start_idx = sample_end_idx - self.window_length + 1
+                    
+                    if sample_start_idx < 0:
+                        sample_start_window_idx = sample_end_window_idx - 1
+                        sample_start_idx = self.window_length + sample_start_idx
+                    else:
+                        sample_start_window_idx = sample_end_window_idx
+
+                else:
+                    sample_start_window_idx = 0
+                    sample_start_idx = 0 
+                    window_length = sample_end_idx + 1               
+            
+                sample_start_window_idx += window_idx
+                sample_end_window_idx += window_idx
+
+                rows.append({
+                    "stay_id": stay_id,
+                    "window_idx": int(window_idx),                     # window index within trajectory
+                    "sample_end_idx": int(sample_end_idx),         # end index (0-based)
+                    "time_to_event": int(tte), # from final timestep
+                    "event_raw": event_raw
+                })
+
+
+
     def create_index_table_for_all_windows(self, config_manager):
         """
         For generating predictions at all time points, we need to create an index table for 
         all windows in the dataset.
         """
+
         window_index_table_path = os.path.join(self.shard_dir, f"{self.split}_all_windows_index_table.parquet")
+        
         if os.path.exists(window_index_table_path):
             self.window_index_table = pd.read_parquet(window_index_table_path) 
             logger.info(f"loaded window index table from {window_index_table_path}")
@@ -515,7 +604,7 @@ class ShardProcessor:
             self.dynamic_deephit_dataset['time_to_event'] = f['time_to_event'][:]
             self.dynamic_deephit_dataset['stay_id'] = f['stay_id'][:]
 
-    def normalize(self):
+    def normalize(self, config_manager=config_manager):
 
         if self.norm_params is not None:
             # if normalization parameters are provided, use them to normalize the data
@@ -623,7 +712,8 @@ class ShardProcessor:
             
             # split into windows for faster loading later
             seq_buffer = []
-            first_window_start_idx = [] # because most trajectory lengths will not be perfectly divisible by window_size
+            window_start_or_end_idx = [] # for transformer model, we need to know where the last window ends
+          # because most trajectory lengths will not be perfectly divisible by window_size
                                         # we need to pad   
             window_ptr = [0]
                                          
@@ -641,40 +731,45 @@ class ShardProcessor:
                 # compute total length after padding
                 total_length = n_windows * self.window_length
 
-                # pad traj if needed (repeat first timestep)
-                if total_length > length:
-                    if config_manager.model_type == "dynamic_deephit_transformer":
-                        # for transformer model, pad at the end
-                        pad_length = total_length - length
-                        # pad with zeros
-                        padding = np.tile(np.zeros(traj.shape[1]), (pad_length, 1))
-                        traj = np.vstack((traj, padding))
-                    else:
-                        pad_length = total_length - length
-                        padding = np.tile(traj[0], (pad_length, 1))
-                        traj = np.vstack((padding, traj))
+                # pad traj if needed (repeat first timestep)    
+                pad_length = total_length - length                                      
+                
+                if config_manager.model_type == "dynamic_deephit_transformer":
+                    # for transformer model, pad at the end
+                    pad_length = total_length - length
+                    # pad with zeros
+                    padding = np.tile(np.zeros(traj.shape[1]), (pad_length, 1))
+                    traj = np.vstack((traj, padding))
+                    window_start_or_end_idx.append(self.window_length  - pad_length - 1)
                 else:
-                    pad_length = 0
+                    padding = np.tile(traj[0], (pad_length, 1))
+                    traj = np.vstack((padding, traj))
+                    window_start_or_end_idx.append(pad_length)  
                 
                 # Reshape into (n_windows, window_size, n_features)
                 windows = traj.reshape(n_windows, self.window_length, traj.shape[1])  
 
                 seq_buffer.append(windows)
-                first_window_start_idx.append(pad_length)
                 window_ptr.append(window_ptr[-1] + n_windows)
             
             # concatenate all windows into a single array
             seq_array = np.concatenate(seq_buffer, axis=0)
             window_ptr = np.array(window_ptr, dtype=np.int32)
-            first_window_start_idx = np.array(first_window_start_idx, dtype=np.int32)
+            window_start_or_end_idx = np.array(window_start_or_end_idx, dtype=np.int32)
 
-            # save the normalized shard file
-            normalized_shard_file = shard_file.replace("_shard.h5", "_shard_normalized.h5")
+            if config_manager.model_type == "dynamic_deephit_transformer":
+                # index_type
+                index_type = 'window_end_idx'
+                normalized_shard_file = shard_file.replace("_shard.h5", "_shard_normalized_transformer.h5")
+            else:
+                index_type = 'first_window_start_idx'
+                normalized_shard_file = shard_file.replace("_shard.h5", "_shard_normalized.h5")
+
             with h5py.File(normalized_shard_file, 'w') as f:
                 f.create_dataset('feature_names', data=[name.encode('utf-8') for name in feature_names])
                 f.create_dataset('stay_ids', data=stay_ids, dtype=np.int32)
                 f.create_dataset('window_ptr', data=window_ptr, dtype=np.int32)
-                f.create_dataset('first_window_start_idx', data=first_window_start_idx, dtype=np.int32)
+                f.create_dataset(index_type, data=window_start_or_end_idx, dtype=np.int32)
                 f.create_dataset(
                     'trajectories', 
                     data=seq_array.astype(np.float32), 

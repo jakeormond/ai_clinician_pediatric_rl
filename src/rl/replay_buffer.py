@@ -76,6 +76,29 @@ class DynamicDeepHitDataset(Dataset):
         ]
     
 
+class DynamicDeepHitTransformerDataset(Dataset):
+    def __init__(
+            self, 
+            data_processor,
+            config_manager
+            ):
+        self.trajectories = torch.tensor(data_processor.dynamic_deephit_dataset["trajectories"], dtype=torch.float32)
+        self.time_to_event = torch.tensor(data_processor.dynamic_deephit_dataset["time_to_event"], dtype=torch.float32)
+        self.event = torch.tensor(data_processor.dynamic_deephit_dataset["event"], dtype=torch.float32)
+        self.mask = torch.tensor(data_processor.dynamic_deephit_dataset["mask"], dtype=torch.float32)
+    
+    def __len__(self) -> int:
+        return len(self.mask)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        return [
+            self.features[idx],
+            self.time_to_event[idx],
+            self.event[idx],
+            self.mask[idx]
+        ]
+    
+
 class DynamicDeepHit_InMemory(Dataset):
     """
     For datasets that fit into memory.

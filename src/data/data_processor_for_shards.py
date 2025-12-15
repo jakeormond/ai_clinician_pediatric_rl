@@ -87,8 +87,13 @@ class ShardProcessor:
             if len(self.normalized_shard_files) == 0: # i.e. the files have not been normalized yet
                 self.normalize(config_manager=config_manager)
                 all_files = os.listdir(self.shard_dir)
-                normalized_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
-                                    f.startswith(self.split) and f.endswith("_shard_normalized.h5")]
+                if config_manager.model_type == "dynamic_deephit_transformer":
+                    normalized_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
+                                        f.startswith(self.split) and f.endswith("_shard_normalized_transformer.h5")]
+                else:
+                    normalized_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
+                                        f.startswith(self.split) and f.endswith("_shard_normalized.h5")]
+                
                 # sort the files to ensure consistent order
                 self.normalized_shard_files = sorted(normalized_shard_files)
 
@@ -181,7 +186,34 @@ class ShardProcessor:
         else:
             self.create_index_table_for_window_sampling(config_manager)
 
-        if config_manager.training_config['use_windows_from_memory']:
+        if config_manager.model_type == "dynamic_deephit_transformer":
+            # we will add to the dynamic_deephit_dataset the events, time_to_events, and mask here
+            # loop throught the window_index_table and extract the relevant data
+            n_windows = len(self.window_index_table)
+            
+            # drop the window_ptr, window_end_idx from the dynamic_deephit_dataset to save memory
+            del self.dynamic_deephit_dataset['window_ptr']
+            del self.dynamic_deephit_dataset['window_end_idx']
+
+            # get the window indices
+            window_indices = self.window_index_table['window_idx'].values
+            
+            # drop any windows from self.dynamic_deephit_dataset['trajectories'] that are not in window_indices
+            self.dynamic_deephit_dataset['trajectories'] = \
+                self.dynamic_deephit_dataset['trajectories'][window_indices]
+
+
+
+            for i, row in self.window_index_table.iterrows():
+
+
+
+            pass
+
+
+
+        elif config_manager.training_config['use_windows_from_memory']: # not necessary for transformer model as 
+            # everything is already in memory in the self.dynamic_deephit_dataset
             logger.info("Using windows loaded into memory for training.")
 
             self.window_file_path = os.path.join(self.shard_dir, f"{self.split}_windows.h5")

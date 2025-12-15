@@ -294,35 +294,13 @@ class ShardProcessor:
             time_to_event = np.arange(traj_length, 0, -1)
 
             for window in range(n_windows):        
-                if window == n_windows:
-                    tte = time_to_event[end_idx]
+                if window == n_windows-1:
                     sample_end_idx = end_idx
-                    
                 else:
-                    tte = time_to_event[self.window_length * window - 1]
-                    sample_end_idx = self.window_length-1
+                    sample_end_idx = self.window_length - 1
 
-                sample_end_window_idx = np.floor(sample_end_idx/self.window_length)
+                tte = time_to_event[sample_end_idx + window * self.window_length]
                 window_idx = first_window_idx + window
-
-                if sample_end_window_idx > 0:
-                    window_length = self.window_length
-                    sample_end_idx = sample_end_idx - (sample_end_window_idx * self.window_length)
-                    sample_start_idx = sample_end_idx - self.window_length + 1
-                    
-                    if sample_start_idx < 0:
-                        sample_start_window_idx = sample_end_window_idx - 1
-                        sample_start_idx = self.window_length + sample_start_idx
-                    else:
-                        sample_start_window_idx = sample_end_window_idx
-
-                else:
-                    sample_start_window_idx = 0
-                    sample_start_idx = 0 
-                    window_length = sample_end_idx + 1               
-            
-                sample_start_window_idx += window_idx
-                sample_end_window_idx += window_idx
 
                 rows.append({
                     "stay_id": stay_id,
@@ -332,6 +310,15 @@ class ShardProcessor:
                     "event_raw": event_raw
                 })
 
+        # build dataframe
+        window_index_table = pd.DataFrame(rows)
+
+        # sort by stay_id and window_end   
+        self.window_index_table = window_index_table.sort_values(by=['stay_id', 'window_idx']).reset_index(drop=True)
+
+        # save the window index table to the shard dir
+        self.window_index_table.to_parquet(window_index_table_path)
+        logger.info(f"Saved window index table to {window_index_table_path}")
 
 
     def create_index_table_for_all_windows(self, config_manager):

@@ -74,6 +74,7 @@ def to_json_safe(obj):
 
 MODEL_MODULES = {
     "dynamic_deephit": "src.supervised_learning.models.dynamic_deephit",
+    "dynamic_deephit_transformer": "src.supervised_learning.models.dynamic_deephit_transformer",
 }
 
 DISTRIBUTIONS = {

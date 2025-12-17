@@ -395,7 +395,7 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
         num_risks=num_risks,
         dropout=hyperparams['dropout'],
         dim_feedforward=hyperparams.get('dim_feedforward', 512), # Usually 4 * d_model
-        max_seq_len=hyperparams.get('max_seq_len', 768),         # Our chosen T_cap
+        max_seq_len=train_processor.window_length,
         predict_covariates=train_processor.physiological_feature_ind,       
     ).to(config_manager.training_config['device'])
 

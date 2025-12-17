@@ -15,6 +15,12 @@ dropout: 0.5
 weight_decay: 5e-3
 use_layernorm: True
 batch_size: 1024  # Batch size for all networks
+
+d_model: 32  # Dimension of the model
+nhead: 4  # Number of attention heads
+num_encoder_layers: 2  # Number of encoder layers
+dim_feedforward: 128  # Dimension of feedforward network in transformer
+
 hidden_dim: 64  # Hidden dimension for all networks
 attn_hidden_dim: 64
 n_layers: 2

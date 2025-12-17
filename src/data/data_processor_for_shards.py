@@ -203,15 +203,20 @@ class ShardProcessor:
                 self.dynamic_deephit_dataset['trajectories'][window_indices]
 
 
+            # calulate mask, event, and time_to_event for each timstep for the transformer model
+            event_per_window = self.window_index_table['event_raw'].values + 1  # convert to 1 for survival, 2 for death
+            # even_per_window needs to be repeated at every timestep in the window, with final shape (n_windows, window_length)
+            self.dynamic_deephit_dataset['event'] = np.repeat(event_per_window[:, np.newaxis], self.window_length, axis=1).astype(np.int32)
+            # initialize time_to_event and mask as arrays of shape (n_windows, window_length)
+            self.dynamic_deephit_dataset['time_to_event'] = np.zeros((n_windows, self.window_length), dtype=np.int32)
+            self.dynamic_deephit_dataset['mask'] = np.zeros((n_windows, self.window_length), dtype=np.int32)
 
             for i, row in self.window_index_table.iterrows():
-
-
-
-            pass
-
-
-
+                self.dynamic_deephit_dataset['time_to_event'][i, :row['sample_end_idx'] + 1] = \
+                                        np.arange(row['time_to_event'] + row['sample_end_idx'], row['time_to_event']-1, -1)
+                if row['sample_end_idx'] < self.window_length - 1:                
+                    self.dynamic_deephit_dataset['mask'][i, row['sample_end_idx'] + 1:] = 1
+                
         elif config_manager.training_config['use_windows_from_memory']: # not necessary for transformer model as 
             # everything is already in memory in the self.dynamic_deephit_dataset
             logger.info("Using windows loaded into memory for training.")

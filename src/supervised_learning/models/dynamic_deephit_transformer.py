@@ -174,16 +174,30 @@ class TransformerDeepHitMulti(nn.Module):
                 mask=self.causal_mask[:seq_len, :seq_len] # Causal Mask
             )
         
+        # generate predictions for each timestep
+        # 5. Covariate Prediction (If enabled)
+        covariate_pred = None
+        if self.covariate_predictor:
+            # 2. Slice: Use outputs from 0 to T-1 to predict covariates at 1 to T
+            # We take all timesteps except the last one for the input
+            h_for_pred = output[:, :-1, :]
+
+            # 3. Generate predictions
+            covariate_pred = self.covariate_predictor(h_for_pred)
+            
+            # 4. Handle Masking
+            # If you have a padding mask [batch, seq_len], align it to the predictions
+            if padding_mask is not None:
+                # Shift the mask to match the t+1 targets
+                pred_mask = padding_mask[:, 1:]
+                # Note: In PyTorch, padding masks are often True for 'pad' and False for 'data'
+                # Adjust the logic below to match your mask's boolean logic:
+                covariate_pred = covariate_pred * (~pred_mask).unsqueeze(-1).float()
+            
         # 4. Process all timesteps
         # Flatten the output to treat every timestep of every sequence as a separate prediction point
         # Output shape is now [B * T, d_model]
         all_timesteps_rep = output.reshape(batch_size * seq_len, self.d_model)
-        
-        # 5. Covariate Prediction (If enabled)
-        covariate_pred = None
-        if self.covariate_predictor:
-            # this needs to be handled differently than with the GRU version
-            pass
             
         # 6. Event-specific heads
         risk_logits = []
@@ -208,6 +222,10 @@ class TransformerDeepHitTrainer:
         num_time_bins = 100,
         loss_fn=None,
         grad_clip=1.0,
+        alpha_rank = None,
+        alpha_pred = None,
+        alpha_class = None,
+        sigma = None,
         scheduler=None,
         verbose=True,
         physiological_feature_type = None,
@@ -233,6 +251,10 @@ class TransformerDeepHitTrainer:
         self.num_time_bins = num_time_bins
         self.loss_fn = loss_fn
         self.grad_clip = grad_clip
+        self.alpha_class = alpha_class
+        self.alpha_rank = alpha_rank
+        self.alpha_pred = alpha_pred
+        self.sigma = sigma
         self.scheduler = scheduler
         self.verbose = verbose
         self.physiological_feature_type = physiological_feature_type
@@ -339,24 +361,15 @@ class TransformerDeepHitTrainer:
             # We need to restructure the risk_logits for the loss function:
             # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_risks, num_time_bins]
             logits = torch.stack(risk_logits, dim=2)
-
-            # 2. Reshape to [B * T_cap, num_risks, num_time_bins] for the loss function
-            #    (Assuming your existing loss function expects a flattened batch/time dimension)
-            B, T_cap, R, D = logits.shape
-            logits_flat = logits.reshape(B * T_cap, R, D)
-
-            # 3. Create flattened versions of the targets and masks
-            time_to_event_flat = time_to_event.reshape(B * T_cap)
-            event_label_flat = event_label.reshape(B * T_cap)
-            mask_flat = mask.reshape(B * T_cap) # This is the key for excluding padded steps
-
+            
             # Compute log loss and ranking loss
             loss, lik_loss, class_loss, rank_loss, pred_loss = self.loss_fn(
                 logits, 
                 covariate_pred, 
-                time_to_event_flat, 
-                event_label_flat, 
-                mask_flat, # The new mask is the key to exclude padded/invalid steps
+                time_to_event,                  
+                event_label, 
+                X,
+                mask, # The new mask is the key to exclude padded/invalid steps
                 alpha_class = self.alpha_class,
                 alpha_rank = self.alpha_rank,
                 alpha_pred = self.alpha_pred,
@@ -439,7 +452,7 @@ def dynamic_deephit_loss(
         predictions,
         time_to_event, 
         event_label,
-        x_right_padded, # might not need this anymore, check!
+        X, # might not need this anymore, check!
         mask, # right padded
         predict_covariates: list = [],
         physiological_feature_type: list = [],
@@ -467,14 +480,30 @@ def dynamic_deephit_loss(
     Returns:
         scalar loss tensor
     """
+    # before flattening tensors, deal with predictions, as they have one less timestep per window
+    targets_shifted = X[:, 1:, :]  # Shifted targets for prediction loss
+    mask_shifted = mask[:, 1:]    # Shifted mask for prediction loss
+    valid_preds = predictions[~mask_shifted]  # Filter out padded predictions
+    valid_targets = targets_shifted[~mask_shifted]  # Corresponding valid targets
+
+    # flatten tensors where needed
+    # 2. Reshape to [B * T_cap, num_risks, num_time_bins] for the loss function
+    #    (Assuming your existing loss function expects a flattened batch/time dimension)
+    B, T_cap, R, D = logits.shape
+    logits_flat = logits.reshape(B * T_cap, R, D)
+    
+    # 3. Create flattened versions of the targets and masks
+    time_to_event_flat = time_to_event.reshape(B * T_cap)
+    event_label_flat = event_label.reshape(B * T_cap)
+    mask_flat = mask.reshape(B * T_cap) # This is the key for excluding padded steps
+
     # --- 1. Filter Padded Timesteps ---
     # We only want to compute loss for timesteps that are NOT padding.
-    # mask is assumed to be 1/True for valid steps.
-    valid_indices = torch.where(mask.bool())[0]
+    # mask is False for valid steps.
+    valid_indices = ~mask_flat
 
     # Filter all relevant tensors to keep only the valid "active" hours
-    v_logits = logits[valid_indices]
-    v_predictions = predictions[valid_indices]
+    v_logits = logits[valid_indices]    
     v_time_to_event = time_to_event[valid_indices]
     v_event_label = event_label[valid_indices]
 
@@ -490,6 +519,9 @@ def dynamic_deephit_loss(
     # --- 3. Auxiliary Prediction Loss ---
     # If you are doing step-ahead covariate prediction, you need to filter 
     # the feature tensors as well. 
+    
+    v_predictions = predictions[valid_indices]
+    
     if alpha_pred > 0 and len(predict_covariates) > 0 and x_right_padded is not None:
         # Flatten x_right_padded to [B * T, feature_dim] to match mask
         x_flat = x_right_padded.view(-1, x_right_padded.shape[-1])

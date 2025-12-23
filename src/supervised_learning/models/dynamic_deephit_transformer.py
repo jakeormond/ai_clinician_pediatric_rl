@@ -485,6 +485,7 @@ def dynamic_deephit_loss(
     mask_shifted = mask[:, 1:]    # Shifted mask for prediction loss
     valid_preds = predictions[~mask_shifted]  # Filter out padded predictions
     valid_targets = targets_shifted[~mask_shifted]  # Corresponding valid targets
+    valid_targets = valid_targets[:, predict_covariates]  # Select only predicted covariates
 
     # flatten tensors where needed
     # 2. Reshape to [B * T_cap, num_risks, num_time_bins] for the loss function
@@ -503,9 +504,9 @@ def dynamic_deephit_loss(
     valid_indices = ~mask_flat
 
     # Filter all relevant tensors to keep only the valid "active" hours
-    v_logits = logits[valid_indices]    
-    v_time_to_event = time_to_event[valid_indices]
-    v_event_label = event_label[valid_indices]
+    v_logits = logits_flat[valid_indices]    
+    v_time_to_event = time_to_event_flat[valid_indices]
+    v_event_label = event_label_flat[valid_indices]
 
     # --- 2. Compute DeepHit Component Losses ---
     # Because we filtered, these functions now see a "batch" of size N_valid

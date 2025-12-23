@@ -211,14 +211,18 @@ class ShardProcessor:
             self.dynamic_deephit_dataset['time_to_event'] = np.zeros((n_windows, self.window_length), dtype=np.int32)
             self.dynamic_deephit_dataset['mask'] = np.zeros((n_windows, self.window_length), dtype=np.int32)
 
+            # time binning here !!!!!!!!!!!!!!!!!!!!!
             for i, row in self.window_index_table.iterrows():
-                self.dynamic_deephit_dataset['time_to_event'][i, :row['sample_end_idx'] + 1] = \
-                                        np.arange(row['time_to_event'] + row['sample_end_idx'], row['time_to_event']-1, -1)
+                time_to_event = np.arange(row['time_to_event'] + row['sample_end_idx'], row['time_to_event']-1, -1)
+                tte_bin = np.digitize(time_to_event, self.time_bins, right=True) - 1                
+                self.dynamic_deephit_dataset['time_to_event'][i, :row['sample_end_idx'] + 1] = tte_bin
                 if row['sample_end_idx'] < self.window_length - 1:                
                     self.dynamic_deephit_dataset['mask'][i, row['sample_end_idx'] + 1:] = 1
                 
         elif config_manager.training_config['use_windows_from_memory']: # not necessary for transformer model as 
             # everything is already in memory in the self.dynamic_deephit_dataset
+            # !!! but the time binning is happening here, so I need to implement it separately for transformer model,
+            # probably in the dataloader !!!!!!!!!!! 
             logger.info("Using windows loaded into memory for training.")
 
             self.window_file_path = os.path.join(self.shard_dir, f"{self.split}_windows.h5")

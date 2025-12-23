@@ -457,7 +457,7 @@ def dynamic_deephit_loss(
         predict_covariates: list = [],
         physiological_feature_type: list = [],
         no_censoring=True,
-        pair_sample_frac = 1.0,
+        pair_sample_frac = 0.5,
         alpha_class= None,
         alpha_rank= None, 
         alpha_pred = None,
@@ -576,7 +576,7 @@ def event_classification_loss(logits, event_label, no_censoring=True):
     return classification_loss
 
 
-def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=None):
+def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=None, pair_sample_frac=0.5):
 
     B, K, T = logits.shape
     device = logits.device
@@ -609,36 +609,36 @@ def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=No
     for k in range(K):
         # mask of i samples with event==k
         mask_i_k = (event_label == k)                 # (B,)
-        if mask_i_k.sum() == 0:
+        event_indices = torch.where(mask_i_k)[0]      # indices of samples with event k
+        
+        if len(event_indices) == 0:
             continue
 
-        # For cause k, build pair mask: i in mask_i_k AND t_i < t_j
-        # Broadcasting:
-        mask_i_k_row = mask_i_k.view(B, 1)      # (B,1) - for rows
-        mask_i_k_col = mask_i_k.view(1, B)           
-        mask_time = (t_i < t_j)                 # (B,B) -- true where t_i < t_j
-        pair_mask = mask_i_k_row & mask_i_k_col & mask_time    # (B,B) -- candidate pairs (i,j)
-
-        num_pairs = pair_mask.sum().item()
-        if num_pairs == 0:
-            continue
+        if len(event_indices) > 12000:
+            event_indices = event_indices[torch.randperm(len(event_indices))[:12000]]
+        n_event = len(event_indices)
 
         # Gather CIF values at t_i for all samples
         # cif_k has shape (B, T), we want to gather at position t_i for each sample
-        cif_k = S[:, k, :]  # (B, T)
+        cif_k = S[event_indices, k, :]  # (B, T)
+
+        # Build matrices for t and k comparisons:
+        t_i_k = t_i[event_indices]   # (N_k,1)
+        t_j_k = t_j[:, event_indices]
+        mask_time = (t_i_k < t_j_k)  
+        num_pairs = mask_time.sum().item()
+        if num_pairs == 0:
+            continue
 
         # Create gathering indices: for each sample i, get cif at all t_i values
         # We need to broadcast this operation
-        t_i_expand = t_i.expand(B, B)  # (B, B) - each row i has t_i repeated
+        t_i_expand = t_i_k.expand(n_event, n_event)  # (B, B) - each row i has t_i repeated
         t_i_expand = t_i_expand.long()
 
         # Gather: for each (i,j) pair, get CIF_j at time t_i
         # This is a bit tricky - we need to use advanced indexing
-        batch_indices = torch.arange(B, device=device).view(1, B).expand(B, B)
-        cif_at_ti = cif_k[batch_indices, t_i_expand]  # (B, B)
-
-        # Now cif_at_ti[i, j] = CIF_k(t_i | X_j)
-        # We want: risk_i = CIF_k(t_i | X_i) and risk_j = CIF_k(t_i | X_j)
+        event_indices_expanded = torch.arange(n_event, device=device).view(1, n_event).expand(n_event, n_event)
+        cif_at_ti = cif_k[event_indices_expanded, t_i_expand]  # (B, B)
 
         risk_i = torch.diagonal(cif_at_ti, 0).unsqueeze(1)  # (B, 1) - diagonal elements
         risk_j = cif_at_ti  # (B, B)
@@ -647,12 +647,12 @@ def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=No
         # We want risk_i > risk_j, so we penalize when risk_i <= risk_j
         # pairwise_loss = torch.exp(-(risk_i - risk_j) / sigma)  # (B, B)
         pairwise_loss = torch.log(1 + torch.exp(-(risk_i - risk_j))) 
-
-        # Apply pair mask and sum
-        masked_loss = pairwise_loss * pair_mask.float()
+        
+        # apply mask to loss
+        masked_loss = pairwise_loss * mask_time.float()
         rank_loss += masked_loss.sum()
         total_pairs += num_pairs
-
+        
     if total_pairs > 0:
         rank_loss = rank_loss / total_pairs
     else:

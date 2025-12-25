@@ -519,20 +519,11 @@ def dynamic_deephit_loss(
 
     # --- 3. Auxiliary Prediction Loss ---
     # If you are doing step-ahead covariate prediction, you need to filter 
-    # the feature tensors as well. 
-    
-    v_predictions = predictions[valid_indices]
-    
-    if alpha_pred > 0 and len(predict_covariates) > 0 and x_right_padded is not None:
-        # Flatten x_right_padded to [B * T, feature_dim] to match mask
-        x_flat = x_right_padded.view(-1, x_right_padded.shape[-1])
-        v_x = x_flat[valid_indices]
-        
+    # the feature tensors as well.      
+    if alpha_pred > 0 and len(predict_covariates) > 0:
         pred_loss = prediction_loss(
-                v_x,
-                v_predictions, 
-                torch.ones_like(v_event_label), # Already filtered, so all are valid (1)
-                predict_covariates, 
+                valid_targets,
+                valid_preds,  
                 physiological_feature_type
                 ) 
     else:
@@ -661,50 +652,42 @@ def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=No
     return rank_loss
 
 
-def prediction_loss(X, predictions, mask, predict_covariates, continuous_indices=None):
+def prediction_loss(X, predictions, physiological_feature_type=None):
     """
     Compute the step-ahead prediction loss (L3 in DeepHit paper).
     
     Args:
-        predictions: [batch, seq_len-1, num_predict_covariates] - predicted next-step values
-        x: [batch, seq_len, feature_dim] - original input sequences
-        mask: [batch, seq_len] - 1 for valid timesteps, 0 for padding
-        predict_covariates: list of covariate indices being predicted
+        predictions: [batch * seq_len-1, num_predict_covariates] - predicted next-step values
+        X: [batch * seq_len-1, feature_dim] - original input sequences
         continuous_indices: list of indices (within predict_covariates) that are continuous
                           (if None, assumes all are continuous)
     
     Returns:
         loss: scalar prediction loss
+
+    NOTE: NEED TO IMPLEMENT PROPER ORDINAL LOSS
     """
-    batch_size, seq_len_minus_1, num_pred = predictions.shape
-
-    # Extract the actual next-step values
-    x_next = X[:, 1:, predict_covariates]  # [batch, seq_len-1, feature_dim]
-    mask_next = mask[:, 1:]      # [batch, seq_len-1]
-    valid_mask = mask_next.unsqueeze(-1)  # [batch, seq_len-1, 1]
-
     # Compute loss based on covariate type
-    binary_indices = [i for i, val in enumerate(continuous_indices) if val == 'binary']
-    continuous_indices = [i for i, val in enumerate(continuous_indices) if val == 'continuous']
+    binary_indices = [i for i, val in enumerate(physiological_feature_type) if val == 'binary']
+    continuous_indices = [i for i, val in enumerate(physiological_feature_type) if val in ['continuous', 'ordinal']]
 
     # continuous - MSE
     continuous_loss = F.mse_loss(
-        predictions[:,:,continuous_indices], 
-        x_next[:,:,continuous_indices], reduction='none')  # [batch, seq_len-1, num_pred]
+        predictions[:, continuous_indices], 
+        X[:, continuous_indices], reduction='none')  # [batch * seq_len-1, num_pred]
 
     # cross-entropy for binary
-    target_binary = x_next[:,:,binary_indices]
+    target_binary = X[:, binary_indices]
     binary_loss = F.binary_cross_entropy_with_logits(
-        predictions[:,:,binary_indices], 
-        target_binary, reduction='none')  # [batch, seq_len-1, num
+        predictions[:, binary_indices], 
+        target_binary, reduction='none')  # [batch * seq_len-1, num_pred]
 
     # Combine losses
     loss = torch.cat([continuous_loss, binary_loss], dim=2)  
     
-    # Apply mask and compute mean
-    masked_loss = loss * valid_mask
-    total_loss = masked_loss.sum()
-    num_valid = valid_mask.sum() * loss.shape[2]  # multiply by num_pred
+    # Apply mask and compute mean   
+    total_loss = loss.sum()
+    n_timesteps = loss.shape[0] * loss.shape[1]
     
-    return total_loss / (num_valid + 1e-8)
+    return total_loss / (n_timesteps + 1e-8)
 

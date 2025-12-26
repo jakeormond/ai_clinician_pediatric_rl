@@ -159,7 +159,14 @@ def create_buffer(processor, batch_size, config_manager):
 
     elif config_manager.hospital == 'mimic_iv' and config_manager.model_type == 'dynamic_deephit_transformer':
         dataset = DynamicDeepHitTransformerDataset(processor, config_manager)
-        buffer = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        buffer = DataLoader(
+            dataset, 
+            batch_size=batch_size, 
+            shuffle=True,
+            num_workers=0,          # reduce to save memory
+            prefetch_factor=None,      # small prefetch to limit RAM
+            pin_memory=False,       # set True if transfers dominate
+            )
 
     elif config_manager.hospital == 'mimic_iv' and config_manager.training_config['use_windows_from_memory']:
         dataset = DynamicDeepHit_InMemory(
@@ -272,16 +279,35 @@ def evaluate_model(
         for key, value in batch_losses.items():
             eval_losses[key].append(value)
         
+        
+        time_to_event = batch['time_to_event']
+        event_labels = batch['event']
+        
+        # if logits has 4 dimension (i.e. transformer version), reshape to 3D by merging first two dimensions
+        if logits is not None and logits.dim() == 4:
+            B, T_cap, R, D = logits.shape
+            logits = logits.reshape(B * T_cap, R, D)
+            # also reshape time_to_event and event_labels accordingly
+            time_to_event = time_to_event.reshape(B * T_cap)
+            event_labels = event_labels.reshape(B * T_cap)
+
+            # get mask and reshape
+            mask = batch['mask'].reshape(B * T_cap)
+            logits = logits[~mask]
+            time_to_event = time_to_event[~mask]
+            event_labels = event_labels[~mask]
+
+            num_samples = len(event_labels)
+        else:
+            num_samples += batch['features'].size(0)
+
         # Collect data for survival metrics
         if logits is not None and compute_survival_metrics_flag:
             all_logits.append(logits.cpu())
             # all_time_to_event.append(batch[1].cpu())
-            all_time_to_event.append(batch['time_to_event'].cpu())
+            all_time_to_event.append(time_to_event.cpu())
             # all_event_labels.append(batch[2].cpu())
-            all_event_labels.append(batch['event'].cpu())
-        
-        # num_samples += batch[0].size(0)
-        num_samples += batch['features'].size(0)
+            all_event_labels.append(event_labels.cpu())
 
         if testing and batch_idx >= 10:
             break  # Limit to 2 batches in testing mode
@@ -952,6 +978,7 @@ def train_with_hyperparameters(
         logger.info(" Testing mode enabled: will limit training to 10 epochs and 100 batches per epoch.")
         n_epochs = min(n_epochs, 5)
     
+    torch.cuda.empty_cache()
     for epoch in range(n_epochs):
         epoch_training_losses = defaultdict(list)
 

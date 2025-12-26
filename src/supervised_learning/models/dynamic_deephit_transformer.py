@@ -287,23 +287,14 @@ class TransformerDeepHitTrainer:
         # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_risks, num_time_bins]
         logits = torch.stack(risk_logits, dim=2)
 
-        # 2. Reshape to [B * T_cap, num_risks, num_time_bins] for the loss function
-        #    (Assuming your existing loss function expects a flattened batch/time dimension)
-        B, T_cap, R, D = logits.shape
-        logits_flat = logits.reshape(B * T_cap, R, D)
-
-        # 3. Create flattened versions of the targets and masks
-        time_to_event_flat = time_to_event.reshape(B * T_cap)
-        event_label_flat = event_label.reshape(B * T_cap)
-        mask_flat = mask.reshape(B * T_cap) # This is the key for excluding padded steps
-
         # Compute log loss and ranking loss
         loss, lik_loss, class_loss, rank_loss, pred_loss = self.loss_fn(
             logits, 
             covariate_pred, 
-            time_to_event_flat, 
-            event_label_flat, 
-            mask_flat, # The new mask is the key to exclude padded/invalid steps
+            time_to_event,                  
+            event_label, 
+            X,
+            mask, # The new mask is the key to exclude padded/invalid steps
             alpha_class = self.alpha_class,
             alpha_rank = self.alpha_rank,
             alpha_pred = self.alpha_pred,
@@ -338,6 +329,7 @@ class TransformerDeepHitTrainer:
             "prediction_loss": pred_loss.item()
             }
 
+        
         return loss_dict, logits
     
 
@@ -672,18 +664,28 @@ def prediction_loss(X, predictions, physiological_feature_type=None):
     continuous_indices = [i for i, val in enumerate(physiological_feature_type) if val in ['continuous', 'ordinal']]
 
     # continuous - MSE
-    continuous_loss = F.mse_loss(
-        predictions[:, continuous_indices], 
-        X[:, continuous_indices], reduction='none')  # [batch * seq_len-1, num_pred]
+    if len(continuous_indices) > 0:
+        continuous_loss = F.mse_loss(
+            predictions[:, continuous_indices],
+            X[:, continuous_indices],
+            reduction='none'
+        )  # [N, num_cont]
+    else:
+        continuous_loss = torch.zeros((predictions.shape[0], 0), device=predictions.device, dtype=predictions.dtype)
 
-    # cross-entropy for binary
-    target_binary = X[:, binary_indices]
-    binary_loss = F.binary_cross_entropy_with_logits(
-        predictions[:, binary_indices], 
-        target_binary, reduction='none')  # [batch * seq_len-1, num_pred]
+    # binary - BCE with logits
+    if len(binary_indices) > 0:
+        target_binary = X[:, binary_indices]
+        binary_loss = F.binary_cross_entropy_with_logits(
+            predictions[:, binary_indices],
+            target_binary,
+            reduction='none'
+        )  # [N, num_bin]
+    else:
+        binary_loss = torch.zeros((predictions.shape[0], 0), device=predictions.device, dtype=predictions.dtype)
 
-    # Combine losses
-    loss = torch.cat([continuous_loss, binary_loss], dim=2)  
+    # Combine along feature dimension (last dim)
+    loss = torch.cat([continuous_loss, binary_loss], dim=-1)
     
     # Apply mask and compute mean   
     total_loss = loss.sum()

@@ -337,10 +337,12 @@ class ShardProcessor:
             for window in range(n_windows):        
                 if window == n_windows-1:
                     sample_end_idx = end_idx
+                    tte_index = end_idx + window * self.window_length
                 else:
                     sample_end_idx = self.window_length - 1
-
-                tte = time_to_event[sample_end_idx + window * self.window_length]
+                    tte_index = ((window + 1) * self.window_length) - 1
+                    
+                tte = time_to_event[tte_index]
                 window_idx = first_window_idx + window
 
                 rows.append({

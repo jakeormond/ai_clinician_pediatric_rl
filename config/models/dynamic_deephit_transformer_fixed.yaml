@@ -3,7 +3,7 @@ project: "AI_Clininician"
 name: "dynamic_deephit_transformer"
 # n_epochs: 100  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
 checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
-window_length: 168 # Prediction horizon in hours - so 1 month
+window_length: 72 #168 # Prediction horizon in hours - so 1 month
 device: "cuda"  # Device (cuda or cpu)
 
 tuning: False
@@ -16,7 +16,7 @@ weight_decay: 5e-3
 use_layernorm: True
 batch_size: 256  # Batch size for all networks
 
-d_model: 32  # Dimension of the model
+d_model: 64  # Dimension of the model
 nhead: 4  # Number of attention heads
 num_encoder_layers: 2  # Number of encoder layers
 dim_feedforward: 128  # Dimension of feedforward network in transformer

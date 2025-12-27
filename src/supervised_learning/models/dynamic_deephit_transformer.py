@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 TensorBatch = List[torch.Tensor]
+from torch.optim.lr_scheduler import OneCycleLR
 
 
 class PositionalEncoding(nn.Module):
@@ -416,6 +417,20 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
         weight_decay = float(hyperparams['weight_decay'])
     )
 
+    n_epochs = config_manager.n_epochs
+    batch_size = int(hyperparams['batch_size'])
+    dataset_size = train_processor.dynamic_deephit_dataset['event'].shape[0] * \
+        train_processor.dynamic_deephit_dataset['event'].shape[1]  # total number of timesteps across all patients
+    steps_per_epoch = dataset_size // batch_size
+
+    scheduler = OneCycleLR(
+        deephit_optimizer,
+        max_lr=learning_rate,
+        total_steps=n_epochs * steps_per_epoch,  # you'll need to pass this
+        pct_start=0.1,  # 10% warmup
+        anneal_strategy='cos'
+    )
+
     trainer = TransformerDeepHitTrainer(
             dynamic_deephit_model,
             deephit_optimizer,
@@ -428,7 +443,7 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
             alpha_rank = hyperparams['alpha_rank'],
             alpha_pred = hyperparams['alpha_pred'],
             sigma = hyperparams['sigma'],
-            scheduler=None,
+            scheduler=scheduler,
             verbose=True, 
             physiological_feature_type = train_processor.physiological_feature_type,
             l1_params=l1_params,          # ← ADD THIS

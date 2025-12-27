@@ -1,0 +1,43 @@
+project: "AI_Clininician"
+"group": "supervised_learning"
+name: "dynamic_deephit_transformer"
+# n_epochs: 100  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
+checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
+window_length: 72 #168 # Prediction horizon in hours - so 1 month
+device: "cuda"  # Device (cuda or cpu)
+
+tuning: True
+use_windows_from_memory: False  # Whether to load precomputed windows into memory (only for smaller datasets) - 
+# not necessary for transformer model as windows are already in memory in the self.dynamic_deephit_dataset
+
+learning_rate: "loguniform(1e-5, 1e-3)"         #      [1e-6]  # Learning rates to try - 1e-4 overfits quickly
+dropout: "uniform(0.1, 0.7)" # 0.5
+weight_decay: "loguniform(1e-4, 1e-1)" # 5e-3
+use_layernorm: True
+batch_size: 256  # Batch size for all networks
+
+d_model: [32, 64, 128]  # Dimension of the model
+nhead: [2, 4, 8]  # Number of attention heads
+num_encoder_layers: [1, 2, 3, 4] # 2  # Number of encoder layers
+dim_feedforward: 128  # Dimension of feedforward network in transformer
+
+hidden_dim: 64  # Hidden dimension for all networks
+attn_hidden_dim: 64
+n_layers: [1, 2, 3, 4]
+
+loss_metric: "combined_loss"  # Which metric to use for early stopping
+max_val_samples: 5000  # Max samples to use for validation during training
+
+l1_lambda: "loguniform(1e-6, 1e-3)"  # L1 regularization weight for classification head
+
+alpha_class: 0.2
+alpha_rank: 4.0   # Weight for ranking loss
+alpha_pred: 0.4
+sigma: 0.1
+
+# Early stopping parameters (fixed for all combinations)
+patience: 1500        # Stop if no improvement for 15 evaluations
+eval_freq: 1       # Evaluate every 20 epochs  
+min_delta: 0.0001   # Minimum improvement threshold
+
+grad_clip: 1  # Gradient clipping value

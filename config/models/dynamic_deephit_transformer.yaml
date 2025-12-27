@@ -36,7 +36,7 @@ alpha_pred: 0.4
 sigma: 0.1
 
 # Early stopping parameters (fixed for all combinations)
-patience: 1500        # Stop if no improvement for 15 evaluations
+patience: 15        # Stop if no improvement for 15 evaluations
 eval_freq: 1       # Evaluate every 20 epochs  
 min_delta: 0.0001   # Minimum improvement threshold
 

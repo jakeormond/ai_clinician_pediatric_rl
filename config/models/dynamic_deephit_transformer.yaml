@@ -14,7 +14,7 @@ learning_rate: "loguniform(1e-5, 1e-3)"         #      [1e-6]  # Learning rates 
 dropout: "uniform(0.1, 0.7)" # 0.5
 weight_decay: "loguniform(1e-4, 1e-1)" # 5e-3
 use_layernorm: True
-batch_size: 256  # Batch size for all networks
+batch_size: 64  # Batch size for all networks
 
 d_model: [32, 64, 128]  # Dimension of the model
 nhead: [2, 4, 8]  # Number of attention heads

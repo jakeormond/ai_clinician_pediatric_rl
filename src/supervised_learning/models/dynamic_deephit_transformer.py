@@ -644,7 +644,7 @@ def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=No
         # Compute pairwise ranking loss: η(risk_i, risk_j) = exp(-(risk_i - risk_j) / sigma)
         # We want risk_i > risk_j, so we penalize when risk_i <= risk_j
         # pairwise_loss = torch.exp(-(risk_i - risk_j) / sigma)  # (B, B)
-        pairwise_loss = torch.log(1 + torch.exp(-(risk_i - risk_j))) 
+        pairwise_loss = torch.log(1 + torch.exp(-(risk_i - risk_j)/sigma)) 
         
         # apply mask to loss
         masked_loss = pairwise_loss * mask_time.float()

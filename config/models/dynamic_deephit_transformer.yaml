@@ -10,7 +10,7 @@ tuning: True
 use_windows_from_memory: False  # Whether to load precomputed windows into memory (only for smaller datasets) - 
 # not necessary for transformer model as windows are already in memory in the self.dynamic_deephit_dataset
 
-learning_rate: "loguniform(1e-5, 1e-3)"         #      [1e-6]  # Learning rates to try - 1e-4 overfits quickly
+learning_rate: "loguniform(1e-4, 1e-2)"         #      [1e-6]  # Learning rates to try - 1e-4 overfits quickly
 dropout: "uniform(0.1, 0.7)" # 0.5
 weight_decay: "loguniform(1e-4, 1e-1)" # 5e-3
 use_layernorm: True

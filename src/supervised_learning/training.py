@@ -994,9 +994,9 @@ def train_with_hyperparameters(
                 logger.info(" Testing mode: breaking after 10 batches.")
                 break
         
-            current_lr = trainer.optimizer.param_groups[0]['lr']
-            if batch_idx % 10 == 0 and current_lr < hyperparams['learning_rate']:
-                print(f"Step {batch_idx}: LR = {current_lr:.6f}\n")
+            # current_lr = trainer.optimizer.param_groups[0]['lr']
+            # if batch_idx % 10 == 0 and current_lr < hyperparams['learning_rate']:
+            #     print(f"Step {batch_idx}: LR = {current_lr:.6f}\n")
 
         # Calculate average loss for this epoch and append to training_losses
         append_epoch_losses(epoch_training_losses, training_losses)

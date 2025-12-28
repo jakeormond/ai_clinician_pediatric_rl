@@ -46,6 +46,8 @@ class TransformerDeepHitMulti(nn.Module):
         dim_feedforward: int = 2048, # Standard Transformer parameter
         max_seq_len: int = 768, # For Positional Encoding and padding
         predict_covariates: list = None,
+        cnn_kernel_size: int = 5,
+        cnn_dilation: int = 2, # Dilation=2 with kernel=5 sees a 9-hour window
     ):
         """
         Args:
@@ -71,6 +73,26 @@ class TransformerDeepHitMulti(nn.Module):
 
         # Pre-calculate the fixed-size Causal Mask
         self.register_buffer('causal_mask', self.generate_square_subsequent_mask(max_seq_len))
+        
+        # ---- NEW: CNN Embedding Stem ---
+        # Kernel size 3 or 5 captures local temporal context (e.g. 3-5 hour trends)
+        # padding=1 ensures that the sequence length T remains the same
+        
+        # Calculate padding to keep T constant: 
+        # For k=5, d=1 -> p=2 | For k=5, d=2 -> p=4
+        padding = (cnn_dilation * (cnn_kernel_size - 1)) // 2        
+        
+        self.cnn_stem = nn.Sequential(
+            nn.Conv1d(in_channels=self.feature_dim, 
+                out_channels=self.d_model, 
+                kernel_size=cnn_kernel_size, 
+                padding=padding,
+                dilation=cnn_dilation
+            ),
+            nn.BatchNorm1d(self.d_model),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
         
         # --- 1. Input Embedding ---
         # Map input features to the Transformer's model dimension (d_model)
@@ -153,8 +175,14 @@ class TransformerDeepHitMulti(nn.Module):
         # Ensure we only use the part of the pre-calculated mask relevant to the batch sequence length
         batch_size, seq_len, _ = x.shape
         
+        # --- NEW: 1. Process with CNN Stem ---
+        # Input x is [B, T, F]. Conv1d wants [B, F, T]
+        x = x.transpose(1, 2) 
+        x = self.cnn_stem(x)   # [B, d_model, T]
+        x = x.transpose(1, 2)  # [B, T, d_model]        
+        
         # 1. Project and encode features
-        x = self.input_projection(x) # [B, T, feature_dim] -> [B, T, d_model]
+        # x = self.input_projection(x) # [B, T, feature_dim] -> [B, T, d_model]
         
         # 2. Add positional encoding
         x = self.pos_encoder(x)
@@ -321,6 +349,8 @@ class TransformerDeepHitTrainer:
 
         # Update weights
         self.optimizer.step()
+        if self.scheduler is not None:
+            self.scheduler.step()
 
         loss_dict = {
             "combined_loss": loss.item(),

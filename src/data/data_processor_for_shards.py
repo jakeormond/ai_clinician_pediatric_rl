@@ -42,18 +42,20 @@ class ShardProcessor:
         self.norm_params = norm_params
         self.window_length = config_manager.training_config['window_length']
         self.time_bins = config_manager.time_bins
+        self.shuffle_inputs = config_manager.training_config.get('shuffle_inputs', False)
 
         # load features to use from config_manager
         self.features_to_use = pd.read_csv(config_manager.data_config['features_to_use_path'])
 
-        if config_manager.action_mode == 'binary_only' or config_manager.action_mode == 'mixed':
-            create_binary_actions = True
-        else:
-            create_binary_actions = False            
+        
+        # if config_manager.action_mode == 'binary_only' or config_manager.action_mode == 'mixed':
+        #     create_binary_actions = True
+        # else:
+        #     create_binary_actions = False            
 
-        if config_manager.action_mode == 'binary_only':
-            self.normalize_actions = False
-            self.transform_actions = False           
+        # if config_manager.action_mode == 'binary_only':
+        #     self.normalize_actions = False
+        #     self.transform_actions = False           
 
         if self.split == 'train' and config_manager.training_config['tuning']:
             self.split = 'tuning'
@@ -158,9 +160,10 @@ class ShardProcessor:
                 self.physiological_feature_ind.append(i)
                 self.physiological_feature_type.append(data_type)
 
-
+        # create or load index table
         if config_manager.model_type == "dynamic_deephit_transformer":
-            self.index_table_path = os.path.join(self.shard_dir, f"{self.split}_index_table_transformer.parquet")
+            self.index_table_path = os.path.join(self.shard_dir, 
+                f"{self.split}_index_table_transformer_{self.window_length}.parquet")
         else:
             self.index_table_path = os.path.join(self.shard_dir, f"{self.split}_index_table.parquet")
         if os.path.exists(self.index_table_path):
@@ -169,15 +172,6 @@ class ShardProcessor:
         else:
             # create index table
             self.create_index_table(config_manager)
-
-        # create window index table
-        # window_index_table_path = os.path.join(self.shard_dir, f"{self.split}_window_index_table.parquet")
-        # if os.path.exists(window_index_table_path):
-        #     logger.info(f"Loading existing window index table from {window_index_table_path}")
-        #     self.window_index_table = pd.read_parquet(window_index_table_path)
-        # else:
-        #     self.create_index_table_for_window_sampling(config_manager)
-        # gemerate everytime because it may change based on time bins
         
         if config_manager.experiment_variant == 'prediction':
             self.create_index_table_for_all_windows(config_manager)           
@@ -200,8 +194,7 @@ class ShardProcessor:
             
             # drop any windows from self.dynamic_deephit_dataset['trajectories'] that are not in window_indices
             self.dynamic_deephit_dataset['trajectories'] = \
-                self.dynamic_deephit_dataset['trajectories'][window_indices]
-
+                self.dynamic_deephit_dataset['trajectories'][window_indices]               
 
             # calulate mask, event, and time_to_event for each timstep for the transformer model
             event_per_window = self.window_index_table['event_raw'].values + 1  # convert to 1 for survival, 2 for death
@@ -311,7 +304,8 @@ class ShardProcessor:
         For transformer based dynamic deephit model, we need to create an index table for 
         all windows in the dataset.
         """
-        window_index_table_path = os.path.join(self.shard_dir, f"{self.split}_all_windows_index_table_transformer.parquet")
+        window_index_table_path = os.path.join(self.shard_dir, 
+            f"{self.split}_all_windows_index_table_transformer_{self.window_length}.parquet")
         
         if os.path.exists(window_index_table_path):
             self.window_index_table = pd.read_parquet(window_index_table_path) 

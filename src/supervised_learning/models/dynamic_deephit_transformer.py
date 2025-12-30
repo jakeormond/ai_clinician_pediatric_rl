@@ -334,7 +334,14 @@ class TransformerDeepHitTrainer:
 
         if self.l1_lambda > 0.0 and len(self.l1_params) > 0:
             l1_lambda = self.l1_lambda  # set your value during initialization
-            l1_penalty = sum(torch.sum(torch.abs(p)) for p in self.l1_params)
+            
+            l1_penalty = 0
+            for name, p in self.model.named_parameters():
+                if "heads" in name and "weight" in name:
+                    l1_penalty += torch.sum(torch.abs(p))
+            
+            # l1_penalty = sum(torch.sum(torch.abs(p)) for p in self.l1_params)
+            
             loss = loss + l1_lambda * l1_penalty
 
         # Backward pass - compute gradients
@@ -435,11 +442,11 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
         predict_covariates=train_processor.physiological_feature_ind,       
     ).to(config_manager.training_config['device'])
 
-    # Collect L1 parameters: classification head weights only
-    l1_params = [
-        p for name, p in dynamic_deephit_model.named_parameters()
-        if name.startswith("heads.") and name.endswith(".weight")
-    ]
+    # # Collect L1 parameters: classification head weights only
+    # l1_params = [
+    #     p for name, p in dynamic_deephit_model.named_parameters()
+    #     if name.startswith("heads.") and name.endswith(".weight")
+    # ]
 
     deephit_optimizer = torch.optim.AdamW(
         dynamic_deephit_model.parameters(),
@@ -476,7 +483,7 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
             scheduler=scheduler,
             verbose=True, 
             physiological_feature_type = train_processor.physiological_feature_type,
-            l1_params=l1_params,          # ← ADD THIS
+            # l1_params=l1_params,          # ← ADD THIS
             l1_lambda=hyperparams['l1_lambda'],                
         )
 

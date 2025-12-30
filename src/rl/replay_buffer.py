@@ -86,11 +86,29 @@ class DynamicDeepHitTransformerDataset(Dataset):
         self.time_to_event = torch.tensor(data_processor.dynamic_deephit_dataset["time_to_event"], dtype=torch.long)
         self.event = torch.tensor(data_processor.dynamic_deephit_dataset["event"], dtype=torch.long)
         self.mask = torch.tensor(data_processor.dynamic_deephit_dataset["mask"], dtype=torch.bool)
-    
+        self.shuffle_inputs = config_manager.training_config.get('shuffle_inputs', False)
+
     def __len__(self) -> int:
         return len(self.mask)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        if self.shuffle_inputs:
+            # get the mask for this sample
+            mask = self.mask[idx]  # (window_length,)
+            traj = self.trajectories[idx]  # (window_length, num_features)
+            # only shuffle the unmasked timesteps
+            unmasked_indices = torch.where(~mask)[0]
+            shuffled_indices = unmasked_indices[torch.randperm(len(unmasked_indices))]
+            shuffled_traj = traj.clone()
+            shuffled_traj[unmasked_indices] = traj[shuffled_indices]
+
+            return {
+                "features": shuffled_traj,
+                "time_to_event": self.time_to_event[idx],
+                "event": self.event[idx],
+                "mask": self.mask[idx]
+            }
+        
         return {
             "features": self.trajectories[idx],
             "time_to_event": self.time_to_event[idx],

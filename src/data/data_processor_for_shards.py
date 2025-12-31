@@ -42,7 +42,6 @@ class ShardProcessor:
         self.norm_params = norm_params
         self.window_length = config_manager.training_config['window_length']
         self.time_bins = config_manager.time_bins
-        self.shuffle_inputs = config_manager.training_config.get('shuffle_inputs', False)
 
         # load features to use from config_manager
         self.features_to_use = pd.read_csv(config_manager.data_config['features_to_use_path'])

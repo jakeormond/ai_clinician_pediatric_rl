@@ -86,7 +86,7 @@
                 "--mode", "single_split", 
                 "--search_variant", "random_search",
                 "--n_search_iterations", "1",
-                "--n_epochs", "3",
+                "--n_epochs", "50",
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

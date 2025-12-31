@@ -87,6 +87,7 @@ class DynamicDeepHitTransformerDataset(Dataset):
         self.event = torch.tensor(data_processor.dynamic_deephit_dataset["event"], dtype=torch.long)
         self.mask = torch.tensor(data_processor.dynamic_deephit_dataset["mask"], dtype=torch.bool)
         self.shuffle_inputs = config_manager.training_config.get('shuffle_inputs', False)
+        self.zero_inputs = config_manager.training_config.get('zero_inputs', False)
 
     def __len__(self) -> int:
         return len(self.mask)
@@ -108,7 +109,22 @@ class DynamicDeepHitTransformerDataset(Dataset):
                 "event": self.event[idx],
                 "mask": self.mask[idx]
             }
-        
+
+        elif self.zero_inputs:
+            traj = self.trajectories[idx]  # (window_length, num_features)
+            zeroed_traj = traj.clone()
+            zeroed_traj[~self.mask[idx]] = 0.0
+
+            # make the mask all False
+            zeroed_mask = torch.zeros_like(self.mask[idx], dtype=torch.bool)
+
+            return {
+                "features": zeroed_traj,
+                "time_to_event": self.time_to_event[idx],
+                "event": self.event[idx],
+                "mask": zeroed_mask
+            }
+
         return {
             "features": self.trajectories[idx],
             "time_to_event": self.time_to_event[idx],

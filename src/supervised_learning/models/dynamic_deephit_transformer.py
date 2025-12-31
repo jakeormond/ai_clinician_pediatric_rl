@@ -32,6 +32,17 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
+class LayerNormChannels(nn.Module):
+    def __init__(self, d_model):
+        super().__init__()
+        self.norm = nn.LayerNorm(d_model)
+
+    def forward(self, x):
+        # x shape: [B, C, T]
+        x = x.transpose(1, 2)          # [B, T, C]
+        x = self.norm(x)
+        return x.transpose(1, 2)       # [B, C, T] back for the next CNN layer
+
 
 class TransformerDeepHitMulti(nn.Module):
     def __init__(
@@ -83,13 +94,15 @@ class TransformerDeepHitMulti(nn.Module):
         padding = (cnn_dilation * (cnn_kernel_size - 1)) // 2        
         
         self.cnn_stem = nn.Sequential(
-            nn.Conv1d(in_channels=self.feature_dim, 
+            nn.Conv1d(
+                in_channels=self.feature_dim, 
                 out_channels=self.d_model, 
                 kernel_size=cnn_kernel_size, 
                 padding=padding,
-                dilation=cnn_dilation
+                dilation=cnn_dilation, 
+                bias=False
             ),
-            nn.BatchNorm1d(self.d_model),
+            LayerNormChannels(self.d_model),
             nn.ReLU(),
             nn.Dropout(dropout)
         )
@@ -185,7 +198,7 @@ class TransformerDeepHitMulti(nn.Module):
         # x = self.input_projection(x) # [B, T, feature_dim] -> [B, T, d_model]
         
         # 2. Add positional encoding
-        x = self.pos_encoder(x)
+        # x = self.pos_encoder(x)
         
         # 3. Transformer Encoder
         # The attention mask (src_key_padding_mask) needs to be passed to the encoder.

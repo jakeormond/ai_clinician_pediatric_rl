@@ -6,7 +6,7 @@ seed: 42
 
 proportion_w_data: 0.80
 
-max_encounter_length: 2880  # in hours, 4 months
+max_encounter_length: 1440  # in hours, 2 months
 
 target_col: "death"
 

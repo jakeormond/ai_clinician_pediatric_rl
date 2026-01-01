@@ -91,14 +91,35 @@ class TransformerDeepHitMulti(nn.Module):
         
         # Calculate padding to keep T constant: 
         # For k=5, d=1 -> p=2 | For k=5, d=2 -> p=4
-        padding = (cnn_dilation * (cnn_kernel_size - 1)) // 2        
+        # padding = (cnn_dilation * (cnn_kernel_size - 1)) // 2        
         
+        # self.cnn_stem = nn.Sequential(
+        #     nn.Conv1d(
+        #         in_channels=self.feature_dim, 
+        #         out_channels=self.d_model, 
+        #         kernel_size=cnn_kernel_size, 
+        #         padding=padding,
+        #         dilation=cnn_dilation, 
+        #         bias=False
+        #     ),
+        #     LayerNormChannels(self.d_model),
+        #     nn.ReLU(),
+        #     nn.Dropout(dropout)
+        # )
+
+        # Calculate the total receptive field offset
+        causal_padding = (cnn_kernel_size - 1) * cnn_dilation
+
         self.cnn_stem = nn.Sequential(
+            # Pad only the beginning (left) of the time dimension
+            # Format is (padding_left, padding_right)
+            nn.ConstantPad1d((causal_padding, 0), 0),
+            
             nn.Conv1d(
                 in_channels=self.feature_dim, 
                 out_channels=self.d_model, 
                 kernel_size=cnn_kernel_size, 
-                padding=padding,
+                padding=0,  # Important: No internal symmetric padding!
                 dilation=cnn_dilation, 
                 bias=False
             ),
@@ -106,6 +127,7 @@ class TransformerDeepHitMulti(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout)
         )
+
         
         # --- 1. Input Embedding ---
         # Map input features to the Transformer's model dimension (d_model)

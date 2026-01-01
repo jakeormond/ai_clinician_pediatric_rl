@@ -757,9 +757,14 @@ def make_mixed_resolution_time_bins(max_time_hours=3000):
 
     # manual bins
     # all_bins = np.array([0, 24, 48, 168])
+
+    # currently hardcoded for MIMIC IV
     if max_time_hours <= 336:
-        all_bins = np.array([0, 6, 12, 24, 48, 72, 168]) # testing with fewer bins
+        # all_bins = np.array([0, 6, 12, 24, 48, 72, 168]) # testing with fewer bins
+        all_bins = np.array([0, 6, 12, 24, 48, 72, 168, 336, max_time_hours])
+
     else:
+        # all_bins = np.array([0, 6, 12, 24, 48, 72, 168, 336, max_time_hours])
         all_bins = np.array([0, 6, 12, 24, 48, 72, 168, 336, max_time_hours])
 
     return all_bins

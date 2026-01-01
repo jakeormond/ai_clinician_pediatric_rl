@@ -36,9 +36,10 @@ alpha_pred: 2.0
 sigma: 0.1
 
 # Early stopping parameters (fixed for all combinations)
-patience: 15        # Stop if no improvement for 15 evaluations
+patience: 5        # Stop if no improvement for 15 evaluations
 eval_freq: 1       # Evaluate every 20 epochs  
 min_delta: 0.0001   # Minimum improvement threshold
 
 grad_clip: 1  # Gradient clipping value
 shuffle_inputs: True  # Whether to shuffle feature columns to confirm transformer not looking ahead
+zero_inputs: False  # Whether to zero out feature columns to confirm transformer not looking ahead

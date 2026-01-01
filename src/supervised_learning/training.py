@@ -420,7 +420,7 @@ def single_split_training(config_manager):
         normalize=True
         )
     
-    if config_manager.training_config['tuning']:
+    if config_manager.training_config['tuning'] and config_manager.n_search_iterations > 0:
         logger.info(" Hyperparameter tuning mode enabled.")
 
         # hyperparameter optimization

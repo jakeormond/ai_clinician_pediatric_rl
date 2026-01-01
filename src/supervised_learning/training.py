@@ -197,10 +197,10 @@ def create_buffer(processor, batch_size, config_manager):
             prefetch_factor=4,
         )
     
-    return buffer
+    return buffer, dataset
 
 
-def create_trainer(train_processor, hyperparams, config_manager):
+def create_trainer(train_processor, training_dataset, hyperparams, config_manager):
 
     # feature_dim = train_processor.dynamic_deephit_dataset["features"].shape[2]
     feature_dim = train_processor.feature_dim
@@ -213,7 +213,8 @@ def create_trainer(train_processor, hyperparams, config_manager):
         config_manager,
         feature_dim,
         hyperparams,
-        train_processor
+        train_processor,
+        training_dataset
     )
 
 
@@ -259,6 +260,10 @@ def evaluate_model(
         
     Returns:
         dict: Dictionary of evaluation metrics
+
+    Note that mask logic is reversed here as we are no longer using a mask for the
+    transformer (inputs now padded with data), only for loss, so True indicates valid data.
+        
     """
     eval_losses = defaultdict(list)
     all_logits = []
@@ -289,13 +294,16 @@ def evaluate_model(
             logits = logits.reshape(B * T_cap, R, D)
             # also reshape time_to_event and event_labels accordingly
             time_to_event = time_to_event.reshape(B * T_cap)
+            
+            if event_labels.dim() == 1:
+                event_labels = event_labels.unsqueeze(1).expand(-1, T_cap)  # [B, T_cap]
             event_labels = event_labels.reshape(B * T_cap)
 
             # get mask and reshape
-            mask = batch['mask'].reshape(B * T_cap)
-            logits = logits[~mask]
-            time_to_event = time_to_event[~mask]
-            event_labels = event_labels[~mask]
+            mask = batch['loss_mask'].reshape(B * T_cap)
+            logits = logits[mask]
+            time_to_event = time_to_event[mask]
+            event_labels = event_labels[mask]
 
             num_samples = len(event_labels)
         else:
@@ -446,7 +454,7 @@ def single_split_training(config_manager):
             final_model=False
         )
 
-    test_buffer = create_buffer(test_processor, config_manager.training_config['batch_size'], config_manager)
+    test_buffer, _ = create_buffer(test_processor, config_manager.training_config['batch_size'], config_manager)
     test_losses = evaluate_final_model( # this evaluates on the entire test set (during training we only use a subset for speed)
         trainer, 
         test_buffer, 
@@ -515,7 +523,7 @@ def development_training_loop(dataset, config_manager):
         plot_c_and_brier_over_time(test_scores, config_manager)
 
         # evaluate final model and plot auroc and average precision curves
-        test_buffer = create_buffer(test_processor, config_manager.training_config['batch_size'], config_manager)
+        test_buffer, _ = create_buffer(test_processor, config_manager.training_config['batch_size'], config_manager)
         final_test_scores = evaluate_final_model(
             trainer,
             test_buffer,
@@ -950,11 +958,11 @@ def train_with_hyperparameters(
     loss_metric = config_manager.training_config['loss_metric']
 
     # Create replay buffers
-    training_buffer = create_buffer(train_processor, batch_size, config_manager)
-    val_test_buffer = create_buffer(val_test_processor, batch_size, config_manager)
+    training_buffer, training_dataset = create_buffer(train_processor, batch_size, config_manager)
+    val_test_buffer, _ = create_buffer(val_test_processor, batch_size, config_manager)
     
     # create trainer
-    trainer = create_trainer(train_processor, hyperparams, config_manager)
+    trainer = create_trainer(train_processor, training_dataset, hyperparams, config_manager)
         
     # Early stopping configuration 
     early_stopping = get_early_stopping_config(config_manager)
@@ -980,6 +988,9 @@ def train_with_hyperparameters(
     
     torch.cuda.empty_cache()
     for epoch in range(n_epochs):
+        # shuffle training dataset
+        training_dataset.reshuffle_subsample()
+        #################### Train ####################
         epoch_training_losses = defaultdict(list)
 
         for batch_idx, batch in enumerate(training_buffer):

@@ -57,6 +57,7 @@ class TransformerDeepHitMulti(nn.Module):
         dim_feedforward: int = 2048, # Standard Transformer parameter
         max_seq_len: int = 768, # For Positional Encoding and padding
         predict_covariates: list = None,
+        prediction_time_horizon: int = 4, # How many steps ahead to predict 
         cnn_kernel_size: int = 5,
         cnn_dilation: int = 2, # Dilation=2 with kernel=5 sees a 9-hour window
     ):
@@ -81,6 +82,7 @@ class TransformerDeepHitMulti(nn.Module):
         self.dropout = dropout
         self.max_seq_len = max_seq_len
         self.predict_covariates = predict_covariates if predict_covariates else []
+        self.prediction_time_horizon = prediction_time_horizon
 
         # Pre-calculate the fixed-size Causal Mask
         self.register_buffer('causal_mask', self.generate_square_subsequent_mask(max_seq_len))
@@ -244,7 +246,7 @@ class TransformerDeepHitMulti(nn.Module):
         if self.covariate_predictor:
             # 2. Slice: Use outputs from 0 to T-1 to predict covariates at 1 to T
             # We take all timesteps except the last one for the input
-            h_for_pred = output[:, :-1, :]
+            h_for_pred = output[:, :-self.prediction_time_horizon, :]
 
             # 3. Generate predictions
             covariate_pred = self.covariate_predictor(h_for_pred)
@@ -253,7 +255,7 @@ class TransformerDeepHitMulti(nn.Module):
             # If you have a padding mask [batch, seq_len], align it to the predictions
             if padding_mask is not None:
                 # Shift the mask to match the t+1 targets
-                pred_mask = padding_mask[:, 1:]
+                pred_mask = padding_mask[:, :-self.prediction_time_horizon]
                 # Note: In PyTorch, padding masks are often True for 'pad' and False for 'data'
                 # Adjust the logic below to match your mask's boolean logic:
                 covariate_pred = covariate_pred * (~pred_mask).unsqueeze(-1).float()
@@ -337,7 +339,10 @@ class TransformerDeepHitTrainer:
         # event_label = batch[2].to(self.device)      # [batch_size]
         event_label = batch['event'].to(self.device)
         # mask = batch[3].to(self.device)
-        mask = batch['mask'].to(self.device)
+        # mask = batch['mask'].to(self.device)
+        # no longer using a mask for the transformer, all timesteps are valid (padded with data, not zeros)
+        # mask is only for loss calculation, and is True where data is valid
+        mask = batch['loss_mask'].to(self.device)
 
         # Zero gradients
         self.optimizer.zero_grad()
@@ -345,7 +350,7 @@ class TransformerDeepHitTrainer:
         # Forward pass
         # risk_logits: list of tensors, where each tensor is [B, T_cap, num_time_bins]
         # covariate_pred: None (or [B, T_cap, num_covariates] if implemented)
-        risk_logits, covariate_pred = self.model(X, padding_mask=mask)
+        risk_logits, covariate_pred = self.model(X, padding_mask=None)
         
         # We need to restructure the risk_logits for the loss function:
         # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_risks, num_time_bins]
@@ -358,13 +363,14 @@ class TransformerDeepHitTrainer:
             time_to_event,                  
             event_label, 
             X,
-            mask, # The new mask is the key to exclude padded/invalid steps
             alpha_class = self.alpha_class,
             alpha_rank = self.alpha_rank,
             alpha_pred = self.alpha_pred,
             sigma = self.sigma,
             predict_covariates=self.model.predict_covariates,
-            physiological_feature_type=self.physiological_feature_type
+            predict_horizon=self.model.prediction_time_horizon,
+            physiological_feature_type=self.physiological_feature_type,
+            mask = mask
             )
 
         if self.l1_lambda > 0.0 and len(self.l1_params) > 0:
@@ -417,12 +423,14 @@ class TransformerDeepHitTrainer:
         # event_label = batch[2].to(self.device)      # [batch_size]
         event_label = batch['event'].to(self.device)
         # mask = batch[3].to(self.device)
-        mask = batch['mask'].to(self.device)
+        # no loger using a mask for the transformer, all timesteps are valid (padded with data, not zeros)
+        # mask = batch['mask'].to(self.device)
+        # mask is only for loss calculation, and is True where data is valid
+        mask = batch['loss_mask'].to(self.device)
 
         # Forward pass
         with torch.no_grad():
-            risk_logits, covariate_pred = self.model(X, padding_mask=mask)
-
+            risk_logits, covariate_pred = self.model(X, padding_mask=None)
             # We need to restructure the risk_logits for the loss function:
             # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_risks, num_time_bins]
             logits = torch.stack(risk_logits, dim=2)
@@ -434,13 +442,14 @@ class TransformerDeepHitTrainer:
                 time_to_event,                  
                 event_label, 
                 X,
-                mask, # The new mask is the key to exclude padded/invalid steps
                 alpha_class = self.alpha_class,
                 alpha_rank = self.alpha_rank,
                 alpha_pred = self.alpha_pred,
                 sigma = self.sigma,
                 predict_covariates=self.model.predict_covariates,
-                physiological_feature_type=self.physiological_feature_type
+                predict_horizon=self.model.prediction_time_horizon,
+                physiological_feature_type=self.physiological_feature_type,
+                mask = mask
                 )
 
         # set model back to train mode
@@ -457,7 +466,13 @@ class TransformerDeepHitTrainer:
         return loss_dict, logits
 
 
-def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
+def get_trainer(
+        config_manager, 
+        feature_dim, 
+        hyperparams, 
+        train_processor, 
+        training_dataset
+        ):
 
     learning_rate = float(hyperparams['learning_rate'])
     n_time_bins = len(config_manager.time_bins) - 1
@@ -473,7 +488,7 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
         num_risks=num_risks,
         dropout=hyperparams['dropout'],
         dim_feedforward=hyperparams.get('dim_feedforward', 512), # Usually 4 * d_model
-        max_seq_len=train_processor.window_length,
+        max_seq_len=config_manager.training_config['window_length'],
         predict_covariates=train_processor.physiological_feature_ind,       
     ).to(config_manager.training_config['device'])
 
@@ -491,8 +506,9 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
 
     n_epochs = config_manager.n_epochs
     batch_size = int(hyperparams['batch_size'])
-    dataset_size = train_processor.dynamic_deephit_dataset['event'].shape[0] * \
-        train_processor.dynamic_deephit_dataset['event'].shape[1]  # total number of timesteps across all patients
+    # dataset_size = train_processor.dynamic_deephit_dataset['event'].shape[0] * \
+    #     train_processor.dynamic_deephit_dataset['event'].shape[1]  # total number of timesteps across all patients
+    dataset_size = training_dataset.n_samples  # n windows we sample on each epoch
     steps_per_epoch = dataset_size // batch_size
 
     scheduler = OneCycleLR(
@@ -532,8 +548,8 @@ def dynamic_deephit_loss(
         time_to_event, 
         event_label,
         X, # might not need this anymore, check!
-        mask, # right padded
         predict_covariates: list = [],
+        predict_horizon=None,
         physiological_feature_type: list = [],
         no_censoring=True,
         pair_sample_frac = 0.5,
@@ -541,7 +557,8 @@ def dynamic_deephit_loss(
         alpha_rank= None, 
         alpha_pred = None,
         sigma=None,
-        eps=1e-8
+        mask=None,
+        eps=1e-8,
         ):
     """
     Dynamic-DeepHit loss for competing risks (multi-risk, discrete-time)
@@ -558,12 +575,16 @@ def dynamic_deephit_loss(
 
     Returns:
         scalar loss tensor
+
+    Note that mask logic is opposite what it would be for the model itself - True indicates valid data here.
+    We're not using a mask for the model, because we're padding with data, not zeros.
+
     """
     # before flattening tensors, deal with predictions, as they have one less timestep per window
-    targets_shifted = X[:, 1:, :]  # Shifted targets for prediction loss
-    mask_shifted = mask[:, 1:]    # Shifted mask for prediction loss
-    valid_preds = predictions[~mask_shifted]  # Filter out padded predictions
-    valid_targets = targets_shifted[~mask_shifted]  # Corresponding valid targets
+    targets_shifted = X[:, predict_horizon:, :]  # Shifted targets for prediction loss
+    mask_shifted = mask[:, :-predict_horizon]    # Shifted mask for prediction loss
+    valid_preds = predictions[mask_shifted]  # Filter out padded predictions
+    valid_targets = targets_shifted[mask_shifted]  # Corresponding valid targets
     valid_targets = valid_targets[:, predict_covariates]  # Select only predicted covariates
 
     # flatten tensors where needed
@@ -574,13 +595,17 @@ def dynamic_deephit_loss(
     
     # 3. Create flattened versions of the targets and masks
     time_to_event_flat = time_to_event.reshape(B * T_cap)
+    # if event_label has shape [B], we need to expand it to [B, T_cap] first
+    if event_label.dim() == 1:
+        event_label = event_label.unsqueeze(1).expand(-1, T_cap)  # [B, T_cap]
+   
     event_label_flat = event_label.reshape(B * T_cap)
     mask_flat = mask.reshape(B * T_cap) # This is the key for excluding padded steps
 
     # --- 1. Filter Padded Timesteps ---
     # We only want to compute loss for timesteps that are NOT padding.
     # mask is False for valid steps.
-    valid_indices = ~mask_flat
+    valid_indices = mask_flat
 
     # Filter all relevant tensors to keep only the valid "active" hours
     v_logits = logits_flat[valid_indices]    

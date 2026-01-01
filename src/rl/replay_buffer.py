@@ -77,6 +77,93 @@ class DynamicDeepHitDataset(Dataset):
     
 
 class DynamicDeepHitTransformerDataset(Dataset):
+    """
+    self.reshuffle_subsample() should be called at the start of each epoch to reshuffle and select new windows.
+    """
+
+    def __init__(
+            self, 
+            data_processor,
+            config_manager,
+            ):
+        self.shuffle_inputs = config_manager.training_config.get('shuffle_inputs', False)
+        
+        self.trajectories = torch.tensor(data_processor.dynamic_deephit_dataset["trajectories"], dtype=torch.float32)
+        self.feature_names = data_processor.dynamic_deephit_dataset["feature_names"]
+        self.stay_ids = torch.tensor(data_processor.dynamic_deephit_dataset["stay_ids"], dtype=torch.long)
+        self.time_to_event_raw = torch.tensor(data_processor.dynamic_deephit_dataset["time_to_event_raw"], dtype=torch.long)
+        self.time_to_event = torch.tensor(data_processor.dynamic_deephit_dataset["time_to_event"], dtype=torch.long)
+        self.event = torch.tensor(data_processor.dynamic_deephit_dataset["event"], dtype=torch.long)
+        self.index_ptr = torch.tensor(data_processor.dynamic_deephit_dataset["index_ptr"], dtype=torch.long)
+        self.window_length = config_manager.training_config['window_length']
+        self.mode = data_processor.split # 'train', 'val', or 'test' - train is random windows, val/test is deterministic windows
+        
+        # each timestep is the end of a potential window
+        self.n_windows = self.trajectories.shape[0]
+
+        # for an epoch, we will sample self.n_windows/window_length windows
+        self.n_samples = self.n_windows // self.window_length
+
+        self.reshuffle_subsample()
+
+    def reshuffle_subsample(self):
+        """shuffle self.window_end_indices and select first n_samples indices"""
+        # shuffle self.window_end_indices
+        perm = torch.randperm(self.n_windows)
+        # sample first n_samples indices
+        perm = perm[:self.n_samples]
+        self.window_end_indices = perm
+        
+
+    def __len__(self) -> int:
+        return self.n_samples   
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        
+        final_ind = self.window_end_indices[idx]
+        # get the index of the last self.index_ptr that is less than or equal to final_ind
+        start_ind = torch.where(self.index_ptr <= final_ind)[0][-1]
+        
+        # get the final self.index_ptr value that is equal or less than final_ind
+        start_ptr = torch.max(self.index_ptr[start_ind])
+        start_to_end_len = final_ind - start_ptr + 1
+
+        # if start_to_end_len > self.window_length, make start_ind equal to final_ind - window_length + 1
+        if start_to_end_len > self.window_length:
+            start_ptr = final_ind - self.window_length + 1
+            start_to_end_len = self.window_length
+
+        # ---- Load trajectory slice ----
+        trajectories = self.trajectories[start_ptr:final_ind+1]  # (slice_len, num_features)
+        # load time_to_event and event at final_ind
+        time_to_event = self.time_to_event[start_ptr:final_ind+1]        
+        event = self.event[start_ind]
+        padding_mask = torch.zeros(self.window_length, dtype=torch.bool)
+        padding_mask[-start_to_end_len:] = 1  # mask for actual content only        
+
+        if self.shuffle_inputs:
+            # shuffle time_to_event
+            time_to_event = time_to_event[torch.randperm(len(time_to_event))]
+
+        # ---- Pad if needed (repeat first timestep) ----
+        if start_to_end_len < self.window_length:
+            pad = self.window_length - start_to_end_len
+            first_step = trajectories[0:1]
+            pad_block = first_step.repeat(pad, 1)
+            trajectories = torch.cat([pad_block, trajectories], dim=0)
+            tte_pad_block = time_to_event[0:1].repeat(pad)
+            time_to_event = torch.cat([tte_pad_block, time_to_event], dim=0)
+
+
+        return {
+            "features": trajectories,
+            "time_to_event": time_to_event,
+            "event": event + 1,  # convert to 1 or 2 (0 is censored, though we aren't using censored data here)
+            "loss_mask": padding_mask
+        }
+
+
+class DynamicDeepHitTransformerDataset_v1(Dataset):
     def __init__(
             self, 
             data_processor,
@@ -85,7 +172,7 @@ class DynamicDeepHitTransformerDataset(Dataset):
         self.trajectories = torch.tensor(data_processor.dynamic_deephit_dataset["trajectories"], dtype=torch.float32)
         self.time_to_event = torch.tensor(data_processor.dynamic_deephit_dataset["time_to_event"], dtype=torch.long)
         self.event = torch.tensor(data_processor.dynamic_deephit_dataset["event"], dtype=torch.long)
-        self.mask = torch.tensor(data_processor.dynamic_deephit_dataset["mask"], dtype=torch.bool)
+        # self.mask = torch.tensor(data_processor.dynamic_deephit_dataset["mask"], dtype=torch.bool)
         self.shuffle_inputs = config_manager.training_config.get('shuffle_inputs', False)
         self.zero_inputs = config_manager.training_config.get('zero_inputs', False)
 

@@ -41,5 +41,5 @@ eval_freq: 1       # Evaluate every 20 epochs
 min_delta: 0.0001   # Minimum improvement threshold
 
 grad_clip: 1  # Gradient clipping value
-shuffle_inputs: False  # Whether to shuffle feature columns to confirm transformer not looking ahead
+shuffle_inputs: True  # Whether to shuffle feature columns to confirm transformer not looking ahead
 zero_inputs: False  # Whether to zero out feature columns to confirm transformer not looking ahead

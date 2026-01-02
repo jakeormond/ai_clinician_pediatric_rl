@@ -251,17 +251,17 @@ class TransformerDeepHitMulti(nn.Module):
             # 3. Generate predictions
             covariate_pred = self.covariate_predictor(h_for_pred)
             
-            # 4. Handle Masking
-            # If you have a padding mask [batch, seq_len], align it to the predictions
-            if padding_mask is not None:
-                # Shift the mask to match the t+1 targets
-                pred_mask = padding_mask[:, :-self.prediction_time_horizon]
-                # Note: In PyTorch, padding masks are often True for 'pad' and False for 'data'
-                # Adjust the logic below to match your mask's boolean logic:
-                covariate_pred = covariate_pred * (~pred_mask).unsqueeze(-1).float()
+            # 4. Handle Masking - masking handled in trainer/loss function
+        #     # If you have a padding mask [batch, seq_len], align it to the predictions
+        #     if padding_mask is not None:
+        #         # Shift the mask to match the t+1 targets
+        #         pred_mask = padding_mask[:, :-self.prediction_time_horizon]
+        #         # Note: In PyTorch, padding masks are often True for 'pad' and False for 'data'
+        #         # Adjust the logic below to match your mask's boolean logic:
+        #         covariate_pred = covariate_pred * (~pred_mask).unsqueeze(-1).float()
             
-        # 4. Process all timesteps
-        # Flatten the output to treat every timestep of every sequence as a separate prediction point
+        # # 4. Process all timesteps
+        # # Flatten the output to treat every timestep of every sequence as a separate prediction point
         # Output shape is now [B * T, d_model]
         all_timesteps_rep = output.reshape(batch_size * seq_len, self.d_model)
             
@@ -614,7 +614,10 @@ def dynamic_deephit_loss(
 
     # --- 2. Compute DeepHit Component Losses ---
     # Because we filtered, these functions now see a "batch" of size N_valid
-    lik_loss = log_likelihood_loss(v_logits, v_time_to_event, v_event_label, no_censoring)
+    # lik_loss = log_likelihood_loss(v_logits, v_time_to_event, v_event_label, no_censoring)
+    lik_loss = gaussian_log_likelihood_loss(v_logits, v_time_to_event, v_event_label, no_censoring=True, g_sigma=1.0)
+
+    
     classification_loss = event_classification_loss(v_logits, v_event_label, no_censoring)
     
     # Ranking loss evaluates pairs. With multi-timestep, it compares risk 
@@ -638,6 +641,53 @@ def dynamic_deephit_loss(
     
     return loss, lik_loss, classification_loss, rank_loss, pred_loss
 
+
+def gaussian_log_likelihood_loss(logits, time_to_event, event_label, g_sigma=1.0, no_censoring=True):
+    """
+    logits: (B, K, T) - K event types, T time bins
+    time_to_event: (B,) - Long tensor of ground truth bins
+    event_label: (B,) - Long tensor of event types (1 to K)
+    sigma: Float - Controls the 'spread' of the reward. 
+                   Higher sigma = more credit for near misses.
+    """
+    B, K, T = logits.shape
+    
+    # Adjust labels if 1-indexed
+    event_label = event_label - 1 if no_censoring else event_label   
+    
+    # 1. Create a coordinate grid for the T time bins (0, 1, 2, ..., T-1)
+    # Shape: (T,)
+    time_bins = torch.arange(T, device=logits.device).float()
+    
+    # 2. Calculate the Gaussian "bump" for the correct event head
+    # We want (B, T) where each row is a Gaussian centered at time_to_event[i]
+    # Formula: exp(-0.5 * ((bin - target) / sigma)^2)
+    diff = time_bins.view(1, T) - time_to_event.view(B, 1).float()
+    target_dist = torch.exp(-0.5 * (diff / g_sigma)**2)
+    
+    # Normalize so each row sums to 1.0 (to make it a valid probability distribution)
+    target_dist = target_dist / (target_dist.sum(dim=1, keepdim=True) + 1e-8)
+    
+    # 3. Place these bumps into a full (B, K, T) target tensor
+    # Initialize with zeros
+    full_target = torch.zeros_like(logits)
+    
+    # Scatter the Gaussian bumps into the correct event channel (k) for each batch
+    # This ensures the model is penalized for picking the wrong event type AND the wrong time
+    for i in range(B):
+        full_target[i, event_label[i], :] = target_dist[i]
+    
+    # 4. Calculate Loss
+    # Flatten both to (B, K*T)
+    full_target_flat = full_target.view(B, K * T)
+    logp_flat = F.log_softmax(logits.view(B, K * T), dim=1)
+    
+    # Cross Entropy with soft targets: -sum(target * log_prob)
+    # This naturally rewards 'close' predictions because log_prob will be 
+    # weighted by the Gaussian values in target_dist.
+    lik_loss = -(full_target_flat * logp_flat).sum(dim=1).mean()
+    
+    return lik_loss
 
 
 def log_likelihood_loss(logits, time_to_event, event_label, no_censoring=True):

@@ -163,8 +163,6 @@ class ShardProcessor:
                 self.dynamic_deephit_dataset['trajectories'] = np.concatenate(
                     (self.dynamic_deephit_dataset['trajectories'], trajectories.astype(np.float32)), axis=0)
 
-        
-
         # bin time_to_events
         tte_bin = np.digitize(self.dynamic_deephit_dataset['time_to_event_raw'], self.time_bins, right=True) - 1                
         self.dynamic_deephit_dataset['time_to_event'] = tte_bin
@@ -183,6 +181,9 @@ class ShardProcessor:
             ]
         
         for i, feature in enumerate(feature_names):
+            if feature == 'time':
+                continue
+            
             feature_row = self.features_to_use[self.features_to_use['feature'] == feature]            
             feature_set = feature_row['feature_set'].values[0]
             data_type = feature_row['data_type'].values[0]
@@ -235,6 +236,19 @@ class ShardProcessor:
         
         return trajectories, stay_ids, index_ptr
 
+    def add_time_column(self, trajectories, stay_ids, index_ptr, feature_names):
+        n_samples = trajectories.shape[0]
+        time_col = np.zeros((n_samples, 1))
+        for j in range(len(stay_ids)):
+            start_idx = index_ptr[j]
+            end_idx = index_ptr[j+1]
+            length = end_idx - start_idx
+            time_values = np.arange(1, length + 1).reshape(-1, 1)
+            time_col[start_idx:end_idx, 0] = time_values[:, 0]
+        # append time_col to trajectories
+        trajectories = np.hstack((time_col, trajectories))
+        return trajectories, ['time'] + feature_names
+
     
     def normalize(self, config_manager=config_manager):
 
@@ -265,6 +279,10 @@ class ShardProcessor:
                 # remove long trajectories beyond max_time
                 trajectories, stay_ids, index_ptr = self.drop_long_trajectories(
                     trajectories, stay_ids, index_ptr)
+                
+                if config_manager.data_config['add_time_col']:
+                    # add time column to trajectories
+                    trajectories, feature_names = self.add_time_column(trajectories, stay_ids, index_ptr, feature_names)
                 
                 # get the index of the death feature, and drop it from the trajectories
                 death_feature_index = feature_names.index('death')
@@ -319,6 +337,11 @@ class ShardProcessor:
                 # remove long trajectories beyond max_time
                 trajectories, stay_ids, index_ptr = self.drop_long_trajectories(
                     trajectories, stay_ids, index_ptr)
+                
+                if config_manager.data_config['add_time_col']:
+                    # add time column to trajectories
+                    trajectories, feature_names = self.add_time_column(trajectories, stay_ids, index_ptr, feature_names)
+                
 
                 # get the index of the death feature, and drop it from the trajectories
                 death_feature_index = feature_names.index('death')
@@ -333,9 +356,13 @@ class ShardProcessor:
 
                 # normalize the trajectories
                 for j, feature in enumerate(feature_names):
-                    feature_row = self.features_to_use[self.features_to_use['feature'] == feature]
-                    data_type = feature_row['data_type'].values[0]
-                    feature_set = feature_row['feature_set'].values[0]
+                    if feature == 'time':
+                        data_type = 'continuous'
+                        feature_set = 'time'
+                    else:
+                        feature_row = self.features_to_use[self.features_to_use['feature'] == feature]
+                        data_type = feature_row['data_type'].values[0]
+                        feature_set = feature_row['feature_set'].values[0]
 
                     if data_type == 'ordinal' or feature_set == 'medications':
                         # min-max normalize the feature

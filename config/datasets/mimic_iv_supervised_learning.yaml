@@ -19,6 +19,7 @@ transform_actions: False
 create_binary_actions: False
 
 time_col: "time"
+add_time_col: True
 encounter_col: "stay_id"
 
 

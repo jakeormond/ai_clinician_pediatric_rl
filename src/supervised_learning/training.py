@@ -246,7 +246,8 @@ def evaluate_model(
     config_manager,
     max_samples=None,
     return_full_curves=False,
-    compute_survival_metrics_flag=True
+    compute_survival_metrics_flag=True,
+    epoch=None
 ):
     """
     Evaluate model on a dataset.
@@ -278,7 +279,7 @@ def evaluate_model(
         if max_samples is not None and num_samples >= max_samples:
             break
         
-        batch_losses, logits = trainer.evaluate(batch)
+        batch_losses, logits = trainer.evaluate(batch, epoch=epoch)
         
         # Collect batch losses
         for key, value in batch_losses.items():
@@ -353,7 +354,8 @@ def evaluate_during_training(trainer, epoch, val_buffer, val_losses, config_mana
         config_manager,
         max_samples=max_samples,
         return_full_curves=False,
-        compute_survival_metrics_flag=True
+        compute_survival_metrics_flag=True,
+        epoch=epoch
     )
     
     # Log metrics
@@ -994,7 +996,7 @@ def train_with_hyperparameters(
         epoch_training_losses = defaultdict(list)
 
         for batch_idx, batch in enumerate(training_buffer):
-            batch_losses, _ = trainer.train(batch)
+            batch_losses, _ = trainer.train(batch, epoch)
 
             # Automatically append all metrics - creates new keys if needed
             for key, value in batch_losses.items():

@@ -44,6 +44,45 @@ class LayerNormChannels(nn.Module):
         return x.transpose(1, 2)       # [B, C, T] back for the next CNN layer
 
 
+class ResidualCausalStem(nn.Module):
+    def __init__(self, feature_dim, d_model, kernel_size, dilation, dropout):
+        super().__init__()
+        # 1. Path A: The Convolutional Trend Extractor
+        causal_padding = (kernel_size - 1) * dilation
+        self.pad = nn.ConstantPad1d((causal_padding, 0), 0)
+        self.conv = nn.Conv1d(
+            feature_dim, d_model, kernel_size, 
+            dilation=dilation, bias=False
+        )
+        
+        # 2. Path B: The Raw Feature Projection (The Skip Connection)
+        self.raw_proj = nn.Linear(feature_dim, d_model)
+        
+        # 3. Post-Combination Layers
+        self.norm = LayerNormChannels(d_model)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # x: [B, T, F]
+        
+        # Trend Extraction
+        x_conv = x.transpose(1, 2) # [B, F, T]
+        trends = self.conv(self.pad(x_conv)).transpose(1, 2) # [B, T, d_model]
+        
+        # Raw State Projection
+        raw_state = self.raw_proj(x) # [B, T, d_model]
+        
+        # The Residual Step: Add them together
+        # This keeps the "raw" value and "trend" value in the same embedding
+        out = trends + raw_state
+        
+        # Final refinement
+        out = out.transpose(1, 2)
+        out = self.dropout(self.relu(self.norm(out)))
+        return out.transpose(1, 2)
+
+
 class TransformerDeepHitMulti(nn.Module):
     def __init__(
         self,
@@ -54,7 +93,7 @@ class TransformerDeepHitMulti(nn.Module):
         num_time_bins: int,
         num_risks: int,
         dropout: float = 0.3,
-        dim_feedforward: int = 2048, # Standard Transformer parameter
+        dim_feedforward: int = 128, # Standard Transformer parameter
         max_seq_len: int = 768, # For Positional Encoding and padding
         predict_covariates: list = None,
         prediction_time_horizon: int = 4, # How many steps ahead to predict 
@@ -88,19 +127,19 @@ class TransformerDeepHitMulti(nn.Module):
         self.register_buffer('causal_mask', self.generate_square_subsequent_mask(max_seq_len))
         
         # ---- NEW: CNN Embedding Stem ---
-        # Kernel size 3 or 5 captures local temporal context (e.g. 3-5 hour trends)
-        # padding=1 ensures that the sequence length T remains the same
-        
-        # Calculate padding to keep T constant: 
-        # For k=5, d=1 -> p=2 | For k=5, d=2 -> p=4
-        # padding = (cnn_dilation * (cnn_kernel_size - 1)) // 2        
-        
+        # Calculate the total receptive field offset
+        # causal_padding = (cnn_kernel_size - 1) * cnn_dilation
+
         # self.cnn_stem = nn.Sequential(
+        #     # Pad only the beginning (left) of the time dimension
+        #     # Format is (padding_left, padding_right)
+        #     nn.ConstantPad1d((causal_padding, 0), 0),
+            
         #     nn.Conv1d(
         #         in_channels=self.feature_dim, 
         #         out_channels=self.d_model, 
         #         kernel_size=cnn_kernel_size, 
-        #         padding=padding,
+        #         padding=0,  # Important: No internal symmetric padding!
         #         dilation=cnn_dilation, 
         #         bias=False
         #     ),
@@ -109,27 +148,15 @@ class TransformerDeepHitMulti(nn.Module):
         #     nn.Dropout(dropout)
         # )
 
-        # Calculate the total receptive field offset
-        causal_padding = (cnn_kernel_size - 1) * cnn_dilation
 
-        self.cnn_stem = nn.Sequential(
-            # Pad only the beginning (left) of the time dimension
-            # Format is (padding_left, padding_right)
-            nn.ConstantPad1d((causal_padding, 0), 0),
-            
-            nn.Conv1d(
-                in_channels=self.feature_dim, 
-                out_channels=self.d_model, 
-                kernel_size=cnn_kernel_size, 
-                padding=0,  # Important: No internal symmetric padding!
-                dilation=cnn_dilation, 
-                bias=False
-            ),
-            LayerNormChannels(self.d_model),
-            nn.ReLU(),
-            nn.Dropout(dropout)
-        )
-
+        # Replace the old cnn_stem and input_projection with this:
+        self.embedding_stem = ResidualCausalStem(
+            feature_dim=self.feature_dim,
+            d_model=self.d_model,
+            kernel_size=cnn_kernel_size,
+            dilation=cnn_dilation,
+            dropout=dropout
+        )        
         
         # --- 1. Input Embedding ---
         # Map input features to the Transformer's model dimension (d_model)
@@ -214,9 +241,11 @@ class TransformerDeepHitMulti(nn.Module):
         
         # --- NEW: 1. Process with CNN Stem ---
         # Input x is [B, T, F]. Conv1d wants [B, F, T]
-        x = x.transpose(1, 2) 
-        x = self.cnn_stem(x)   # [B, d_model, T]
-        x = x.transpose(1, 2)  # [B, T, d_model]        
+        # x = x.transpose(1, 2) 
+        # x = self.cnn_stem(x)   # [B, d_model, T]
+        # x = x.transpose(1, 2)  # [B, T, d_model]        
+
+        x = self.embedding_stem(x) # [B, T, d_model]
         
         # 1. Project and encode features
         # x = self.input_projection(x) # [B, T, feature_dim] -> [B, T, d_model]
@@ -293,6 +322,7 @@ class TransformerDeepHitTrainer:
         alpha_class = None,
         sigma = None,
         scheduler=None,
+        g_sigma_scheduler=None,
         verbose=True,
         physiological_feature_type = None,
         l1_params: list = [],
@@ -322,12 +352,13 @@ class TransformerDeepHitTrainer:
         self.alpha_pred = alpha_pred
         self.sigma = sigma
         self.scheduler = scheduler
+        self.g_sigma_scheduler = g_sigma_scheduler
         self.verbose = verbose
         self.physiological_feature_type = physiological_feature_type
         self.l1_params = l1_params
         self.l1_lambda = float(l1_lambda)
 
-    def train(self, batch: TensorBatch):
+    def train(self, batch: TensorBatch, epoch: int):
 
         self.model.train() # set model to train mode
 
@@ -367,6 +398,8 @@ class TransformerDeepHitTrainer:
             alpha_rank = self.alpha_rank,
             alpha_pred = self.alpha_pred,
             sigma = self.sigma,
+            g_sigma_scheduler = self.g_sigma_scheduler,
+            epoch = epoch,
             predict_covariates=self.model.predict_covariates,
             predict_horizon=self.model.prediction_time_horizon,
             physiological_feature_type=self.physiological_feature_type,
@@ -412,7 +445,7 @@ class TransformerDeepHitTrainer:
         return loss_dict, logits
     
 
-    def evaluate(self, batch: TensorBatch):
+    def evaluate(self, batch: TensorBatch, epoch: int):
         self.model.eval()  # set model to eval mode
         
         # unpack batch
@@ -446,6 +479,8 @@ class TransformerDeepHitTrainer:
                 alpha_rank = self.alpha_rank,
                 alpha_pred = self.alpha_pred,
                 sigma = self.sigma,
+                g_sigma_scheduler = self.g_sigma_scheduler,
+                epoch = epoch,
                 predict_covariates=self.model.predict_covariates,
                 predict_horizon=self.model.prediction_time_horizon,
                 physiological_feature_type=self.physiological_feature_type,
@@ -519,6 +554,12 @@ def get_trainer(
         anneal_strategy='cos'
     )
 
+    g_sigma_scheduler = G_SigmaScheduler(
+        start_sigma=hyperparams['start_sigma'],
+        end_sigma=hyperparams['end_sigma'],
+        total_epochs=n_epochs
+    )
+
     trainer = TransformerDeepHitTrainer(
             dynamic_deephit_model,
             deephit_optimizer,
@@ -532,6 +573,7 @@ def get_trainer(
             alpha_pred = hyperparams['alpha_pred'],
             sigma = hyperparams['sigma'],
             scheduler=scheduler,
+            g_sigma_scheduler=g_sigma_scheduler,
             verbose=True, 
             physiological_feature_type = train_processor.physiological_feature_type,
             # l1_params=l1_params,          # ← ADD THIS
@@ -559,6 +601,8 @@ def dynamic_deephit_loss(
         sigma=None,
         mask=None,
         eps=1e-8,
+        g_sigma_scheduler=None,
+        epoch=None,
         ):
     """
     Dynamic-DeepHit loss for competing risks (multi-risk, discrete-time)
@@ -615,7 +659,7 @@ def dynamic_deephit_loss(
     # --- 2. Compute DeepHit Component Losses ---
     # Because we filtered, these functions now see a "batch" of size N_valid
     # lik_loss = log_likelihood_loss(v_logits, v_time_to_event, v_event_label, no_censoring)
-    lik_loss = gaussian_log_likelihood_loss(v_logits, v_time_to_event, v_event_label, no_censoring=True, g_sigma=1.0)
+    lik_loss = gaussian_log_likelihood_loss(v_logits, v_time_to_event, v_event_label, no_censoring=True, g_sigma_scheduler=g_sigma_scheduler, epoch=epoch)
 
     
     classification_loss = event_classification_loss(v_logits, v_event_label, no_censoring)
@@ -642,7 +686,27 @@ def dynamic_deephit_loss(
     return loss, lik_loss, classification_loss, rank_loss, pred_loss
 
 
-def gaussian_log_likelihood_loss(logits, time_to_event, event_label, g_sigma=1.0, no_censoring=True):
+class G_SigmaScheduler:
+    def __init__(self, start_sigma=2.0, end_sigma=0.5, total_epochs=100):
+        self.start_g_sigma = start_sigma
+        self.end_g_sigma = end_sigma
+        self.total_epochs = total_epochs
+
+    def get_sigma(self, epoch):
+        # Exponential decay is usually most effective
+        # sigma = start * (end/start) ^ (epoch/total)
+        if epoch >= self.total_epochs:
+            return self.end_g_sigma
+        
+        if epoch <= 0:
+            return self.start_g_sigma
+
+        sigma = self.start_g_sigma * (self.end_g_sigma / self.start_g_sigma) ** (epoch / self.total_epochs)
+        return sigma
+
+
+
+def gaussian_log_likelihood_loss(logits, time_to_event, event_label, g_sigma_scheduler=None, epoch=None, no_censoring=True):
     """
     logits: (B, K, T) - K event types, T time bins
     time_to_event: (B,) - Long tensor of ground truth bins
@@ -651,6 +715,7 @@ def gaussian_log_likelihood_loss(logits, time_to_event, event_label, g_sigma=1.0
                    Higher sigma = more credit for near misses.
     """
     B, K, T = logits.shape
+    g_sigma = g_sigma_scheduler.get_sigma(epoch) if g_sigma_scheduler and epoch is not None else 1.0
     
     # Adjust labels if 1-indexed
     event_label = event_label - 1 if no_censoring else event_label   

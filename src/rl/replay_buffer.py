@@ -104,7 +104,7 @@ class DynamicDeepHitTransformerDataset(Dataset):
         # for an epoch, we will sample self.n_windows/window_length windows
         self.n_samples = self.n_windows // self.window_length
 
-        self.reshuffle_subsample()
+        self.reshuffle_subsample() 
 
     def reshuffle_subsample(self):
         """shuffle self.window_end_indices and select first n_samples indices"""

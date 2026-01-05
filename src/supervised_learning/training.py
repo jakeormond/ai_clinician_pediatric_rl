@@ -587,7 +587,7 @@ def plot_results(training_losses, val_losses, test_losses, config_manager):
 
     plot_losses(training_losses, val_losses, test_losses, config_manager)
 
-    if config_manager.model_type == 'dynamic_deephit':
+    if config_manager.model_type == 'dynamic_deephit' or config_manager.model_type == 'dynamic_deephit_transformer':
         # plot the validation C-index and Brier scores over time
         plot_c_and_brier_over_time(val_losses, config_manager)
 

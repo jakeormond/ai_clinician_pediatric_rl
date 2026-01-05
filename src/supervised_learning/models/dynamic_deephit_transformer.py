@@ -544,12 +544,13 @@ def get_trainer(
     # dataset_size = train_processor.dynamic_deephit_dataset['event'].shape[0] * \
     #     train_processor.dynamic_deephit_dataset['event'].shape[1]  # total number of timesteps across all patients
     dataset_size = training_dataset.n_samples  # n windows we sample on each epoch
-    steps_per_epoch = dataset_size // batch_size
+    steps_per_epoch = (dataset_size + batch_size - 1) // batch_size
+    total_steps = n_epochs * steps_per_epoch
 
     scheduler = OneCycleLR(
         deephit_optimizer,
         max_lr=learning_rate,
-        total_steps=n_epochs * steps_per_epoch,  # you'll need to pass this
+        total_steps=total_steps,  # you'll need to pass this
         pct_start=0.1,  # 10% warmup
         anneal_strategy='cos'
     )

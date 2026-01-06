@@ -149,10 +149,10 @@ def create_processor_from_shards(config_manager, normalize=True):
 
     return train_processor, val_processor, test_processor
 
-def create_buffer(processor, batch_size, config_manager):
+def create_buffer(processor, batch_size, config_manager, shuffle=True):
     if config_manager.hospital == 'choc' and config_manager.model_type == 'dynamic_deephit':
         dataset = DynamicDeepHitDataset(processor.dynamic_deephit_dataset)
-        buffer = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        buffer = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
     elif config_manager.hospital == 'choc' and config_manager.model_type != 'dynamic_deephit_transformer':
         raise NotImplementedError("Only dynamic_deephit model is implemented for CHOC dataset.")
@@ -162,7 +162,7 @@ def create_buffer(processor, batch_size, config_manager):
         buffer = DataLoader(
             dataset, 
             batch_size=batch_size, 
-            shuffle=True,
+            shuffle=shuffle,
             num_workers=0,          # reduce to save memory
             prefetch_factor=None,      # small prefetch to limit RAM
             pin_memory=False,       # set True if transfers dominate
@@ -177,7 +177,7 @@ def create_buffer(processor, batch_size, config_manager):
         buffer = DataLoader(
             dataset,
             batch_size=batch_size,
-            shuffle=True
+            shuffle=shuffle
         )
 
     elif config_manager.hospital == 'mimic_iv' and not config_manager.training_config['use_windows_from_memory']:
@@ -189,7 +189,7 @@ def create_buffer(processor, batch_size, config_manager):
         buffer = DataLoader(
             dataset,
             batch_size=batch_size,
-            shuffle=True,
+            shuffle=shuffle,
             num_workers=16, # set to 0 for debugging; increase for performance (e.g., 4 or 8)
             worker_init_fn=worker_init_fn,
             pin_memory=True,
@@ -394,8 +394,13 @@ def evaluate_final_model(trainer, test_buffer, config_manager):
     return test_metrics
 
 
-def check_improvement(best_val_loss, current_val_loss, early_stopping):
-    improvement = best_val_loss - current_val_loss
+def check_improvement(best_val_loss, current_val_loss, early_stopping, change_direction='decrease'):
+    """Checks if there is an improvement in validation loss and updates early stopping counters."""
+    if change_direction == 'increase':
+        improvement = current_val_loss - best_val_loss
+    else:
+        improvement = best_val_loss - current_val_loss
+
     if improvement > early_stopping['min_delta']:
         best_val_loss = current_val_loss
         early_stopping['patience_counter'] = 0               
@@ -456,7 +461,7 @@ def single_split_training(config_manager):
             final_model=False
         )
 
-    test_buffer, _ = create_buffer(test_processor, config_manager.training_config['batch_size'], config_manager)
+    test_buffer, _ = create_buffer(test_processor, config_manager.training_config['batch_size'], config_manager, shuffle=False)
     test_losses = evaluate_final_model( # this evaluates on the entire test set (during training we only use a subset for speed)
         trainer, 
         test_buffer, 
@@ -520,12 +525,12 @@ def development_training_loop(dataset, config_manager):
     # plot losses
     plot_losses(training_scores, test_scores, None, config_manager)
 
-    if config_manager.model_type == 'dynamic_deephit':
+    if config_manager.model_type == 'dynamic_deephit' or config_manager.model_type == 'dynamic_deephit_transformer':
         # plot the validation C-index and Brier scores over time
         plot_c_and_brier_over_time(test_scores, config_manager)
 
         # evaluate final model and plot auroc and average precision curves
-        test_buffer, _ = create_buffer(test_processor, config_manager.training_config['batch_size'], config_manager)
+        test_buffer, _ = create_buffer(test_processor, config_manager.training_config['batch_size'], config_manager, shuffle=False)
         final_test_scores = evaluate_final_model(
             trainer,
             test_buffer,
@@ -960,8 +965,8 @@ def train_with_hyperparameters(
     loss_metric = config_manager.training_config['loss_metric']
 
     # Create replay buffers
-    training_buffer, training_dataset = create_buffer(train_processor, batch_size, config_manager)
-    val_test_buffer, _ = create_buffer(val_test_processor, batch_size, config_manager)
+    training_buffer, training_dataset = create_buffer(train_processor, batch_size, config_manager, shuffle=True)
+    val_test_buffer, _ = create_buffer(val_test_processor, batch_size, config_manager, shuffle=False)
     
     # create trainer
     trainer = create_trainer(train_processor, training_dataset, hyperparams, config_manager)
@@ -1028,7 +1033,13 @@ def train_with_hyperparameters(
                             
             if not final_model: 
                 # Check for improvement and copy model parameters if best
-                improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)
+                ##### AI suggesting using c-index instead for early stopping ############
+                if loss_metric in ['weighted_multi_C']:
+                    # for c-index, higher is better
+                    improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping, change_direction='increase')
+                else:
+                    # for losses, lower is better
+                    improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping, change_direction='decrease')
 
                 if improvement > 0:
                     best_model_state = copy_model_parameters(trainer, config_manager)

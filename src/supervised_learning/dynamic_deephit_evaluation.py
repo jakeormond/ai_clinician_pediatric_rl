@@ -32,9 +32,9 @@ def _choose_chunk_size(B, target_gb=2.0, cap=16384):
     max_chunk = int(budget / B)  # bytes per bool
     return max(512, min(max_chunk, cap))
 
-def calculate_c_index(logits, time_to_event, event_label):
+def calculate_c_index(logits, time_to_event, event_label, random_sample=True) -> Dict[str, float]:
     B, K, T = logits.shape
-    if B > 10000:
+    if random_sample and B > 10000:
         # randomly sample 10k for C-index calculation to limit memory use
         perm = torch.randperm(B)
         sel = perm[:10000]
@@ -43,6 +43,14 @@ def calculate_c_index(logits, time_to_event, event_label):
         event_label = event_label[sel]
         B = 10000
         logger.info(f"Calculating C-index on random sample of 10,000 from {B} to limit memory usage.")
+
+    elif B > 10000:
+        # for validation/test, keep it deterministic: take first 10k
+        logits = logits[:10000]
+        time_to_event = time_to_event[:10000]
+        event_label = event_label[:10000]
+        B = 10000
+        logger.info(f"Calculating C-index on first 10,000 from {B} to limit memory usage.")
 
     with torch.inference_mode():
         cif = calculate_cif(logits)
@@ -443,7 +451,9 @@ calculate_roc_and_prc(logits, time_to_event, event_label)
         roc_and_prc_results = calculate_roc_and_prc(logits, time_to_event, event_label, return_full_curves=return_full_curves)
 
         if return_full_curves:
-            return {'weighted_C_index': c_index_results['C_weighted_k'],
+            return {
+                'weighted_C_index': c_index_results['C_weighted_k'],
+                'weighted_multi_C': c_index_results['C_weighted_multi'],
                 'ibs_weighted': brier_results['ew_ibs_k'], 
                 'auroc': roc_and_prc_results['auroc'],
                 'average_precision': roc_and_prc_results['average_precision'],
@@ -451,7 +461,9 @@ calculate_roc_and_prc(logits, time_to_event, event_label)
                 'roc_curve': roc_and_prc_results['roc_curve'],
                 'pr_curve': roc_and_prc_results['pr_curve']}
         else:
-            return {'weighted_C_index': c_index_results['C_weighted_k'],
+            return {
+                'weighted_C_index': c_index_results['C_weighted_k'],
+                'weighted_multi_C': c_index_results['C_weighted_multi'],
                 'ibs_weighted': brier_results['ew_ibs_k'], 
                 'auroc': roc_and_prc_results['auroc'],
                 'average_precision': roc_and_prc_results['average_precision'],

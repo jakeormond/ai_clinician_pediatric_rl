@@ -8,6 +8,8 @@ import torch.nn.functional as F
 TensorBatch = List[torch.Tensor]
 from torch.optim.lr_scheduler import OneCycleLR
 
+from src.supervised_learning.dynamic_deephit_evaluation import calculate_c_index
+
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
@@ -405,7 +407,19 @@ class TransformerDeepHitTrainer:
             physiological_feature_type=self.physiological_feature_type,
             mask = mask
             )
+        
+        # calculate c index here for logging if needed
+        B, T_cap, K, D = logits.shape
+        
+        # reshape logits to [B*T_cap, K, num_time_bins] for c-index calculation
+        logits_c_index = logits.reshape(-1, K, D)
+        tte_c_index = time_to_event.reshape(-1)
+        # expand event_label to [B*T_cap] 
+        event_label_c_index = event_label.unsqueeze(1).expand(-1, T_cap).reshape(-1) - 1   
 
+        
+        c_index_results = calculate_c_index(logits_c_index, tte_c_index, event_label_c_index)
+    
         if self.l1_lambda > 0.0 and len(self.l1_params) > 0:
             l1_lambda = self.l1_lambda  # set your value during initialization
             
@@ -438,7 +452,8 @@ class TransformerDeepHitTrainer:
             "likelihood_loss": lik_loss.item(),
             "classification_loss": class_loss.item(),
             "ranking_loss": rank_loss.item(),
-            "prediction_loss": pred_loss.item()
+            "prediction_loss": pred_loss.item(),
+            "weighted_multi_C": c_index_results['C_weighted_multi'],
             }
 
         

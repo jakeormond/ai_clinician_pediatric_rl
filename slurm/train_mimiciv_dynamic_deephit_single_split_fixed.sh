@@ -66,9 +66,8 @@ python -m src.scripts.supervised.supervised_learning \
     --model_type dynamic_deephit_transformer \
     --prediction_type discharge_mortality_tte \
     --mode single_split \
-    --search_variant random_search \
+    --search_variant fixed_hyperparameters \
     --n_epochs 100 \
-    --n_search_iterations 12 \
     --start_time $START_TIME     
 
 exit_code=$?

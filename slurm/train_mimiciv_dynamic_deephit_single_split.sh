@@ -15,7 +15,6 @@
 #SBATCH --gres=gpu:h100:1     
 #SBATCH --mail-type=END,FAIL        # Email notifications
 #SBATCH --mail-user=j.ormond@imperial.ac.uk
-#SBATCH --wait-all-nodes=1
 
 # Exit on any error
 set -e

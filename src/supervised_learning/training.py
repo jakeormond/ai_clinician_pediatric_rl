@@ -834,8 +834,15 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
         logger.info(f"Search iteration {i+1} validation {loss_metric}: {current_val_loss:.4f}")
 
         ###################### Evaluate and update best hyperparameters ########################
-        if current_val_loss < best_val_loss:
-            improvement = best_val_loss - current_val_loss
+        early_stopping = get_early_stopping_config(config_manager)
+        if loss_metric in ['weighted_multi_C']:
+            # for c-index, higher is better
+            improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping, change_direction='increase')
+        else:
+            # for loss, lower is better
+            improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping, change_direction='decrease')
+
+        if early_stopping['patience_counter'] == 0: 
             logger.info(f" New best hyperparameters found! (improvement: {improvement:.4f})\n")
             best_trainer = trainer
             best_val_loss = current_val_loss
@@ -974,7 +981,10 @@ def train_with_hyperparameters(
     # Early stopping configuration 
     early_stopping = get_early_stopping_config(config_manager)
 
-    best_val_loss = float('inf')
+    if loss_metric in ['weighted_multi_C']:
+        best_val_loss = 0.
+    else:
+        best_val_loss = float('inf')
     best_model_state = None
 
     logger.info(f"Training with early stopping (patience={early_stopping['patience']}, eval_freq={early_stopping['eval_freq']}, min_delta={early_stopping['min_delta']})")

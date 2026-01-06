@@ -810,7 +810,12 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
 
     # initialize best_val_score
     loss_metric = config_manager.training_config['loss_metric'] 
-    best_val_loss = float('inf') 
+    if loss_metric in ['weighted_multi_C']:
+        # for c-index, higher is better
+        best_val_loss = float('-inf') 
+    else:
+        # for loss, lower is better
+        best_val_loss = float('inf') 
 
     ##################### loop through hyperparameter combinations #####################
     logger.info(f"Starting hyperparameter optimization with {config_manager.n_search_iterations} iterations...")

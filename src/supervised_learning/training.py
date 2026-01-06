@@ -929,8 +929,18 @@ def optimize_hyperparameters_cv(
         ###################### Evaluate and update best hyperparameters ########################
         overall_val_loss = np.mean([min(score[loss_metric]) for score in inner_val_scores])
         logger.info(f" Overall mean validation {loss_metric}: {overall_val_loss:.4f}")
-        if overall_val_loss < best_val_loss:
-            improvement = best_val_loss - overall_val_loss
+        
+        
+        ################ INSERT EARLY STOPPING LOGIC HERE ####################
+        early_stopping = get_early_stopping_config(config_manager)
+        if loss_metric in ['weighted_multi_C']:
+            # for c-index, higher is better
+            improvement, best_val_loss = check_improvement(best_val_loss, overall_val_loss, early_stopping, change_direction='increase')
+        else:
+            # for loss, lower is better
+            improvement, best_val_loss = check_improvement(best_val_loss, overall_val_loss, early_stopping, change_direction='decrease')
+        
+        if early_stopping['patience_counter'] == 0:
             logger.info(f" New best hyperparameters found! (improvement: {improvement:.4f})\n")
             best_val_loss = overall_val_loss
             best_hyperparams = current_params.copy()

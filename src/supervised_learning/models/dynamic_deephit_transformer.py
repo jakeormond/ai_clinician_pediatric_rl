@@ -562,11 +562,14 @@ def get_trainer(
     steps_per_epoch = (dataset_size + batch_size - 1) // batch_size
     total_steps = n_epochs * steps_per_epoch
 
+    pct_start = hyperparams['warmup_pct']
+    div_factor = hyperparams['div_factor']
     scheduler = OneCycleLR(
         deephit_optimizer,
         max_lr=learning_rate,
         total_steps=total_steps,  # you'll need to pass this
-        pct_start=0.1,  # 10% warmup
+        pct_start=pct_start, 
+        div_factor=div_factor,
         anneal_strategy='cos'
     )
 

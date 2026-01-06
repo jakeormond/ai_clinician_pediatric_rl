@@ -9,10 +9,10 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=128G
 #SBATCH --time=12:00:00
-# #SBATCH --partition=normal
-# #SBATCH --gres=gpu:l40:1     
-#SBATCH --partition=GPU
-#SBATCH --gres=gpu:h100:1     
+#SBATCH --partition=normal
+#SBATCH --gres=gpu:l40:1     
+# #SBATCH --partition=GPU
+# #SBATCH --gres=gpu:h100:1     
 #SBATCH --mail-type=END,FAIL        # Email notifications
 #SBATCH --mail-user=j.ormond@imperial.ac.uk
 
@@ -67,7 +67,7 @@ python -m src.scripts.supervised.supervised_learning \
     --prediction_type discharge_mortality_tte \
     --mode single_split \
     --search_variant random_search \
-    --n_epochs 100 \
+    --n_epochs 200 \
     --n_search_iterations 12 \
     --start_time $START_TIME     
 

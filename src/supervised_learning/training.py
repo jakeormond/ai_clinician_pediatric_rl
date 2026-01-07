@@ -851,6 +851,7 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
 
         if improvement > 0.:
             logger.info(f" New best hyperparameters found! (improvement: {improvement:.4f})\n")
+            logger.info(f"Best hyperparameters after {i+1} iterations: {current_params}")
             best_trainer = trainer
             best_val_loss = current_val_loss
             best_hyperparams = current_params.copy()

@@ -185,7 +185,11 @@ def main():
             
             # set max encounter length as 2 months
             max_encounter_length = 24 * 60  # hours
-            time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
+            
+            if config_manager.hospital == "mimic_iv":
+                time_bins = [0, 13, 28, 47, 75, 116, 185, 322, 1435]
+            else:            
+                time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
             config_manager.max_encounter_length = max_encounter_length
             config_manager.time_bins = time_bins  
 

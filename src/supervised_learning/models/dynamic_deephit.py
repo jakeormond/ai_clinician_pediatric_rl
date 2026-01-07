@@ -124,15 +124,17 @@ class DynamicDeepHitMulti(nn.Module):
             out: list of [batch, num_time_bins] tensors, one per risk
         """
         # --- Pack padded sequences if mask provided ---
-        if mask is not None:
-            lengths = mask.sum(dim=1).cpu()
-            packed = nn.utils.rnn.pack_padded_sequence(
-                x, lengths, batch_first=True, enforce_sorted=False
-            )
-            h_packed, _ = self.rnn(packed)
-            h, _ = nn.utils.rnn.pad_packed_sequence(h_packed, batch_first=True)
-        else:
-            h, _ = self.rnn(x)
+        # if mask is not None:
+        #     lengths = mask.sum(dim=1).cpu()
+        #     packed = nn.utils.rnn.pack_padded_sequence(
+        #         x, lengths, batch_first=True, enforce_sorted=False
+        #     )
+        #     h_packed, _ = self.rnn(packed)
+        #     h, _ = nn.utils.rnn.pad_packed_sequence(h_packed, batch_first=True)
+        # else:
+        #     h, _ = self.rnn(x)
+
+        h, _ = self.rnn(x)
 
         # LayerNorm on RNN outputs
         h = self.rnn_ln(h)
@@ -145,8 +147,8 @@ class DynamicDeepHitMulti(nn.Module):
         # generate right-padded mask
         device = h.device
         batch_size, max_len, _ = h.shape
-        lengths = lengths.to(device)
-        new_mask = torch.arange(max_len, device=device).expand(batch_size, max_len) < lengths.unsqueeze(1)  
+        # lengths = lengths.to(device)
+        
         
         # --- NEW: Generate step-ahead predictions from GRU hidden states ---
         predictions = None
@@ -156,7 +158,8 @@ class DynamicDeepHitMulti(nn.Module):
             h_for_pred = h[:, :-1, :]  # [batch, seq_len-1, hidden_dim]
             predictions = self.covariate_predictor(h_for_pred)  # [batch, seq_len-1, num_predict_covariates]
             # apply mask to predictions
-            pred_mask = new_mask[:, 1:] # need to remove as many predictions as zeros in the mask  
+            # pred_mask = new_mask[:, 1:] # need to remove as many predictions as zeros in the mask  
+            pred_mask = mask[:, :-1]  # need to remove as many predictions as zeros in the mask
             predictions = predictions * pred_mask.unsqueeze(-1).float()  # Zero out padded predictions
 
         # ----temporal attention--------
@@ -164,13 +167,15 @@ class DynamicDeepHitMulti(nn.Module):
         
         # move padding from left to right for x
         feature_dim = x.shape[2]
-        x_right_padded = torch.zeros((batch_size, max_len, feature_dim), device=device, dtype=x.dtype)
-        for i in range(batch_size):
-            L = lengths[i].long()
-            # Copy the last L timesteps (the valid ones) to the front of the new array
-            x_right_padded[i, :L] = x[i, -L:]        
+        # new_mask = torch.arange(max_len, device=device).expand(batch_size, max_len) < lengths.unsqueeze(1)  
+        # x_right_padded = torch.zeros((batch_size, max_len, feature_dim), device=device, dtype=x.dtype)
+        # for i in range(batch_size):
+        #     L = lengths[i].long()
+        #     # Copy the last L timesteps (the valid ones) to the front of the new array
+        #     x_right_padded[i, :L] = x[i, -L:]        
         
-        context, attn_weights = self.attn(h, x_right_padded, new_mask)  # [batch_size, hidden_dim]
+        # context, attn_weights = self.attn(h, x_right_padded, new_mask)  # [batch_size, hidden_dim]
+        context, attn_weights = self.attn(h, x, mask)  # [batch_size, hidden_dim]
 
         # --- Event-specific hazard outputs ---
         # Note that here we use the left padded data so the last measurement corresponds to the last time step
@@ -190,10 +195,15 @@ class DynamicDeepHitMulti(nn.Module):
         probs_flat = F.softmax(logits_flat, dim=-1)     # each row sums to 1
         probs = probs_flat.view(B, K, T)   
 
+        # if return_predictions:
+        #     return logits, probs, predictions, x_right_padded, new_mask  # [B, K, T], [B, K, T], [B, seq_len-1, num_predict_covariates]
+        # else:
+        #     return logits, probs, _, x_right_padded, new_mask  # [B, K, T], [B, K, T]
+        
         if return_predictions:
-            return logits, probs, predictions, x_right_padded, new_mask  # [B, K, T], [B, K, T], [B, seq_len-1, num_predict_covariates]
+            return logits, probs, predictions  # [B, K, T], [B, K, T], [B, seq_len-1, num_predict_covariates]
         else:
-            return logits, probs, _, x_right_padded, new_mask  # [B, K, T], [B, K, T]
+            return logits, probs, _  # [B, K, T], [B, K, T]
         
 
 class TemporalAttention(nn.Module):
@@ -342,8 +352,11 @@ class DynamicDeepHitTrainer:
         self.l1_params = l1_params
         self.l1_lambda = float(l1_lambda)
 
-    def train(self, batch: TensorBatch):
-
+    def train(self, batch: TensorBatch, epoch: int):
+        """
+        Not currently using epoch number, but included for consistency with other
+        transformer trainer - can be used for learning rate scheduling if desired.
+        """
         self.model.train() # set model to train mode
 
         # unpack batch
@@ -361,7 +374,7 @@ class DynamicDeepHitTrainer:
 
         # Forward pass
         # Model should output: [batch_size, num_risks, num_time_bins]
-        logits, _, predictions, x_right_padded , new_mask = self.model(X, mask=mask, return_predictions=True)
+        logits, _, predictions = self.model(X, mask=mask, return_predictions=True)
 
         # Compute log loss and ranking loss
         loss, lik_loss, class_loss, rank_loss, pred_loss = self.loss_fn(
@@ -369,8 +382,8 @@ class DynamicDeepHitTrainer:
             predictions, 
             time_to_event, 
             event_label, 
-            x_right_padded,
-            new_mask,
+            X,
+            mask,
             alpha_class = self.alpha_class,
             alpha_rank = self.alpha_rank,
             alpha_pred = self.alpha_pred,
@@ -408,22 +421,26 @@ class DynamicDeepHitTrainer:
         return loss_dict, logits
     
 
-    def evaluate(self, batch: TensorBatch):
+    def evaluate(self, batch: TensorBatch, epoch: int):
+        """
+        Not currently using epoch number, but included for consistency with other
+        transformer trainer - can be used for learning rate scheduling if desired.
+        """
         self.model.eval()  # set model to eval mode
         
         # unpack batch
         # X = batch[0].to(self.device)      # [batch_size, n_ts, n_features]
         X = batch['features'].to(self.device)
         # time_to_event = batch[1].to(self.device)      # [batch_size]
-        time_to_event = batch['time_to_event'].to(self.device)
+        time_to_event = batch['time_to_event'][:, -1].to(self.device)
         # event_label = batch[2].to(self.device)      # [batch_size]
         event_label = batch['event'].to(self.device)
         # mask = batch[3].to(self.device)
-        mask = batch['mask'].to(self.device)
+        mask = batch['loss_mask'].to(self.device)
 
         # Forward pass
         with torch.no_grad():
-            logits, _, predictions, x_right_padded , new_mask = self.model(X, mask=mask, return_predictions=True)
+            logits, _, predictions = self.model(X, mask=mask, return_predictions=True)
 
             # Compute log loss and ranking loss
             loss, lik_loss, class_loss, rank_loss, pred_loss = self.loss_fn(
@@ -431,8 +448,8 @@ class DynamicDeepHitTrainer:
                 predictions, 
                 time_to_event, 
                 event_label, 
-                x_right_padded,
-                new_mask,
+                X,
+                mask,
                 alpha_class = self.alpha_class,
                 alpha_rank = self.alpha_rank,
                 alpha_pred = self.alpha_pred,
@@ -455,7 +472,11 @@ class DynamicDeepHitTrainer:
         return loss_dict, logits
 
 
-def get_trainer(config_manager, feature_dim, hyperparams, train_processor):
+def get_trainer(config_manager, feature_dim, hyperparams, train_processor, training_dataset):
+    """
+    training_dataset not currently used but included for consistency with other model trainers,
+    where it is used to get the n_windows to sample on each epoch.
+    """
 
     learning_rate = float(hyperparams['learning_rate'])
     n_time_bins = len(config_manager.time_bins) - 1
@@ -515,7 +536,7 @@ def dynamic_deephit_loss(
         predictions,
         time_to_event, 
         event_label,
-        x_right_padded, 
+        X, 
         mask, # right padded
         predict_covariates: list = [],
         physiological_feature_type: list = [],
@@ -550,7 +571,7 @@ def dynamic_deephit_loss(
     rank_loss = ranking_loss(logits, time_to_event, event_label, no_censoring=no_censoring, sigma=sigma)
     
     pred_loss = prediction_loss(
-            x_right_padded,
+            X,
             predictions, 
             mask, 
             predict_covariates, 

@@ -157,7 +157,8 @@ def create_buffer(processor, batch_size, config_manager, shuffle=True):
     elif config_manager.hospital == 'choc' and config_manager.model_type != 'dynamic_deephit_transformer':
         raise NotImplementedError("Only dynamic_deephit model is implemented for CHOC dataset.")
 
-    elif config_manager.hospital == 'mimic_iv' and config_manager.model_type == 'dynamic_deephit_transformer':
+    elif config_manager.hospital == 'mimic_iv' and \
+        (config_manager.model_type == 'dynamic_deephit_transformer' or config_manager.model_type == 'dynamic_deephit'):
         dataset = DynamicDeepHitTransformerDataset(processor, config_manager)
         buffer = DataLoader(
             dataset, 

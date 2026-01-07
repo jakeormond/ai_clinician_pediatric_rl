@@ -835,19 +835,21 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
             current_params,
             final_model=False
         )
-        current_val_loss = min(val_scores[loss_metric])
-        logger.info(f"Search iteration {i+1} validation {loss_metric}: {current_val_loss:.4f}")
-
+        
         ###################### Evaluate and update best hyperparameters ########################
-        early_stopping = get_early_stopping_config(config_manager)
         if loss_metric in ['weighted_multi_C']:
             # for c-index, higher is better
-            improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping, change_direction='increase')
+            current_val_loss = max(val_scores[loss_metric])
+            improvement = current_val_loss - best_val_loss
+
         else:
             # for loss, lower is better
-            improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping, change_direction='decrease')
+            current_val_loss = min(val_scores[loss_metric])
+            improvement = best_val_loss - current_val_loss
 
-        if early_stopping['patience_counter'] == 0: 
+        logger.info(f"Search iteration {i+1} validation {loss_metric}: {current_val_loss:.4f}")
+
+        if improvement > 0.:
             logger.info(f" New best hyperparameters found! (improvement: {improvement:.4f})\n")
             best_trainer = trainer
             best_val_loss = current_val_loss
@@ -863,8 +865,6 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
     logger.info(f"\n                 Hyperparameter optimization complete!")
 
     return best_trainer, best_hyperparams, training_scores_best, val_scores_best, n_epochs_best
-
-
 
 
 def optimize_hyperparameters_cv(

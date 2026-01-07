@@ -68,7 +68,7 @@ python -m src.scripts.supervised.supervised_learning \
     --mode single_split \
     --search_variant random_search \
     --n_epochs 200 \
-    --n_search_iterations 12 \
+    --n_search_iterations 10 \
     --start_time $START_TIME     
 
 exit_code=$?

@@ -309,6 +309,8 @@ def evaluate_model(
 
             num_samples = len(event_labels)
         else:
+            # GRU version, we need to eliminate all but the last time_to_event value
+            time_to_event = time_to_event[:, -1]
             num_samples += batch['features'].size(0)
 
         # Collect data for survival metrics

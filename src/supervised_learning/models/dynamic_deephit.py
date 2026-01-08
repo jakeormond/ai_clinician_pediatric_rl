@@ -6,10 +6,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ...rl.models.shared_components import TrainerUtils
-
+from src.supervised_learning.dynamic_deephit_evaluation import calculate_c_index
 
 TensorBatch = List[torch.Tensor]
-
+from torch.optim.lr_scheduler import OneCycleLR
 
 class DynamicDeepHitMulti(nn.Module):
     def __init__(
@@ -26,6 +26,7 @@ class DynamicDeepHitMulti(nn.Module):
         rnn_type: str = "GRU",
         project_features: bool = False,
         predict_covariates: list = None,
+        prediction_time_horizon: int = 4, # How many steps ahead to predict 
     ):
         """
         Args:
@@ -50,6 +51,7 @@ class DynamicDeepHitMulti(nn.Module):
 
         self.predict_covariates = predict_covariates if predict_covariates else []
         self.project_features = project_features
+        self.prediction_time_horizon = prediction_time_horizon
 
         # --- Temporal encoder ---
         if rnn_type.upper() == "LSTM":
@@ -155,11 +157,11 @@ class DynamicDeepHitMulti(nn.Module):
         if self.covariate_predictor is not None and return_predictions:
             # Use hidden states from timesteps 0 to seq_len-2 to predict timesteps 1 to seq_len-1
             # h: [batch, seq_len, hidden_dim]
-            h_for_pred = h[:, :-1, :]  # [batch, seq_len-1, hidden_dim]
+            h_for_pred = h[:, :-self.prediction_time_horizon, :]  # [batch, seq_len-1, hidden_dim]
             predictions = self.covariate_predictor(h_for_pred)  # [batch, seq_len-1, num_predict_covariates]
             # apply mask to predictions
             # pred_mask = new_mask[:, 1:] # need to remove as many predictions as zeros in the mask  
-            pred_mask = mask[:, :-1]  # need to remove as many predictions as zeros in the mask
+            pred_mask = mask[:, :-self.prediction_time_horizon]  # need to remove as many predictions as zeros in the mask
             predictions = predictions * pred_mask.unsqueeze(-1).float()  # Zero out padded predictions
 
         # ----temporal attention--------
@@ -318,6 +320,7 @@ class DynamicDeepHitTrainer:
         alpha_class = None,
         sigma = None,
         scheduler=None,
+        g_sigma_scheduler=None,
         verbose=True,
         physiological_feature_type = None,
         l1_params: list = [],
@@ -347,6 +350,7 @@ class DynamicDeepHitTrainer:
         self.alpha_pred = alpha_pred
         self.sigma = sigma
         self.scheduler = scheduler
+        self.g_sigma_scheduler = g_sigma_scheduler
         self.verbose = verbose
         self.physiological_feature_type = physiological_feature_type
         self.l1_params = l1_params
@@ -363,11 +367,11 @@ class DynamicDeepHitTrainer:
         # X = batch[0].to(self.device)      # [batch_size, n_ts, n_features]
         X = batch['features'].to(self.device)
         # time_to_event = batch[1].to(self.device)      # [batch_size]
-        time_to_event = batch['time_to_event'].to(self.device)
+        time_to_event = batch['time_to_event'][:, -1].to(self.device)
         # event_label = batch[2].to(self.device)      # [batch_size]
         event_label = batch['event'].to(self.device)
         # mask = batch[3].to(self.device)
-        mask = batch['mask'].to(self.device)
+        mask = batch['loss_mask'].to(self.device)
 
         # Zero gradients
         self.optimizer.zero_grad()
@@ -383,15 +387,22 @@ class DynamicDeepHitTrainer:
             time_to_event, 
             event_label, 
             X,
-            mask,
             alpha_class = self.alpha_class,
             alpha_rank = self.alpha_rank,
             alpha_pred = self.alpha_pred,
             sigma = self.sigma,
+            g_sigma_scheduler = self.g_sigma_scheduler,
+            epoch = epoch,
             predict_covariates=self.model.predict_covariates,
-            physiological_feature_type=self.physiological_feature_type
+            physiological_feature_type=self.physiological_feature_type,
+            predict_horizon=self.model.prediction_time_horizon,
+            mask=mask
             )
 
+        # calculate c index
+        c_index_results = calculate_c_index(logits, time_to_event, event_label-1)
+
+        # --- L1 Regularization ---
         if self.l1_lambda > 0.0 and len(self.l1_params) > 0:
             l1_lambda = self.l1_lambda  # set your value during initialization
             l1_penalty = sum(torch.sum(torch.abs(p)) for p in self.l1_params)
@@ -409,13 +420,16 @@ class DynamicDeepHitTrainer:
 
         # Update weights
         self.optimizer.step()
+        if self.scheduler is not None:
+            self.scheduler.step()
 
         loss_dict = {
             "combined_loss": loss.item(),
             "likelihood_loss": lik_loss.item(),
             "classification_loss": class_loss.item(),
             "ranking_loss": rank_loss.item(),
-            "prediction_loss": pred_loss.item()
+            "prediction_loss": pred_loss.item(),
+            "weighted_multi_C": c_index_results['C_weighted_multi'],
             }
 
         return loss_dict, logits
@@ -449,13 +463,16 @@ class DynamicDeepHitTrainer:
                 time_to_event, 
                 event_label, 
                 X,
-                mask,
                 alpha_class = self.alpha_class,
                 alpha_rank = self.alpha_rank,
                 alpha_pred = self.alpha_pred,
                 sigma = self.sigma,
+                g_sigma_scheduler = self.g_sigma_scheduler,
+                epoch = epoch,
                 predict_covariates=self.model.predict_covariates,
-                physiological_feature_type=self.physiological_feature_type
+                physiological_feature_type=self.physiological_feature_type,
+                predict_horizon=self.model.prediction_time_horizon,
+                mask=mask
                 )
 
         # set model back to train mode
@@ -508,6 +525,31 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor, train
         weight_decay = float(hyperparams['weight_decay'])
     )
 
+    n_epochs = config_manager.n_epochs
+    batch_size = int(hyperparams['batch_size'])
+    # dataset_size = train_processor.dynamic_deephit_dataset['event'].shape[0] * \
+    #     train_processor.dynamic_deephit_dataset['event'].shape[1]  # total number of timesteps across all patients
+    dataset_size = training_dataset.n_samples  # n windows we sample on each epoch
+    steps_per_epoch = (dataset_size + batch_size - 1) // batch_size
+    total_steps = n_epochs * steps_per_epoch
+
+    pct_start = hyperparams['pct_start']
+    div_factor = hyperparams['div_factor']
+    scheduler = OneCycleLR(
+        deephit_optimizer,
+        max_lr=learning_rate,
+        total_steps=total_steps,  # you'll need to pass this
+        pct_start=pct_start, 
+        div_factor=div_factor,
+        anneal_strategy='cos'
+    )    
+    
+    g_sigma_scheduler = G_SigmaScheduler(
+        start_sigma=hyperparams['start_sigma'],
+        end_sigma=hyperparams['end_sigma'],
+        total_epochs=n_epochs
+    )
+
     trainer = DynamicDeepHitTrainer(
             dynamic_deephit_model,
             deephit_optimizer,
@@ -520,7 +562,8 @@ def get_trainer(config_manager, feature_dim, hyperparams, train_processor, train
             alpha_rank = hyperparams['alpha_rank'],
             alpha_pred = hyperparams['alpha_pred'],
             sigma = hyperparams['sigma'],
-            scheduler=None,
+            g_sigma_scheduler=g_sigma_scheduler,
+            scheduler=scheduler,
             verbose=True, 
             physiological_feature_type = train_processor.physiological_feature_type,
             l1_params=l1_params,          # ← ADD THIS
@@ -537,8 +580,8 @@ def dynamic_deephit_loss(
         time_to_event, 
         event_label,
         X, 
-        mask, # right padded
         predict_covariates: list = [],
+        predict_horizon=None,
         physiological_feature_type: list = [],
         no_censoring=True,
         pair_sample_frac = 1.0,
@@ -546,7 +589,10 @@ def dynamic_deephit_loss(
         alpha_rank= None, 
         alpha_pred = None,
         sigma=None,
-        eps=1e-8
+        mask=None,
+        eps=1e-8,
+        g_sigma_scheduler=None,
+        epoch=None,
         ):
     """
     Dynamic-DeepHit loss for competing risks (multi-risk, discrete-time)
@@ -566,14 +612,18 @@ def dynamic_deephit_loss(
         scalar loss tensor
     """
     
-    lik_loss = log_likelihood_loss(logits, time_to_event, event_label, no_censoring)
+    # lik_loss = log_likelihood_loss(logits, time_to_event, event_label, no_censoring)
+    lik_loss = gaussian_log_likelihood_loss(logits, time_to_event, event_label, no_censoring=True, g_sigma_scheduler=g_sigma_scheduler, epoch=epoch)
     classification_loss = event_classification_loss(logits, event_label, no_censoring)
     rank_loss = ranking_loss(logits, time_to_event, event_label, no_censoring=no_censoring, sigma=sigma)
     
+    pred_target = X[:, predict_horizon:, :]
+    pred_mask = mask[:, : -predict_horizon]
+        
     pred_loss = prediction_loss(
-            X,
+            pred_target,
             predictions, 
-            mask, 
+            pred_mask, 
             predict_covariates, 
             physiological_feature_type
             ) 
@@ -581,6 +631,74 @@ def dynamic_deephit_loss(
     # --- Combine ---
     loss = lik_loss + alpha_class * classification_loss + alpha_rank * rank_loss + alpha_pred * pred_loss
     return loss, lik_loss, classification_loss, rank_loss, pred_loss
+
+
+class G_SigmaScheduler:
+    def __init__(self, start_sigma=2.0, end_sigma=0.5, total_epochs=100):
+        self.start_g_sigma = start_sigma
+        self.end_g_sigma = end_sigma
+        self.total_epochs = total_epochs
+
+    def get_sigma(self, epoch):
+        # Exponential decay is usually most effective
+        # sigma = start * (end/start) ^ (epoch/total)
+        if epoch >= self.total_epochs:
+            return self.end_g_sigma
+        
+        if epoch <= 0:
+            return self.start_g_sigma
+
+        sigma = self.start_g_sigma * (self.end_g_sigma / self.start_g_sigma) ** (epoch / self.total_epochs)
+        return sigma
+
+
+def gaussian_log_likelihood_loss(logits, time_to_event, event_label, g_sigma_scheduler=None, epoch=None, no_censoring=True):
+    """
+    logits: (B, K, T) - K event types, T time bins
+    time_to_event: (B,) - Long tensor of ground truth bins
+    event_label: (B,) - Long tensor of event types (1 to K)
+    sigma: Float - Controls the 'spread' of the reward. 
+                   Higher sigma = more credit for near misses.
+    """
+    B, K, T = logits.shape
+    g_sigma = g_sigma_scheduler.get_sigma(epoch) if g_sigma_scheduler and epoch is not None else 1.0
+    
+    # Adjust labels if 1-indexed
+    event_label = event_label - 1 if no_censoring else event_label   
+    
+    # 1. Create a coordinate grid for the T time bins (0, 1, 2, ..., T-1)
+    # Shape: (T,)
+    time_bins = torch.arange(T, device=logits.device).float()
+    
+    # 2. Calculate the Gaussian "bump" for the correct event head
+    # We want (B, T) where each row is a Gaussian centered at time_to_event[i]
+    # Formula: exp(-0.5 * ((bin - target) / sigma)^2)
+    diff = time_bins.view(1, T) - time_to_event.view(B, 1).float()
+    target_dist = torch.exp(-0.5 * (diff / g_sigma)**2)
+    
+    # Normalize so each row sums to 1.0 (to make it a valid probability distribution)
+    target_dist = target_dist / (target_dist.sum(dim=1, keepdim=True) + 1e-8)
+    
+    # 3. Place these bumps into a full (B, K, T) target tensor
+    # Initialize with zeros
+    full_target = torch.zeros_like(logits)
+    
+    # Scatter the Gaussian bumps into the correct event channel (k) for each batch
+    # This ensures the model is penalized for picking the wrong event type AND the wrong time
+    for i in range(B):
+        full_target[i, event_label[i], :] = target_dist[i]
+    
+    # 4. Calculate Loss
+    # Flatten both to (B, K*T)
+    full_target_flat = full_target.view(B, K * T)
+    logp_flat = F.log_softmax(logits.view(B, K * T), dim=1)
+    
+    # Cross Entropy with soft targets: -sum(target * log_prob)
+    # This naturally rewards 'close' predictions because log_prob will be 
+    # weighted by the Gaussian values in target_dist.
+    lik_loss = -(full_target_flat * logp_flat).sum(dim=1).mean()
+    
+    return lik_loss
 
 
 def log_likelihood_loss(logits, time_to_event, event_label, no_censoring=True):
@@ -647,36 +765,36 @@ def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=No
     for k in range(K):
         # mask of i samples with event==k
         mask_i_k = (event_label == k)                 # (B,)
-        if mask_i_k.sum() == 0:
+        event_indices = torch.where(mask_i_k)[0]      # indices of samples with event k
+        
+        if len(event_indices) == 0:
             continue
 
-        # For cause k, build pair mask: i in mask_i_k AND t_i < t_j
-        # Broadcasting:
-        mask_i_k_row = mask_i_k.view(B, 1)      # (B,1) - for rows
-        mask_i_k_col = mask_i_k.view(1, B)           
-        mask_time = (t_i < t_j)                 # (B,B) -- true where t_i < t_j
-        pair_mask = mask_i_k_row & mask_i_k_col & mask_time    # (B,B) -- candidate pairs (i,j)
-
-        num_pairs = pair_mask.sum().item()
-        if num_pairs == 0:
-            continue
+        if len(event_indices) > 12000:
+            event_indices = event_indices[torch.randperm(len(event_indices))[:12000]]
+        n_event = len(event_indices)
 
         # Gather CIF values at t_i for all samples
         # cif_k has shape (B, T), we want to gather at position t_i for each sample
-        cif_k = S[:, k, :]  # (B, T)
+        cif_k = S[event_indices, k, :]  # (B, T)
+
+        # Build matrices for t and k comparisons:
+        t_i_k = t_i[event_indices]   # (N_k,1)
+        t_j_k = t_j[:, event_indices]
+        mask_time = (t_i_k < t_j_k)  
+        num_pairs = mask_time.sum().item()
+        if num_pairs == 0:
+            continue
 
         # Create gathering indices: for each sample i, get cif at all t_i values
         # We need to broadcast this operation
-        t_i_expand = t_i.expand(B, B)  # (B, B) - each row i has t_i repeated
+        t_i_expand = t_i_k.expand(n_event, n_event)  # (B, B) - each row i has t_i repeated
         t_i_expand = t_i_expand.long()
 
         # Gather: for each (i,j) pair, get CIF_j at time t_i
         # This is a bit tricky - we need to use advanced indexing
-        batch_indices = torch.arange(B, device=device).view(1, B).expand(B, B)
-        cif_at_ti = cif_k[batch_indices, t_i_expand]  # (B, B)
-
-        # Now cif_at_ti[i, j] = CIF_k(t_i | X_j)
-        # We want: risk_i = CIF_k(t_i | X_i) and risk_j = CIF_k(t_i | X_j)
+        event_indices_expanded = torch.arange(n_event, device=device).view(1, n_event).expand(n_event, n_event)
+        cif_at_ti = cif_k[event_indices_expanded, t_i_expand]  # (B, B)
 
         risk_i = torch.diagonal(cif_at_ti, 0).unsqueeze(1)  # (B, 1) - diagonal elements
         risk_j = cif_at_ti  # (B, B)
@@ -684,12 +802,59 @@ def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=No
         # Compute pairwise ranking loss: η(risk_i, risk_j) = exp(-(risk_i - risk_j) / sigma)
         # We want risk_i > risk_j, so we penalize when risk_i <= risk_j
         # pairwise_loss = torch.exp(-(risk_i - risk_j) / sigma)  # (B, B)
-        pairwise_loss = torch.log(1 + torch.exp(-(risk_i - risk_j))) 
-
-        # Apply pair mask and sum
-        masked_loss = pairwise_loss * pair_mask.float()
+        pairwise_loss = torch.log(1 + torch.exp(-(risk_i - risk_j)/sigma)) 
+        
+        # apply mask to loss
+        masked_loss = pairwise_loss * mask_time.float()
         rank_loss += masked_loss.sum()
         total_pairs += num_pairs
+
+    # for k in range(K):
+    #     # mask of i samples with event==k
+    #     mask_i_k = (event_label == k)                 # (B,)
+    #     if mask_i_k.sum() == 0:
+    #         continue
+
+    #     # For cause k, build pair mask: i in mask_i_k AND t_i < t_j
+    #     # Broadcasting:
+    #     mask_i_k_row = mask_i_k.view(B, 1)      # (B,1) - for rows
+    #     mask_i_k_col = mask_i_k.view(1, B)           
+    #     mask_time = (t_i < t_j)                 # (B,B) -- true where t_i < t_j
+    #     pair_mask = mask_i_k_row & mask_i_k_col & mask_time    # (B,B) -- candidate pairs (i,j)
+
+    #     num_pairs = pair_mask.sum().item()
+    #     if num_pairs == 0:
+    #         continue
+
+    #     # Gather CIF values at t_i for all samples
+    #     # cif_k has shape (B, T), we want to gather at position t_i for each sample
+    #     cif_k = S[:, k, :]  # (B, T)
+
+    #     # Create gathering indices: for each sample i, get cif at all t_i values
+    #     # We need to broadcast this operation
+    #     t_i_expand = t_i.expand(B, B)  # (B, B) - each row i has t_i repeated
+    #     t_i_expand = t_i_expand.long()
+
+    #     # Gather: for each (i,j) pair, get CIF_j at time t_i
+    #     # This is a bit tricky - we need to use advanced indexing
+    #     batch_indices = torch.arange(B, device=device).view(1, B).expand(B, B)
+    #     cif_at_ti = cif_k[batch_indices, t_i_expand]  # (B, B)
+
+    #     # Now cif_at_ti[i, j] = CIF_k(t_i | X_j)
+    #     # We want: risk_i = CIF_k(t_i | X_i) and risk_j = CIF_k(t_i | X_j)
+
+    #     risk_i = torch.diagonal(cif_at_ti, 0).unsqueeze(1)  # (B, 1) - diagonal elements
+    #     risk_j = cif_at_ti  # (B, B)
+
+    #     # Compute pairwise ranking loss: η(risk_i, risk_j) = exp(-(risk_i - risk_j) / sigma)
+    #     # We want risk_i > risk_j, so we penalize when risk_i <= risk_j
+    #     # pairwise_loss = torch.exp(-(risk_i - risk_j) / sigma)  # (B, B)
+    #     pairwise_loss = torch.log(1 + torch.exp(-(risk_i - risk_j))) 
+
+    #     # Apply pair mask and sum
+    #     masked_loss = pairwise_loss * pair_mask.float()
+    #     rank_loss += masked_loss.sum()
+    #     total_pairs += num_pairs
 
     if total_pairs > 0:
         rank_loss = rank_loss / total_pairs
@@ -717,13 +882,12 @@ def prediction_loss(X, predictions, mask, predict_covariates, continuous_indices
     batch_size, seq_len_minus_1, num_pred = predictions.shape
 
     # Extract the actual next-step values
-    x_next = X[:, 1:, predict_covariates]  # [batch, seq_len-1, feature_dim]
-    mask_next = mask[:, 1:]      # [batch, seq_len-1]
-    valid_mask = mask_next.unsqueeze(-1)  # [batch, seq_len-1, 1]
+    x_next = X[:, :, predict_covariates]  # [batch, seq_len-1, feature_dim]
+    valid_mask = mask.unsqueeze(-1)  # [batch, seq_len-1, 1]
 
     # Compute loss based on covariate type
     binary_indices = [i for i, val in enumerate(continuous_indices) if val == 'binary']
-    continuous_indices = [i for i, val in enumerate(continuous_indices) if val == 'continuous']
+    continuous_indices = [i for i, val in enumerate(continuous_indices) if val in ['continuous', 'ordinal']]
 
     # continuous - MSE
     continuous_loss = F.mse_loss(
@@ -783,9 +947,11 @@ def make_mixed_resolution_time_bins(max_time_hours=3000):
     if max_time_hours <= 336:
         # all_bins = np.array([0, 6, 12, 24, 48, 72, 168]) # testing with fewer bins
         all_bins = np.array([0, 6, 12, 24, 48, 72, 168, 336, max_time_hours])
+        all_bins = None
 
     else:
         # all_bins = np.array([0, 6, 12, 24, 48, 72, 168, 336, max_time_hours])
-        all_bins = np.array([0, 6, 12, 24, 48, 72, 168, 336, max_time_hours])
+        # all_bins = np.array([0, 6, 12, 24, 48, 72, 168, 336, max_time_hours])
+        all_bins = None
 
     return all_bins

@@ -417,7 +417,6 @@ class TransformerDeepHitTrainer:
         # expand event_label to [B*T_cap] 
         event_label_c_index = event_label.unsqueeze(1).expand(-1, T_cap).reshape(-1) - 1   
 
-        
         c_index_results = calculate_c_index(logits_c_index, tte_c_index, event_label_c_index)
     
         if self.l1_lambda > 0.0 and len(self.l1_params) > 0:

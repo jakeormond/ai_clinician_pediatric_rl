@@ -19,7 +19,7 @@ hidden_dim: [32, 64, 128] # loguniform(32, 256) # 64  # Hidden dimension for all
 attn_hidden_dim: [32, 64, 128, 256] # loguniform(32, 256)
 n_layers: [1, 2, 3, 4] # [1, 2, 3, 4] # 2
 
-loss_metric: "combined_loss"  # Which metric to use for early stopping
+loss_metric: "weighted_multi_C"  # Which metric to use for early stopping
 max_val_samples: 5000  # Max samples to use for validation during training
 
 l1_lambda: 1e-4  # L1 regularization weight for classification head

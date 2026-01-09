@@ -50,6 +50,33 @@ def plot_losses(training_scores, val_scores, test_scores, config_manager):
     plt.close()
 
 
+def plot_gradient_norms(raw_grad_norms, config_manager):
+    plt.figure(figsize=(10, 6))
+    epochs_range = np.arange(1, len(raw_grad_norms['raw_grad_norm']) + 1)
+
+    plt.plot(epochs_range, raw_grad_norms['raw_grad_norm'], color=plt.cm.viridis(0.9), linewidth=2, label='Gradient Norm')
+
+    plt.xlabel('Epochs')
+    plt.ylabel('Gradient Norm')
+    plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
+    plt.xlim(-0.5, np.max(epochs_range)+0.5)
+    plt.title('Gradient Norm over Epochs')
+    plt.grid(True)
+    plt.legend(
+        loc='upper right',
+        facecolor='white',  # solid white background
+        framealpha=1,
+        edgecolor='lightgray',
+        bbox_to_anchor=(0.98, 0.98),
+        fontsize=10,
+    )
+
+    # Save the plot
+    plot_path = Path(config_manager.experiment_dir) / f"gradient_norm_plot.png"
+    plt.savefig(plot_path)
+    plt.close()
+
+
 def plot_c_and_brier_over_time(test_scores, config_manager):
     
     metric_keys = ['weighted_C_index', 'ibs_weighted', 'auroc', 'average_precision']

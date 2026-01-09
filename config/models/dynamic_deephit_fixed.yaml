@@ -31,6 +31,10 @@ sigma: 0.1
 start_sigma: 2.
 end_sigma: 0.5
 
+# learning rate scheduling parameters
+pct_start: 0.1
+div_factor: 25
+
 # Early stopping parameters (fixed for all combinations)
 patience: 15       # Stop if no improvement for 15 evaluations
 eval_freq: 1       # Evaluate every 20 epochs  

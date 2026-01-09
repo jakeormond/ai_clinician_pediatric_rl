@@ -305,6 +305,16 @@ class TemporalAttention(nn.Module):
         return context, attn_weights
 
 
+def get_grad_norm(model):
+    total_norm = 0
+    for p in model.parameters():
+        if p.grad is not None:
+            param_norm = p.grad.detach().data.norm(2)
+            total_norm += param_norm.item() ** 2
+    total_norm = total_norm ** 0.5
+    return total_norm
+
+
 class DynamicDeepHitTrainer:
     def __init__(
         self,
@@ -411,6 +421,9 @@ class DynamicDeepHitTrainer:
         # Backward pass - compute gradients
         loss.backward()
 
+        # 1. Capture the raw norm for logging
+        raw_grad_norm = get_grad_norm(self.model)
+
         # Gradient clipping if specified
         if self.grad_clip is not None:
             torch.nn.utils.clip_grad_norm_(
@@ -432,7 +445,7 @@ class DynamicDeepHitTrainer:
             "weighted_multi_C": c_index_results['C_weighted_multi'],
             }
 
-        return loss_dict, logits
+        return loss_dict, logits, raw_grad_norm
     
 
     def evaluate(self, batch: TensorBatch, epoch: int):

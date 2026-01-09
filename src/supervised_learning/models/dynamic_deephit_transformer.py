@@ -92,11 +92,11 @@ class TransformerDeepHitMulti(nn.Module):
         d_model: int, # Replaces hidden_dim
         nhead: int,
         num_encoder_layers: int, # Replaces num_layers
+        ff_factor: int, # dim_feedforward = ff_factor * d_model
         num_time_bins: int,
         num_risks: int,
         dropout: float = 0.3,
-        dim_feedforward: int = 128, # Standard Transformer parameter
-        max_seq_len: int = 768, # For Positional Encoding and padding
+               max_seq_len: int = 768, # For Positional Encoding and padding
         predict_covariates: list = None,
         prediction_time_horizon: int = 4, # How many steps ahead to predict 
         cnn_kernel_size: int = 5,
@@ -118,6 +118,9 @@ class TransformerDeepHitMulti(nn.Module):
 
         self.feature_dim = int(feature_dim)
         self.d_model = int(d_model)
+        self.nhead = int(nhead)
+        self.num_encoder_layers = int(num_encoder_layers)
+        self.ff_factor = int(ff_factor)
         self.num_time_bins = int(num_time_bins)
         self.num_risks = int(num_risks)
         self.dropout = dropout
@@ -169,9 +172,10 @@ class TransformerDeepHitMulti(nn.Module):
         self.pos_encoder = PositionalEncoding(d_model, dropout, max_seq_len)
 
         # --- 3. Transformer Encoder Stack ---
+        dim_feedforward = self.ff_factor * self.d_model  # Common choice is 4 times d_model
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, 
-            nhead=nhead, 
+            d_model=self.d_model, 
+            nhead=self.nhead, 
             dim_feedforward=dim_feedforward, 
             dropout=dropout,
             batch_first=True
@@ -309,6 +313,16 @@ class TransformerDeepHitMulti(nn.Module):
         return risk_logits, covariate_pred
 
 
+def get_grad_norm(model):
+    total_norm = 0
+    for p in model.parameters():
+        if p.grad is not None:
+            param_norm = p.grad.detach().data.norm(2)
+            total_norm += param_norm.item() ** 2
+    total_norm = total_norm ** 0.5
+    return total_norm
+
+
 class TransformerDeepHitTrainer:
     def __init__(
         self,
@@ -434,6 +448,9 @@ class TransformerDeepHitTrainer:
         # Backward pass - compute gradients
         loss.backward()
 
+        # 1. Capture the raw norm for logging
+        raw_grad_norm = get_grad_norm(self.model)
+
         # Gradient clipping if specified
         if self.grad_clip is not None:
             torch.nn.utils.clip_grad_norm_(
@@ -456,7 +473,7 @@ class TransformerDeepHitTrainer:
             }
 
         
-        return loss_dict, logits
+        return loss_dict, logits, raw_grad_norm
     
 
     def evaluate(self, batch: TensorBatch, epoch: int):
@@ -536,7 +553,7 @@ def get_trainer(
         num_time_bins=n_time_bins,
         num_risks=num_risks,
         dropout=hyperparams['dropout'],
-        dim_feedforward=hyperparams.get('dim_feedforward', 512), # Usually 4 * d_model
+        ff_factor=hyperparams['ff_factor'],
         max_seq_len=config_manager.training_config['window_length'],
         predict_covariates=train_processor.physiological_feature_ind,       
     ).to(config_manager.training_config['device'])

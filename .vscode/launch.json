@@ -85,7 +85,7 @@
                 "--prediction_type", "discharge_mortality_tte",
                 "--mode", "single_split", 
                 "--search_variant", "fixed_hyperparameters",
-                "--n_epochs", "20",
+                "--n_epochs", "2",
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

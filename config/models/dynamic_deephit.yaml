@@ -22,7 +22,7 @@ n_layers: [1, 2, 3, 4] # [1, 2, 3, 4] # 2
 loss_metric: "weighted_multi_C"  # Which metric to use for early stopping
 max_val_samples: 5000  # Max samples to use for validation during training
 
-l1_lambda: 1e-4  # L1 regularization weight for classification head
+l1_lambda: "loguniform(1e-6, 1e-4)"  # L1 regularization weight for classification head
 
 alpha_class: 0.1  # Weight for classification loss
 alpha_rank: [1.0, 2.0]   # Weight for ranking loss
@@ -31,15 +31,19 @@ sigma: [0.1, 0.2, 0.3] # for ranking loss
 
 # gaussian sigma scheduling parameters
 start_sigma: 2.
-end_sigma: 0.5
+end_sigma: [0.3, 0.5, 0.7]
 
 # learning rate scheduling parameters
-pct_start: [0.1, 0.3]
+pct_start: [0.1, 0.3, 0.5]
 div_factor: [10, 25, 50]
 
 # Early stopping parameters (fixed for all combinations)
-patience: 15        # Stop if no improvement for 15 evaluations
+patience: 10        # Stop if no improvement for 15 evaluations
 eval_freq: 1       # Evaluate every 20 epochs  
 min_delta: 0.0001   # Minimum improvement threshold
 
-grad_clip: [0.5, 1]  # Gradient clipping value
+grad_clip: [0.1, 0.5, 1.0, 5.0]  # Gradient clipping value
+
+# for controls
+shuffle_inputs: False  # Whether to shuffle feature columns to confirm transformer not looking ahead
+zero_inputs: False  # Whether to zero out feature columns to confirm transformer not looking ahead

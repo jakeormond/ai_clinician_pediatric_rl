@@ -9,10 +9,10 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=128G
 #SBATCH --time=24:00:00
-# #SBATCH --partition=normal
-# #SBATCH --gres=gpu:l40:1     
-#SBATCH --partition=GPU
-#SBATCH --gres=gpu:h100:1     
+#SBATCH --partition=normal
+#SBATCH --gres=gpu:l40:1     
+# #SBATCH --partition=GPU
+# #SBATCH --gres=gpu:h100:1     
 #SBATCH --mail-type=END,FAIL        # Email notifications
 #SBATCH --mail-user=j.ormond@imperial.ac.uk
 
@@ -63,7 +63,7 @@ echo "Starting training..."
 python -m src.scripts.supervised.supervised_learning \
     --hospital mimic_iv \
     --experiment_type supervised_learning \
-    --model_type dynamic_deephit \
+    --model_type dynamic_deephit_transformer \
     --prediction_type discharge_mortality_tte \
     --mode single_split \
     --search_variant random_search \

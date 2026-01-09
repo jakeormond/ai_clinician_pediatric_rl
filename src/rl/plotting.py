@@ -23,10 +23,10 @@ def plot_losses(training_scores, val_scores, test_scores, config_manager):
             plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      
         
         else:
-            plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Test Loss')     
-            test_loss = test_scores[key]
-            # plot test loss as horizontal line
-            plt.axhline(y=test_loss, color='green', linestyle='--', linewidth=2, label='Test Loss final')
+            plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Val Loss')     
+            val_loss = val_scores[key]
+            # plot val loss as horizontal line
+            plt.axhline(y=val_loss, color='green', linestyle='--', linewidth=2, label='Val Loss final')
 
         if i == len(loss_keys) - 1:
             plt.xlabel('Epochs')

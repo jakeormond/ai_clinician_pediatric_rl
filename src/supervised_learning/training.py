@@ -464,14 +464,14 @@ def single_split_training(config_manager):
             final_model=False
         )
 
-    test_buffer, _ = create_buffer(test_processor, config_manager.training_config['batch_size'], config_manager, shuffle=False)
-    test_losses = evaluate_final_model( # this evaluates on the entire test set (during training we only use a subset for speed)
+    val_buffer, _ = create_buffer(val_processor, config_manager.training_config['batch_size'], config_manager, shuffle=False)
+    final_val_losses = evaluate_final_model( # this evaluates on the entire test set (during training we only use a subset for speed)
         trainer, 
-        test_buffer, 
+        val_buffer, 
         config_manager
     )
     
-    logger.info(f"Final test metrics: {test_losses}")
+    logger.info(f"Final val metrics: {final_val_losses}")
 
     # Save final model if this is the final training
     model_path = Path(config_manager.experiment_dir /  "final_model.pt")
@@ -479,7 +479,7 @@ def single_split_training(config_manager):
     logger.info(f" Final model saved to {model_path}")
 
     # plot losses
-    plot_results(training_scores, val_scores, test_losses, config_manager)
+    plot_results(training_scores, val_scores, final_val_losses, config_manager)
 
     # plot gradient norms if available
     if raw_grad_norms is not None:
@@ -489,7 +489,7 @@ def single_split_training(config_manager):
     all_scores = save_results(
         training_scores,
         val_scores,
-        test_losses,
+        final_val_losses,
         hyperparams,
         n_epochs,
         config_manager

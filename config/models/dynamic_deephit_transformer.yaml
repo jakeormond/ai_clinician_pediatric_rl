@@ -31,7 +31,7 @@ max_val_samples: 5000  # Max samples to use for validation during training
 
 l1_lambda: "loguniform(1e-6, 1e-4)"  # L1 regularization weight for classification head
 
-alpha_class: 0.1  # Weight for classification loss
+alpha_class: [0.1, 0.25, 0.5]  # Weight for classification loss
 alpha_rank: [1.0, 2.0]   # Weight for ranking loss
 alpha_pred: [0.5, 1.0, 2.0]  # Weight for prediction loss
 sigma: [0.1, 0.2, 0.3] # for ranking loss

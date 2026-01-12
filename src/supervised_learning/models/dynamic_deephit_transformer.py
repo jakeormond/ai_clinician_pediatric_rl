@@ -96,7 +96,7 @@ class TransformerDeepHitMulti(nn.Module):
         num_time_bins: int,
         num_risks: int,
         dropout: float = 0.3,
-               max_seq_len: int = 768, # For Positional Encoding and padding
+        max_seq_len: int = 768, # For Positional Encoding and padding
         predict_covariates: list = None,
         prediction_time_horizon: int = 4, # How many steps ahead to predict 
         cnn_kernel_size: int = 5,

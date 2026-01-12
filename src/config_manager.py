@@ -34,7 +34,19 @@ class ConfigManager:
         elif self.mode == "single_split":
             if self.experiment_variant == "prediction":
                 # find model directory
-                results_dir = self.paths['final_model_dir']
+                if self.model_type == "dynamic_deephit":
+                    results_dir = os.path.join(
+                        self.paths['final_model_dir'], 
+                        "GRU", "final_model"
+                    )
+                elif self.model_type == "dynamic_deephit_transformer":
+                    results_dir = os.path.join(
+                        self.paths['final_model_dir'], 
+                        "transformer", "final_model"
+                    )
+                else:
+                    raise ValueError(f"Unsupported model_type for prediction: {self.model_type}")
+
                 # get the path to the folder inside the results_dir
                 model_folders = [f for f in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, f))]
                 if len(model_folders) > 1:

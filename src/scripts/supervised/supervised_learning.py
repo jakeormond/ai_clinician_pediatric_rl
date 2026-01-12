@@ -179,7 +179,8 @@ def main():
      
     
     elif args.mode == 'single_split':
-        if config_manager.model_type == "dynamic_deephit" or config_manager.model_type == "dynamic_deephit_transformer":
+        if (config_manager.model_type == "dynamic_deephit" or config_manager.model_type == "dynamic_deephit_transformer"):
+            
             # set training config
             config_manager.set_training_config()
             
@@ -206,13 +207,10 @@ def main():
             results = single_split_training(config_manager)
 
 
-        elif args.mode == 'single_split' and args.experiment_variant == 'prediction':
+        elif args.experiment_variant == 'prediction':
             """
             this is for generating predictions on the MIMIC IV dataset with a single train/val/test split.
             """
-            # make sure config_manager.training_config["use_windows_from_memory"] is False
-            config_manager.training_config["use_windows_from_memory"] = False
-
             predict(config_manager)
             
     

@@ -64,6 +64,8 @@ def instantiate_model(config_manager, hyperparams, n_time_bins, num_risks, test_
 def inference_loop(model, processor, device='cuda'):
     stay_ids = processor.dynamic_deephit_dataset['stay_ids']
     index_ptr = processor.dynamic_deephit_dataset['index_ptr']
+
+    # create a
     
     model.eval()
     with torch.no_grad():
@@ -84,6 +86,37 @@ def inference_loop(model, processor, device='cuda'):
             # 3. Create windows (T, 72, F)
             # unfold(dimension, size, step)
             windows = padded_traj.unfold(0, 72, 1).transpose(1, 2)
+            
+            # 4. Batch Inference
+            batch_size = 64
+            all_preds = []
+            
+            for chunk_start in range(0, T, batch_size):
+                chunk_end = min(chunk_start + batch_size, T)
+                windows_chunk = windows[chunk_start:chunk_end].to(device)
+                
+                risk_logits, _ = model(windows_chunk)
+
+                # Extract the final prediction of each window in the chunk
+                # and move back to CPU immediately to save GPU memory
+                final_step_logits = [logits[:, -1, :].cpu() for logits in risk_logits]
+                final_step_logits = torch.stack(final_step_logits, dim=2)  # (batch_size, num_risks, num_time_bins)
+                
+                T, D, K = final_step_logits.shape
+                # reshape to (T, K, D)
+                final_step_logits = final_step_logits.permute(0, 2, 1)
+
+                # add to list of all predictions    
+                all_preds.append(final_step_logits)
+            
+            # 5. concatenate all predictions for this patient
+            patient_preds = torch.cat(all_preds, dim=0)  
+
+            
+
+            
+
+            
             pass
         
     pass  # Placeholder for potential future use

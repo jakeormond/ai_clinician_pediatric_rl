@@ -6,44 +6,50 @@ checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save 
 window_length: 72 #168 # Prediction horizon in hours - so 1 month
 device: "cuda"  # Device (cuda or cpu)
 
-tuning: True
+tuning: False
 use_windows_from_memory: False  # Whether to load precomputed windows into memory (only for smaller datasets) - 
 # not necessary for transformer model as windows are already in memory in the self.dynamic_deephit_dataset
 
-learning_rate: 5e-5          #      [1e-6]  # Learning rates to try - 1e-4 overfits quickly
-dropout: 0.3
-weight_decay: 2e-3 # 5e-3
+learning_rate: 9e-6          #      [1e-6]  # Learning rates to try - 1e-4 overfits quickly
+dropout: 0.138422
+weight_decay: 1.1e-5 # 5e-3
 use_layernorm: True
 batch_size: 64  # Batch size for all networks
 
 d_model: 128  # Dimension of the model
-nhead: 4  # Number of attention heads
 num_encoder_layers: 4  # Number of encoder layers
-dim_feedforward: 128  # Dimension of feedforward network in transformer
+ff_factor: 2  # Dimension of feedforward network in transformer
+nhead: 8  # Number of attention heads
 
-hidden_dim: 64  # Hidden dimension for all networks
+hidden_dim: 128  # Hidden dimension for all networks
 attn_hidden_dim: 64
 n_layers: 2
 
 loss_metric: "weighted_multi_C" # "combined_loss"  # Which metric to use for early stopping
 max_val_samples: 5000  # Max samples to use for validation during training
 
-l1_lambda: 5e-5 # 1e-4  # L1 regularization weight for classification head
+l1_lambda: 2e-06 # 1e-4  # L1 regularization weight for classification head
 
-alpha_class: 0.1
-alpha_rank: 1.0   # Weight for ranking loss
-alpha_pred: 2.0
-sigma: 0.2
+alpha_class: 0.5
+alpha_rank: 2.0   # Weight for ranking loss
+alpha_pred: 1.0
+sigma: 0.3
 
 # gaussian sigma scheduling parameters
 start_sigma: 2.
-end_sigma: 0.5
+end_sigma: 0.3
+
+# learning rate scheduling parameters
+pct_start: 0.3
+div_factor: 10
 
 # Early stopping parameters (fixed for all combinations)
 patience: 5        # Stop if no improvement for 15 evaluations
 eval_freq: 1       # Evaluate every 20 epochs  
 min_delta: 0.0001   # Minimum improvement threshold
 
-grad_clip: 1  # Gradient clipping value
+grad_clip: 0.1  # Gradient clipping value
+
+# for controls
 shuffle_inputs: False  # Whether to shuffle feature columns to confirm transformer not looking ahead
 zero_inputs: False  # Whether to zero out feature columns to confirm transformer not looking ahead

@@ -17,7 +17,7 @@
 #SBATCH --mail-user=j.ormond@imperial.ac.uk
 
 # Exit on any error
-set -e
+set -ehyperparams
 
 # Generate a unique start time for this entire job array
 START_TIME=$(date +"%Y%m%d_%H%M%S")
@@ -35,7 +35,7 @@ export WANDB_DIR=/home/38/bt310238/wandb
 # Navigate to project directory
 cd /groups/a-faisal/jakeormond/code/ai_clinician_pediatric_rl
 
-# Create logs directory
+# Create logs dim/logs/%x_%j.err
 mkdir -p slurm/logs
 
 # Activate conda environment

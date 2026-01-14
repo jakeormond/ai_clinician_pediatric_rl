@@ -6,34 +6,36 @@ checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save 
 window_length: 72 # Prediction horizon in hours - so 1 month
 device: "cuda"  # Device (cuda or cpu)
 
-tuning: True
+tuning: False
+use_windows_from_memory: False  # Whether to load precomputed windows into memory (only for smaller datasets)
 
-learning_rate: 1e-5          #      [1e-6]  # Learning rates to try - 1e-4 overfits quickly
-dropout: 0.5
-weight_decay: 5e-3
+learning_rate: 8.8e-5          #      [1e-6]  # Learning rates to try - 1e-4 overfits quickly
+dropout: 0.129806
+weight_decay: 9.9e-05
 use_layernorm: True
-batch_size: 1024  # Batch size for all networks
+batch_size: 64  # Batch size for all networks
+
 hidden_dim: 64  # Hidden dimension for all networks
-attn_hidden_dim: 64
-n_layers: 2
+attn_hidden_dim: 256
+n_layers: 1
 
 loss_metric: "weighted_multi_C"  # Which metric to use for early stopping
 max_val_samples: 5000  # Max samples to use for validation during training
 
-l1_lambda: 1e-4  # L1 regularization weight for classification head
+l1_lambda: 6.6e-05  # L1 regularization weight for classification head
 
-alpha_class: 0.2
-alpha_rank: 4.0   # Weight for ranking loss
-alpha_pred: 0.4
-sigma: 0.1
+alpha_class: 0.1
+alpha_rank: 1.0   # Weight for ranking loss
+alpha_pred: 2.0
+sigma: 0.2
 
 # gaussian sigma scheduling parameters
 start_sigma: 2.
-end_sigma: 0.5
+end_sigma: 0.7
 
 # learning rate scheduling parameters
 pct_start: 0.1
-div_factor: 25
+div_factor: 10
 
 # Early stopping parameters (fixed for all combinations)
 patience: 15       # Stop if no improvement for 15 evaluations

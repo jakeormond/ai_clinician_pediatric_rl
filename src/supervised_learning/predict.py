@@ -61,12 +61,12 @@ def instantiate_model(config_manager, hyperparams, n_time_bins, num_risks, test_
     dynamic_deephit_model.eval()   
     return dynamic_deephit_model
 
-def inference_loop(model, processor, device='cuda'):
+def inference_loop(model, processor, config_manager, filename=None, device='cuda'):
     stay_ids = processor.dynamic_deephit_dataset['stay_ids']
     index_ptr = processor.dynamic_deephit_dataset['index_ptr']
 
-    # create a
-    
+    # create storage for predictions
+    all_predictions = []    
     model.eval()
     with torch.no_grad():
         for i, stay_id in enumerate(stay_ids):
@@ -111,156 +111,61 @@ def inference_loop(model, processor, device='cuda'):
             
             # 5. concatenate all predictions for this patient
             patient_preds = torch.cat(all_preds, dim=0)  
+            all_predictions.append(patient_preds)
 
-            
+    # concatenate all patient predictions into a numpy array
+    all_predictions = torch.cat(all_predictions, dim=0).cpu().numpy()
 
-            
+    # add predictions to processor
+    processor.dynamic_deephit_dataset['predictions'] = all_predictions
 
-            
-            pass
-        
-    pass  # Placeholder for potential future use
+    # save all values in processor.dynamic_deephit_dataset to an h5 file
+    if filename is not None:
+        file_path = os.path.join(config_manager.experiment_dir, filename + '.h5')
+    else:
+        file_path = os.path.join(config_manager.experiment_dir, 'test_set_predictions.h5')
+    
+    processor.dynamic_deephit_dataset_to_h5(file_path)
+    dynamic_deephit_dataset = processor.dynamic_deephit_dataset
 
+    return dynamic_deephit_dataset
 
 
 def predict(config_manager):
 
-    # load result.json from config_manager.experiment_dir to get hyperparameters
-    with open(
-        os.path.join(config_manager.experiment_dir, 'results.json'), 'r'
-    ) as f:
-        results_dict = json.load(f)
-    hyperparams = results_dict['best_hyperparameters']    
-    time_bins = results_dict['time_bins']
-    n_time_bins = len(time_bins) - 1
-    og_config_manager = results_dict['config']
-    
-    # create DataLoader for test dataset
-    # Create test_processor; note it will throw an error if the normalized test shard is missing.
-    # All possible windows will be computed
-    _, _, test_processor = create_processor_from_shards(config_manager, normalize=True)
-    
-    # instantiate the model
-    dynamic_deephit_model = instantiate_model(config_manager, hyperparams, n_time_bins, num_risks=2, test_processor=test_processor)
+    filename = 'test_set_predictions'
+    filepath = os.path.join(config_manager.experiment_dir, filename + '.h5')
+    if os.path.exists(filepath):
+        # load existing predictions
+        print(f"Loading existing predictions from {filepath}")
+        dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(filepath, config_manager)
 
-    # run inference on test set
-    inference_loop(dynamic_deephit_model, test_processor, device='cuda')
+    else:
+        # load result.json from config_manager.experiment_dir to get hyperparameters
+        with open(
+            os.path.join(config_manager.experiment_dir, 'results.json'), 'r'
+        ) as f:
+            results_dict = json.load(f)
+        hyperparams = results_dict['best_hyperparameters']    
+        time_bins = results_dict['time_bins']
+        n_time_bins = len(time_bins) - 1
+        og_config_manager = results_dict['config']
+        
+        # create DataLoader for test dataset
+        # Create test_processor; note it will throw an error if the normalized test shard is missing.
+        # All possible windows will be computed
+        _, _, test_processor = create_processor_from_shards(config_manager, normalize=True)
+        
+        # instantiate the model
+        dynamic_deephit_model = instantiate_model(config_manager, hyperparams, n_time_bins, num_risks=2, test_processor=test_processor)
 
-    
+        # run inference on test set
+        dynamic_deephit_dataset = inference_loop(dynamic_deephit_model, test_processor, config_manager,device='cuda')
 
-
-
-
-
-
-
-
-
-
-
-
+    pass
 
     
-    test_dataset = DynamicDeepHit_Lazy(test_processor, config_manager)
-    test_buffer = DataLoader(
-        test_dataset,
-        batch_size=config_manager.training_config['batch_size'],
-        shuffle=False,
-        num_workers=4,
-        worker_init_fn=worker_init_fn,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=4
-    )
 
-    # create a model instance
-    num_risks = 2
-   
-    dynamic_deephit_model = DynamicDeepHitMulti(
-        test_processor.feature_dim,
-        hyperparams['hidden_dim'],
-        hyperparams['attn_hidden_dim'],
-        hyperparams['n_layers'],
-        n_time_bins,
-        num_risks,
-        dropout=hyperparams['dropout'],
-        use_layernorm=hyperparams['use_layernorm'],
-        rnn_type="GRU",
-        predict_covariates=test_processor.physiological_feature_ind,
-    ).to(config_manager.training_config['device'])
-
-    # load trained model weights from final_model.pt
-    model_path = os.path.join(config_manager.experiment_dir, 'final_model.pt')
-    device = config_manager.training_config['device']
-    dynamic_deephit_model.load_state_dict(torch.load(
-        model_path, 
-        map_location=device,
-        weights_only=True
-    ))
-    dynamic_deephit_model.eval()   
-    
-    results = []
-    with torch.no_grad():
-
-        for idx, batch in enumerate(test_buffer):
-            stay_ids = batch['stay_id']
-
-            X = batch['features'].to(device)
-            # time_to_event = batch[1].to(self.device)      # [batch_size]
-            tte_raw = batch['tte_raw'].to(device)
-            time_to_event = batch['time_to_event'].to(device)
-            # event_label = batch[2].to(self.device)      # [batch_size]
-            event_label = batch['event'].to(device)
-            # mask = batch[3].to(self.device)
-            mask = batch['mask'].to(device)
-
-            logits, probs, _, _ , _ = dynamic_deephit_model(X, mask=mask, return_predictions=True)
-                          
-            results.append({
-                'stay_id': stay_ids.cpu(),
-                'tte_raw': tte_raw.cpu(),
-                'time_to_event': time_to_event.cpu(),
-                'event_label': event_label.cpu(),
-                'logits': logits.cpu(),
-                'probs': probs.cpu()
-            })
-
-    # convert time_bins to strings for column names
-    time_bins_strings = []
-    for i in range(len(time_bins)-1):
-        time_bins_strings.append(f"bin{i}: {time_bins[i]}h-{time_bins[i+1]}h") 
-
-    event_strings = ['discharge', 'mortality']
-    all_rows = []
-    for batch in results:
-        stay_ids = batch['stay_id'].numpy()
-        tte_raws = batch['tte_raw'].numpy()
-        time_to_events = batch['time_to_event'].numpy()
-        event_labels = batch['event_label'].numpy()
-        # logits = batch['logits'].numpy()
-        probs = batch['probs'].numpy()
-
-        B, E, T = probs.shape
-
-        for i in range(B):
-            row = {
-                'stay_id': stay_ids[i],
-                'event_label': event_strings[event_labels[i]-1],
-                'time_to_event(hours)': tte_raws[i],
-                'time_to_event': time_to_events[i],
-                
-            }
-            for e in range(E):
-                for t in range(T):
-                    row[f"probs_{event_strings[e]}_{time_bins_strings[t]}"] = probs[i, e, t]
-
-            all_rows.append(row)
-
-    df = pd.DataFrame(all_rows)
-    # save as parquet
-    output_path = os.path.join(config_manager.experiment_dir, 'test_set_predictions.parquet')
-    df.to_parquet(output_path)
-    print(f"Saved predictions to {output_path}")
 
 
 def main():

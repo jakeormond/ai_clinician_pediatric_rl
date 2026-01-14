@@ -213,6 +213,22 @@ class ShardProcessor:
 
         logger.info(f"Saved dynamic deephit dataset to {final_file_path}")
 
+    
+    def dynamic_deephit_dataset_to_h5(self, file_path):
+        with h5py.File(file_path, 'w') as f:
+            f.create_dataset('feature_names', data=self.dynamic_deephit_dataset['feature_names'])
+            f.create_dataset('stay_ids', data=self.dynamic_deephit_dataset['stay_ids'], dtype=np.int32)
+            f.create_dataset('index_ptr', data=self.dynamic_deephit_dataset['index_ptr'], dtype=np.int32)
+            f.create_dataset('trajectories', data=self.dynamic_deephit_dataset['trajectories'], dtype=np.float32, 
+                             chunks=(1, self.dynamic_deephit_dataset['trajectories'].shape[1]))
+            f.create_dataset('event', data=self.dynamic_deephit_dataset['event'], dtype=np.int32)
+            f.create_dataset('time_to_event_raw', data=self.dynamic_deephit_dataset['time_to_event_raw'], dtype=np.int32)
+            f.create_dataset('time_to_event', data=self.dynamic_deephit_dataset['time_to_event'], dtype=np.int32)
+
+            if 'predictions' in self.dynamic_deephit_dataset:
+                f.create_dataset('predictions', data=self.dynamic_deephit_dataset['predictions'], dtype=np.float32, 
+                    chunks=(1, self.dynamic_deephit_dataset['predictions'].shape[1], self.dynamic_deephit_dataset['predictions'].shape[2]))
+
     def drop_long_trajectories(self, trajectories, stay_ids, index_ptr):
         """
         Drops trajectories longer than max_time from the given trajectories, stay_ids, and index_ptr.
@@ -408,7 +424,24 @@ class ShardProcessor:
             "action_transformers": self.action_transformers
         }   
     
-                
+
+    @ staticmethod
+    def load_dynamic_deephit_dataset_from_h5(file_path):
+        with h5py.File(file_path, 'r') as f:
+            dynamic_deephit_dataset = {}
+            dynamic_deephit_dataset['feature_names'] = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]
+            dynamic_deephit_dataset['stay_ids'] = f['stay_ids'][:]
+            dynamic_deephit_dataset['index_ptr'] = f['index_ptr'][:]
+            dynamic_deephit_dataset['trajectories'] = f['trajectories'][:].astype(np.float32)
+            dynamic_deephit_dataset['event'] = f['event'][:].astype(np.int32)
+            dynamic_deephit_dataset['time_to_event_raw'] = f['time_to_event_raw'][:].astype(np.int32)
+            dynamic_deephit_dataset['time_to_event'] = f['time_to_event'][:].astype(np.int32)
+
+            if 'predictions' in f:
+                dynamic_deephit_dataset['predictions'] = f['predictions'][:].astype(np.float32)
+
+        return dynamic_deephit_dataset
+
         
 def main():
     pass

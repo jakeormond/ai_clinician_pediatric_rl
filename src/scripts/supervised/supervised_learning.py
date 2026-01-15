@@ -102,7 +102,7 @@ def parse_arguments():
     
 
     parser.add_argument('--cohort', type=str, default=None,
-                        choices=['all', 'sepsis', 'ards'],
+                        choices=['all', 'sepsis', 'ards_strict', 'ards_broad'],
                         help='Cohort to use for this experiment (overrides config file)')
 
 

@@ -242,36 +242,32 @@ class ShardProcessor:
         # filter the dynamic_deephit_dataset
         stay_ids = self.dynamic_deephit_dataset['stay_ids']
 
-        # find indices of stay_ids that are in cohort_stay_ids
-        stay_ids_to_drop = [stay_id for stay_id in stay_ids if stay_id not in cohort_stay_ids]
-        
-        for stay_id in stay_ids_to_drop:
-            idx = np.where(stay_ids == stay_id)[0][0]
-            
+        # Create boolean mask for stays to keep
+        mask = np.isin(stay_ids, list(cohort_stay_ids))
+        indices_to_keep = np.where(mask)[0]
+
+        # Build trajectory mask
+        traj_mask = np.zeros(self.dynamic_deephit_dataset['trajectories'].shape[0], dtype=bool)
+        for idx in indices_to_keep:
             start_idx = self.dynamic_deephit_dataset['index_ptr'][idx]
             end_idx = self.dynamic_deephit_dataset['index_ptr'][idx + 1]
-            
-            # drop the trajectory
-            self.dynamic_deephit_dataset['trajectories'] = np.delete(
-                self.dynamic_deephit_dataset['trajectories'], np.s_[start_idx:end_idx], axis=0)
-            # drop the stay_id
-            self.dynamic_deephit_dataset['stay_ids'] = np.delete(
-                self.dynamic_deephit_dataset['stay_ids'], idx, axis=0)
-            # drop the event
-            self.dynamic_deephit_dataset['event'] = np.delete(
-                self.dynamic_deephit_dataset['event'], idx, axis=0)
-            # drop the time_to_event_raw
-            self.dynamic_deephit_dataset['time_to_event_raw'] = np.delete(
-                self.dynamic_deephit_dataset['time_to_event_raw'], np.s_[start_idx:end_idx], axis=0)
-            # drop the time_to_event
-            self.dynamic_deephit_dataset['time_to_event'] = np.delete(
-                self.dynamic_deephit_dataset['time_to_event'], idx, axis=0)
-            
-            # update index_ptr
-            self.dynamic_deephit_dataset['index_ptr'] = np.delete(
-                self.dynamic_deephit_dataset['index_ptr'], idx + 1, axis=0)
-            self.dynamic_deephit_dataset['index_ptr'][idx + 1:] -= (end_idx - start_idx)
+            traj_mask[start_idx:end_idx] = True
 
+        # Apply masks to all arrays at once
+        self.dynamic_deephit_dataset['stay_ids'] = self.dynamic_deephit_dataset['stay_ids'][mask]
+        self.dynamic_deephit_dataset['event'] = self.dynamic_deephit_dataset['event'][mask]
+        self.dynamic_deephit_dataset['trajectories'] = self.dynamic_deephit_dataset['trajectories'][traj_mask]
+        self.dynamic_deephit_dataset['time_to_event_raw'] = self.dynamic_deephit_dataset['time_to_event_raw'][traj_mask]
+        self.dynamic_deephit_dataset['time_to_event'] = self.dynamic_deephit_dataset['time_to_event'][traj_mask]
+        
+        # Rebuild index_ptr
+        new_index_ptr = np.zeros(len(indices_to_keep) + 1, dtype=np.int32)
+        for i, idx in enumerate(indices_to_keep):
+            start_idx = self.dynamic_deephit_dataset['index_ptr'][idx]
+            end_idx = self.dynamic_deephit_dataset['index_ptr'][idx + 1]
+            new_index_ptr[i + 1] = new_index_ptr[i] + (end_idx - start_idx)
+        
+        self.dynamic_deephit_dataset['index_ptr'] = new_index_ptr
     
     def add_to_dynamic_deephit_dataset_h5(self, file_path, key):
         # get dimensionality of data to be saved

@@ -240,13 +240,17 @@ class ShardProcessor:
         cohort_stay_ids = set(cohort_df['stay_id'].unique().tolist())
         # sort cohort_stay_ids
         cohort_stay_ids = sorted(cohort_stay_ids)
+        logger.info(f"Number of stays in cohort {cohort}: {len(cohort_stay_ids)}")
 
         # filter the dynamic_deephit_dataset
         stay_ids = self.dynamic_deephit_dataset['stay_ids']
+        logger.info(f"Original number of stays in dynamic_deephit_dataset: {len(stay_ids)}")
+        logger.info(f"Original number of timesteps in dynamic_deephit_dataset: {self.dynamic_deephit_dataset['trajectories'].shape[0]}")
 
         # Create boolean mask for stays to keep
         mask = np.isin(stay_ids, list(cohort_stay_ids))
         indices_to_keep = np.where(mask)[0]
+        logger.info(f"Number of stays after filtering to cohort {cohort}: {len(indices_to_keep)}")
 
         # Build trajectory mask
         traj_mask = np.zeros(self.dynamic_deephit_dataset['trajectories'].shape[0], dtype=bool)
@@ -270,6 +274,7 @@ class ShardProcessor:
             new_index_ptr[i + 1] = new_index_ptr[i] + (end_idx - start_idx)
         
         self.dynamic_deephit_dataset['index_ptr'] = new_index_ptr
+        logger.info(f"Number of timesteps after filtering to cohort {cohort}: {self.dynamic_deephit_dataset['trajectories'].shape[0]}")
     
     def add_to_dynamic_deephit_dataset_h5(self, file_path, key):
         # get dimensionality of data to be saved

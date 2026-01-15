@@ -9,15 +9,15 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=128G
 #SBATCH --time=24:00:00
-# #SBATCH --partition=normal
-# #SBATCH --gres=gpu:l40:1     
-#SBATCH --partition=GPU
-#SBATCH --gres=gpu:h100:1     
+#SBATCH --partition=normal
+#SBATCH --gres=gpu:l40:1     
+# #SBATCH --partition=GPU
+# #SBATCH --gres=gpu:h100:1     
 #SBATCH --mail-type=END,FAIL        # Email notifications
 #SBATCH --mail-user=j.ormond@imperial.ac.uk
 
 # Exit on any error
-set -ehyperparams
+set -e
 
 # Generate a unique start time for this entire job array
 START_TIME=$(date +"%Y%m%d_%H%M%S")

@@ -70,7 +70,7 @@ python -u -m src.scripts.supervised.supervised_learning \
     --search_variant random_search \
     --n_epochs 200 \
     --n_search_iterations 4 \
-    --cohort ards_strict \
+    --cohort ards_broad \
     --start_time $START_TIME 
 
 exit_code=$?

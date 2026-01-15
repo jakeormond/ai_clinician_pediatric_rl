@@ -69,7 +69,7 @@ python -m src.scripts.supervised.supervised_learning \
     --search_variant random_search \
     --n_epochs 200 \
     --n_search_iterations 4 \
-    --cohort sepsis \
+    --cohort ards_strict \
     --start_time $START_TIME     
 
 exit_code=$?

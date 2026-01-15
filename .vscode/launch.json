@@ -146,7 +146,7 @@
                 "--search_variant", "random_search",
                 "--n_search_iterations", "1",
                 "--n_epochs", "2",
-                "--cohort", "sepsis"
+                "--cohort", "sepsis",
 
             ],
             "console": "integratedTerminal",

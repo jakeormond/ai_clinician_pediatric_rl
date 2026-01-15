@@ -238,6 +238,8 @@ class ShardProcessor:
         stay_ids_path = config_manager.data_config['cohort_stay_ids_path']
         cohort_df = pd.read_csv(stay_ids_path)
         cohort_stay_ids = set(cohort_df['stay_id'].unique().tolist())
+        # sort cohort_stay_ids
+        cohort_stay_ids = sorted(cohort_stay_ids)
 
         # filter the dynamic_deephit_dataset
         stay_ids = self.dynamic_deephit_dataset['stay_ids']

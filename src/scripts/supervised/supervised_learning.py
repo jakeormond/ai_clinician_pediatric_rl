@@ -99,6 +99,12 @@ def parse_arguments():
     
     parser.add_argument('--n_search_iterations', type=int, default=0,
                         help='Number of search iterations for random search (default: 0)')
+    
+
+    parser.add_argument('--cohort', type=str, default=None,
+                        choices=['all', 'sepsis', 'ards'],
+                        help='Cohort to use for this experiment (overrides config file)')
+
 
     parser.add_argument('--start_time', type=str, default = None,                  
                     help='Start time for this experiment run')
@@ -194,7 +200,8 @@ def main():
             config_manager.max_encounter_length = max_encounter_length
             config_manager.time_bins = time_bins  
 
-            print(f"Running on {config_manager.environment} environment")    
+            print(f"Running on {config_manager.environment} environment")         
+        
         
         if args.experiment_variant != 'prediction':      
             """

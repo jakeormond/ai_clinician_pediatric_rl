@@ -72,8 +72,16 @@ class ShardProcessor:
 
                 self.feature_dim = f['feature_dim'][()]
 
+                if 'predictions' in f:
+                    self.dynamic_deephit_dataset['predictions'] = f['predictions'][:].astype(np.float32)
+
+                if config_manager._data_config['cohort'] is not None or config_manager._data_config['cohort'] != 'all':
+                    # filter the dataset to only include the specified cohort
+                    logger.info(f"Filtering dynamic deephit dataset to only include cohort: {config_manager._data_config['cohort']}")
+                    self.filter_cohort(config_manager)
+
             return
-        
+
         self.norm_params = norm_params
         self.window_length = config_manager.training_config['window_length']
         self.time_bins = config_manager.time_bins
@@ -91,9 +99,7 @@ class ShardProcessor:
 
         # if config_manager.action_mode == 'binary_only':
         #     self.normalize_actions = False
-        #     self.transform_actions = False           
-
-        
+        #     self.transform_actions = False                 
 
         all_files = os.listdir(self.shard_dir)                
         
@@ -155,13 +161,13 @@ class ShardProcessor:
             else:
                 # raise not implemented error, I'm not handling index_ptr concatenation here
                 raise NotImplementedError("Merging multiple shard files into dynamic_deephit_dataset not implemented yet.")
-                self.dynamic_deephit_dataset['stay_ids'] = np.concatenate(
-                    (self.dynamic_deephit_dataset['stay_ids'], stay_ids), axis=0)
-                self.dynamic_deephit_dataset['index_ptr'] = np.concatenate(
-                    (self.dynamic_deephit_dataset['index_ptr'], 
-                        index_ptr[1:] + self.dynamic_deephit_dataset['index_ptr'][-1]), axis=0)
-                self.dynamic_deephit_dataset['trajectories'] = np.concatenate(
-                    (self.dynamic_deephit_dataset['trajectories'], trajectories.astype(np.float32)), axis=0)
+                # self.dynamic_deephit_dataset['stay_ids'] = np.concatenate(
+                #     (self.dynamic_deephit_dataset['stay_ids'], stay_ids), axis=0)
+                # self.dynamic_deephit_dataset['index_ptr'] = np.concatenate(
+                #     (self.dynamic_deephit_dataset['index_ptr'], 
+                #         index_ptr[1:] + self.dynamic_deephit_dataset['index_ptr'][-1]), axis=0)
+                # self.dynamic_deephit_dataset['trajectories'] = np.concatenate(
+                #     (self.dynamic_deephit_dataset['trajectories'], trajectories.astype(np.float32)), axis=0)
 
         # bin time_to_events
         tte_bin = np.digitize(self.dynamic_deephit_dataset['time_to_event_raw'], self.time_bins, right=True) - 1                
@@ -213,21 +219,70 @@ class ShardProcessor:
 
         logger.info(f"Saved dynamic deephit dataset to {final_file_path}")
 
-    
-    def dynamic_deephit_dataset_to_h5(self, file_path):
-        with h5py.File(file_path, 'w') as f:
-            f.create_dataset('feature_names', data=self.dynamic_deephit_dataset['feature_names'])
-            f.create_dataset('stay_ids', data=self.dynamic_deephit_dataset['stay_ids'], dtype=np.int32)
-            f.create_dataset('index_ptr', data=self.dynamic_deephit_dataset['index_ptr'], dtype=np.int32)
-            f.create_dataset('trajectories', data=self.dynamic_deephit_dataset['trajectories'], dtype=np.float32, 
-                             chunks=(1, self.dynamic_deephit_dataset['trajectories'].shape[1]))
-            f.create_dataset('event', data=self.dynamic_deephit_dataset['event'], dtype=np.int32)
-            f.create_dataset('time_to_event_raw', data=self.dynamic_deephit_dataset['time_to_event_raw'], dtype=np.int32)
-            f.create_dataset('time_to_event', data=self.dynamic_deephit_dataset['time_to_event'], dtype=np.int32)
+        if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
+            # filter the dataset to only include the specified cohort
+            logger.info(f"Filtering dynamic deephit dataset to only include cohort: {config_manager._data_config['cohort']}")
+            self.filter_cohort(config_manager)
 
-            if 'predictions' in self.dynamic_deephit_dataset:
-                f.create_dataset('predictions', data=self.dynamic_deephit_dataset['predictions'], dtype=np.float32, 
-                    chunks=(1, self.dynamic_deephit_dataset['predictions'].shape[1], self.dynamic_deephit_dataset['predictions'].shape[2]))
+    
+    
+    def filter_cohort(self, config_manager):
+        """
+        Filters the dynamic_deephit_dataset to only include the specified cohort.
+        """
+        cohort = config_manager._data_config['cohort']
+        if cohort is None or cohort == 'all':
+            return
+        
+        # load cohort stay_ids from csv
+        stay_ids_path = config_manager.data_config['cohort_stay_ids_path']
+        cohort_df = pd.read_csv(stay_ids_path)
+        cohort_stay_ids = set(cohort_df['stay_id'].unique().tolist())
+
+        # filter the dynamic_deephit_dataset
+        stay_ids = self.dynamic_deephit_dataset['stay_ids']
+
+        # find indices of stay_ids that are in cohort_stay_ids
+        stay_ids_to_drop = [stay_id for stay_id in stay_ids if stay_id not in cohort_stay_ids]
+        
+        for stay_id in stay_ids_to_drop:
+            idx = np.where(stay_ids == stay_id)[0][0]
+            
+            start_idx = self.dynamic_deephit_dataset['index_ptr'][idx]
+            end_idx = self.dynamic_deephit_dataset['index_ptr'][idx + 1]
+            
+            # drop the trajectory
+            self.dynamic_deephit_dataset['trajectories'] = np.delete(
+                self.dynamic_deephit_dataset['trajectories'], np.s_[start_idx:end_idx], axis=0)
+            # drop the stay_id
+            self.dynamic_deephit_dataset['stay_ids'] = np.delete(
+                self.dynamic_deephit_dataset['stay_ids'], idx, axis=0)
+            # drop the event
+            self.dynamic_deephit_dataset['event'] = np.delete(
+                self.dynamic_deephit_dataset['event'], idx, axis=0)
+            # drop the time_to_event_raw
+            self.dynamic_deephit_dataset['time_to_event_raw'] = np.delete(
+                self.dynamic_deephit_dataset['time_to_event_raw'], np.s_[start_idx:end_idx], axis=0)
+            # drop the time_to_event
+            self.dynamic_deephit_dataset['time_to_event'] = np.delete(
+                self.dynamic_deephit_dataset['time_to_event'], idx, axis=0)
+            
+            # update index_ptr
+            self.dynamic_deephit_dataset['index_ptr'] = np.delete(
+                self.dynamic_deephit_dataset['index_ptr'], idx + 1, axis=0)
+            self.dynamic_deephit_dataset['index_ptr'][idx + 1:] -= (end_idx - start_idx)
+
+    
+    def add_to_dynamic_deephit_dataset_h5(self, file_path, key):
+        # get dimensionality of data to be saved
+        data = self.dynamic_deephit_dataset[key]
+        dimensions = data.shape
+        chunks = (1, ) + dimensions[1:]
+                
+        with h5py.File(file_path, 'a') as f:
+            f.create_dataset(key, data=self.dynamic_deephit_dataset[key], dtype=np.float32, 
+                chunks=chunks)
+            
 
     def drop_long_trajectories(self, trajectories, stay_ids, index_ptr):
         """

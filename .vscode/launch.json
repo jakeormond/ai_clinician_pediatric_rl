@@ -66,7 +66,7 @@
                 "--prediction_type", "discharge_mortality_tte",
                 "--mode", "single_split", 
                 "--search_variant", "fixed_hyperparameters",
-                "--n_epochs", "20",
+                "--n_epochs", "2",
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
@@ -126,6 +126,28 @@
                 "--search_variant", "random_search",
                 "--n_search_iterations", "1",
                 "--n_epochs", "2",
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
+            "name": "mimic_iv_transformer_cohort",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "mimic_iv", 
+                "--experiment_type", "supervised_learning",
+                "--model_type", "dynamic_deephit_transformer", 
+                "--prediction_type", "discharge_mortality_tte",
+                "--mode", "single_split", 
+                "--search_variant", "random_search",
+                "--n_search_iterations", "1",
+                "--n_epochs", "2",
+                "--cohort", "sepsis"
+
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

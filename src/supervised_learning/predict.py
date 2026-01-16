@@ -164,7 +164,42 @@ def predict(config_manager):
 
     pass
 
-    
+
+def predict_all(config_manager): # for dynamic deephit models only
+    models = ['GRU', 'transformer']
+    cohorts = ['all_stays', 'sepsis_strict', 'sepsis_broad', 'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad']
+
+    for model_type in models:
+        for cohort in cohorts:
+            cohort_final_model_dir = os.path.join(
+                config_manager.paths['final_model_dir'],
+                model_type,
+                cohort,
+                'final_model'
+            )
+            # find the experiment dir in the cohort_final_model_dir
+            experiment_dirs = [d for d in os.listdir(cohort_final_model_dir) if 
+                               os.path.isdir(os.path.join(cohort_final_model_dir, d))]
+            if len(experiment_dirs) == 0:
+                raise ValueError(f"No experiment directories found in {cohort_final_model_dir}")
+            elif len(experiment_dirs) > 1:
+                raise ValueError(f"Multiple experiment directories found in {cohort_final_model_dir}, expected only one.")
+            
+            experiment_dir = os.path.join(cohort_final_model_dir, experiment_dirs[0])
+
+            filename = 'test_set_predictions'
+            filepath = os.path.join(experiment_dir, filename + '.h5')
+            if os.path.exists(filepath):
+                continue
+            else:
+                # create DataLoader for test dataset
+                # Create test_processor; note it will throw an error if the normalized test shard is missing.
+                # All possible windows will be computed
+                _, _, test_processor = create_processor_from_shards(config_manager, normalize=True)
+
+
+
+
 
 
 

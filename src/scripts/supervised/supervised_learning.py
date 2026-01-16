@@ -171,10 +171,11 @@ def main():
     # Initialize config manager, it holds paths and environment info
     config_manager = ConfigManager(args)
 
-    if config_manager.model_type == "dynamic_deephit" or config_manager.model_type == "dynamic_deephit_transformer":
+    if config_manager.model_type == "dynamic_deephit" or config_manager.model_type == "dynamic_deephit_transformer" or \
+        config_manager.model_type is None: 
         from ...supervised_learning.training import outer_training_loop, development_training_loop, single_split_training
         from ...supervised_learning.models.dynamic_deephit import make_mixed_resolution_time_bins
-        from ...supervised_learning.predict import predict
+        from ...supervised_learning.predict import predict, predict_all
 
     else:
         from ...supervised_learning.training_scikitlearn import outer_training_loop, \
@@ -215,11 +216,12 @@ def main():
             results = single_split_training(config_manager)
 
 
-        elif args.experiment_variant == 'prediction':
+        elif args.experiment_variant == 'prediction' and args.cohort == 'all':
             """
             this is for generating predictions on the MIMIC IV dataset with a single train/val/test split.
             """
-            predict(config_manager)
+            # predict(config_manager)
+            predict_all(config_manager)
             
     
     elif args.mode == 'development_single_split':

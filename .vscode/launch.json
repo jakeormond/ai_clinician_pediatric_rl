@@ -155,6 +155,24 @@
         },
 
         {
+            "name": "mimic_iv_prediction",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "mimic_iv", 
+                "--experiment_type", "supervised_learning",
+                "--prediction_type", "discharge_mortality_tte",
+                "--mode", "single_split", 
+                "--experiment_variant", "prediction",
+                "--cohort", "all"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
             "name": "mimic_iv_transformer_prediction",
             "type": "debugpy",
             "request": "launch",

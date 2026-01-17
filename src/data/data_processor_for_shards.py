@@ -202,7 +202,33 @@ class ShardProcessor:
 
         # save the dynamic deephit dataset to h5 file for future use
         self.feature_dim = self.dynamic_deephit_dataset['trajectories'].shape[1]
-        with h5py.File(final_file_path, 'w') as f:
+        self.dynamic_deephit_dataset_to_h5(final_file_path)
+        
+        # with h5py.File(final_file_path, 'w') as f:
+        #     f.create_dataset('feature_names', data=self.dynamic_deephit_dataset['feature_names'])
+        #     f.create_dataset('stay_ids', data=self.dynamic_deephit_dataset['stay_ids'], dtype=np.int32)
+        #     f.create_dataset('index_ptr', data=self.dynamic_deephit_dataset['index_ptr'], dtype=np.int32)
+        #     f.create_dataset('trajectories', data=self.dynamic_deephit_dataset['trajectories'], dtype=np.float32, 
+        #                      chunks=(1, self.dynamic_deephit_dataset['trajectories'].shape[1]))
+        #     f.create_dataset('event', data=self.dynamic_deephit_dataset['event'], dtype=np.int32)
+        #     f.create_dataset('time_to_event_raw', data=self.dynamic_deephit_dataset['time_to_event_raw'], dtype=np.int32)
+        #     f.create_dataset('time_to_event', data=self.dynamic_deephit_dataset['time_to_event'], dtype=np.int32)
+
+        #     f.create_dataset('physiological_feature_ind', data=np.array(self.physiological_feature_ind, dtype=np.int32), dtype=np.int32)
+        #     f.create_dataset('physiological_feature_type', data=np.array(self.physiological_feature_type, dtype='S20'), dtype='S20')
+
+        #     f.create_dataset('feature_dim', data=np.array(self.feature_dim, dtype=np.int32), dtype=np.int32)
+
+        # logger.info(f"Saved dynamic deephit dataset to {final_file_path}")
+
+        if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
+            # filter the dataset to only include the specified cohort
+            logger.info(f"Filtering dynamic deephit dataset to only include cohort: {config_manager._data_config['cohort']}")
+            self.filter_cohort(config_manager)
+
+    
+    def dynamic_deephit_dataset_to_h5(self, file_path):
+        with h5py.File(file_path, 'w') as f:
             f.create_dataset('feature_names', data=self.dynamic_deephit_dataset['feature_names'])
             f.create_dataset('stay_ids', data=self.dynamic_deephit_dataset['stay_ids'], dtype=np.int32)
             f.create_dataset('index_ptr', data=self.dynamic_deephit_dataset['index_ptr'], dtype=np.int32)
@@ -212,20 +238,20 @@ class ShardProcessor:
             f.create_dataset('time_to_event_raw', data=self.dynamic_deephit_dataset['time_to_event_raw'], dtype=np.int32)
             f.create_dataset('time_to_event', data=self.dynamic_deephit_dataset['time_to_event'], dtype=np.int32)
 
-            f.create_dataset('physiological_feature_ind', data=np.array(self.physiological_feature_ind, dtype=np.int32), dtype=np.int32)
-            f.create_dataset('physiological_feature_type', data=np.array(self.physiological_feature_type, dtype='S20'), dtype='S20')
+            if hasattr(self, 'physiological_feature_ind'):
+                f.create_dataset('physiological_feature_ind', data=np.array(self.physiological_feature_ind, dtype=np.int32), dtype=np.int32)
+            if hasattr(self, 'physiological_feature_type'):
+                f.create_dataset('physiological_feature_type', data=np.array(self.physiological_feature_type, dtype='S20'), dtype='S20')
+            if hasattr(self, 'feature_dim'):
+                f.create_dataset('feature_dim', data=np.array(self.feature_dim, dtype=np.int32), dtype=np.int32)
+            
+            if 'predictions' in self.dynamic_deephit_dataset:
+                f.create_dataset('predictions', data=self.dynamic_deephit_dataset['predictions'], dtype=np.float32)
 
-            f.create_dataset('feature_dim', data=np.array(self.feature_dim, dtype=np.int32), dtype=np.int32)
+        logger.info(f"Saved dynamic deephit dataset to {file_path}")
 
-        logger.info(f"Saved dynamic deephit dataset to {final_file_path}")
 
-        if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
-            # filter the dataset to only include the specified cohort
-            logger.info(f"Filtering dynamic deephit dataset to only include cohort: {config_manager._data_config['cohort']}")
-            self.filter_cohort(config_manager)
 
-    
-    
     def filter_cohort(self, config_manager):
         """
         Filters the dynamic_deephit_dataset to only include the specified cohort.

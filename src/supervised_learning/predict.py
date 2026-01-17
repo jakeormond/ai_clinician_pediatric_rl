@@ -20,7 +20,16 @@ from ..supervised_learning.models.dynamic_deephit_transformer import Transformer
 from ..supervised_learning.training import create_processor_from_shards
 
 
-def instantiate_model(config_manager, hyperparams, n_time_bins, num_risks, model_type=None, test_processor=None):
+def instantiate_model(
+        config_manager, 
+        hyperparams, 
+        n_time_bins, 
+        num_risks, 
+        model_type=None, 
+        test_processor=None,
+        experiment_dir=None
+    ):
+    
     feature_dim = test_processor.feature_dim
     if model_type == "GRU": # GRU-based Dynamic-DeepHit
         dynamic_deephit_model = DynamicDeepHitMulti(
@@ -51,7 +60,7 @@ def instantiate_model(config_manager, hyperparams, n_time_bins, num_risks, model
         ).to(config_manager.training_config['device'])
     
     # load trained model weights from final_model.pt
-    model_path = os.path.join(config_manager.experiment_dir, 'final_model.pt')
+    model_path = os.path.join(experiment_dir, 'final_model.pt')
     device = config_manager.training_config['device']
     dynamic_deephit_model.load_state_dict(torch.load(
         model_path, 
@@ -61,9 +70,19 @@ def instantiate_model(config_manager, hyperparams, n_time_bins, num_risks, model
     dynamic_deephit_model.eval()   
     return dynamic_deephit_model
 
-def inference_loop(model, processor, config_manager, filename=None, device='cuda'):
+def inference_loop(
+        model, 
+        processor, 
+        config_manager, 
+        filename=None, 
+        model_type=None, 
+        experiment_dir=None,
+        device='cuda'
+        ):
+    
     stay_ids = processor.dynamic_deephit_dataset['stay_ids']
     index_ptr = processor.dynamic_deephit_dataset['index_ptr']
+    window_length = config_manager.training_config['window_length']
 
     # create storage for predictions
     all_predictions = []    
@@ -79,14 +98,20 @@ def inference_loop(model, processor, config_manager, filename=None, device='cuda
             T, F = trajectory.shape
 
             # 2. Add padding so we can predict at Hour 1
-            # (71 repeats of first step + actual trajectory)   
-            pad = trajectory[0:1].repeat(71, 1)  # (71, F)
+            # (window_length - 1 repeats of first step + actual trajectory)   
+            pad = trajectory[0:1].repeat(window_length - 1, 1)  # (window_length - 1, F)
             padded_traj = torch.cat([pad, trajectory], dim=0)
 
-            # 3. Create windows (T, 72, F)
+            # 3. Create windows (T, window_length, F)
             # unfold(dimension, size, step)
-            windows = padded_traj.unfold(0, 72, 1).transpose(1, 2)
+            windows = padded_traj.unfold(0, window_length, 1).transpose(1, 2)
             
+            # initialize loss mask (not used during inference, but required by model forward), zeros of shape (batch_size, window_length)
+            loss_mask = torch.ones((windows.shape[0], window_length), dtype=torch.float32, device=device)
+            n_padded_windows = min([window_length - 1, T])
+            for t in range(n_padded_windows):
+                loss_mask[t, :(window_length - (t + 1))] = 0
+
             # 4. Batch Inference
             batch_size = 64
             all_preds = []
@@ -94,17 +119,18 @@ def inference_loop(model, processor, config_manager, filename=None, device='cuda
             for chunk_start in range(0, T, batch_size):
                 chunk_end = min(chunk_start + batch_size, T)
                 windows_chunk = windows[chunk_start:chunk_end].to(device)
-                
-                risk_logits, _ = model(windows_chunk)
+                mask_chunk = loss_mask[chunk_start:chunk_end].to(device)
 
-                # Extract the final prediction of each window in the chunk
-                # and move back to CPU immediately to save GPU memory
-                final_step_logits = [logits[:, -1, :].cpu() for logits in risk_logits]
-                final_step_logits = torch.stack(final_step_logits, dim=2)  # (batch_size, num_risks, num_time_bins)
-                
-                T, D, K = final_step_logits.shape
+                if model_type == 'GRU':
+                    risk_logits, _, _ = model(windows_chunk, mask=mask_chunk)
+                    risk_logits = risk_logits.cpu()  # (batch_size, window_length, num_risks, num_time_bins)
+                else:
+                    risk_logits, _ = model(windows_chunk, mask=mask_chunk)
+                    risk_logits = [logits[:, -1, :].cpu() for logits in risk_logits]  # unpack tuple
+                    risk_logits = torch.stack(risk_logits, dim=2)  # (batch_size, num_risks, num_time_bins)
+
                 # reshape to (T, K, D)
-                final_step_logits = final_step_logits.permute(0, 2, 1)
+                final_step_logits = risk_logits.permute(0, 2, 1)
 
                 # add to list of all predictions    
                 all_preds.append(final_step_logits)
@@ -121,9 +147,9 @@ def inference_loop(model, processor, config_manager, filename=None, device='cuda
 
     # save all values in processor.dynamic_deephit_dataset to an h5 file
     if filename is not None:
-        file_path = os.path.join(config_manager.experiment_dir, filename + '.h5')
+        file_path = os.path.join(experiment_dir, filename + '.h5')
     else:
-        file_path = os.path.join(config_manager.experiment_dir, 'test_set_predictions.h5')
+        file_path = os.path.join(experiment_dir, 'test_set_predictions.h5')
     
     processor.dynamic_deephit_dataset_to_h5(file_path)
     dynamic_deephit_dataset = processor.dynamic_deephit_dataset
@@ -213,11 +239,19 @@ def predict_all(config_manager): # for dynamic deephit models only
                     n_time_bins, 
                     num_risks=2, 
                     model_type=model_type,
-                    test_processor=test_processor
+                    test_processor=test_processor,
+                    experiment_dir=experiment_dir
                     )
 
                 # run inference on test set
-                dynamic_deephit_dataset = inference_loop(dynamic_deephit_model, test_processor, config_manager,device='cuda')
+                dynamic_deephit_dataset = inference_loop(
+                    dynamic_deephit_model, 
+                    test_processor, 
+                    config_manager,
+                    model_type=model_type,
+                    experiment_dir=experiment_dir,
+                    device='cuda'
+                    )
 
                 pass
 

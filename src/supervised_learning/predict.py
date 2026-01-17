@@ -20,9 +20,9 @@ from ..supervised_learning.models.dynamic_deephit_transformer import Transformer
 from ..supervised_learning.training import create_processor_from_shards
 
 
-def instantiate_model(config_manager, hyperparams, n_time_bins, num_risks, test_processor):
+def instantiate_model(config_manager, hyperparams, n_time_bins, num_risks, model_type=None, test_processor=None):
     feature_dim = test_processor.feature_dim
-    if config_manager.model_type == "dynamic_deephit": # GRU-based Dynamic-DeepHit
+    if model_type == "GRU": # GRU-based Dynamic-DeepHit
         dynamic_deephit_model = DynamicDeepHitMulti(
             test_processor.feature_dim,
             hyperparams['hidden_dim'],
@@ -196,6 +196,30 @@ def predict_all(config_manager): # for dynamic deephit models only
                 # Create test_processor; note it will throw an error if the normalized test shard is missing.
                 # All possible windows will be computed
                 _, _, test_processor = create_processor_from_shards(config_manager, normalize=True)
+
+                # instantiate the model
+                # load result.json from config_manager.experiment_dir to get hyperparameters
+                with open(
+                    os.path.join(experiment_dir, 'results.json'), 'r'
+                ) as f:
+                    results_dict = json.load(f)
+                hyperparams = results_dict['best_hyperparameters']    
+                time_bins = results_dict['time_bins']
+                n_time_bins = len(time_bins) - 1
+
+                dynamic_deephit_model = instantiate_model(
+                    config_manager, 
+                    hyperparams, 
+                    n_time_bins, 
+                    num_risks=2, 
+                    model_type=model_type,
+                    test_processor=test_processor
+                    )
+
+                # run inference on test set
+                dynamic_deephit_dataset = inference_loop(dynamic_deephit_model, test_processor, config_manager,device='cuda')
+
+                pass
 
 
 

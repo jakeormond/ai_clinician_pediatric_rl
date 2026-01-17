@@ -155,7 +155,7 @@
         },
 
         {
-            "name": "mimic_iv_prediction",
+            "name": "mimic_iv_prediction_all_cohorts",
             "type": "debugpy",
             "request": "launch",
             "module": "src.scripts.supervised.supervised_learning",
@@ -163,6 +163,7 @@
                 "--hospital", "mimic_iv", 
                 "--experiment_type", "supervised_learning",
                 "--prediction_type", "discharge_mortality_tte",
+                "--model_type", "dynamic_deephit_prediction_all",
                 "--mode", "single_split", 
                 "--experiment_variant", "prediction",
                 "--cohort", "all"

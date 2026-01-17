@@ -61,8 +61,8 @@ def parse_arguments():
     parser.add_argument('--model_type', 
                         default=None, 
                         choices=['xgbclassifier', 'xgbregressor', 'dynamic_deephit',
-                                 'dynamic_deephit_transformer'], 
-                        help='Model type to train (default: xgbclassifier)') 
+                                 'dynamic_deephit_transformer', 'dynamic_deephit_prediction_all'], 
+                        help='Model type to train or predict with') # both refers to generating predictions from both types
     
     parser.add_argument('--prediction_type', 
                         default=None, 
@@ -172,7 +172,7 @@ def main():
     config_manager = ConfigManager(args)
 
     if config_manager.model_type == "dynamic_deephit" or config_manager.model_type == "dynamic_deephit_transformer" or \
-        config_manager.model_type is None: 
+        config_manager.model_type == "dynamic_deephit_prediction_all": 
         from ...supervised_learning.training import outer_training_loop, development_training_loop, single_split_training
         from ...supervised_learning.models.dynamic_deephit import make_mixed_resolution_time_bins
         from ...supervised_learning.predict import predict, predict_all
@@ -187,8 +187,9 @@ def main():
      
     
     elif args.mode == 'single_split':
-        if (config_manager.model_type == "dynamic_deephit" or config_manager.model_type == "dynamic_deephit_transformer"):
-            
+        if (config_manager.model_type == "dynamic_deephit" or config_manager.model_type == "dynamic_deephit_transformer" or \
+            config_manager.model_type == "dynamic_deephit_prediction_all"): 
+                    
             # set training config
             config_manager.set_training_config()
             
@@ -220,7 +221,6 @@ def main():
             """
             this is for generating predictions on the MIMIC IV dataset with a single train/val/test split.
             """
-            # predict(config_manager)
             predict_all(config_manager)
             
     

@@ -68,6 +68,7 @@ python -u -m src.scripts.supervised.supervised_learning \
     --prediction_type discharge_mortality_tte \
     --mode single_split \
     --search_variant fixed_hyperparameters \
+    --cohort sepsis_broad \
     --n_epochs 200 \
     --start_time $START_TIME 
 

@@ -12,6 +12,9 @@ import numpy as np
 import pandas as pd
 import os
 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 from torch.utils.data import DataLoader
 
 from ..data.data_processor_for_shards import ShardProcessor
@@ -109,7 +112,9 @@ def inference_loop(
             windows = padded_traj.unfold(0, window_length, 1).transpose(1, 2)
             
             # initialize loss mask (not used during inference, but required by model forward), zeros of shape (batch_size, window_length)
-            loss_mask = torch.ones((windows.shape[0], window_length), dtype=torch.float32, device=device)
+            # loss_mask = torch.ones((windows.shape[0], window_length), dtype=torch.float32, device=device)
+            loss_mask = torch.zeros((windows.shape[0], window_length), dtype=torch.bool, device=device)
+
             n_padded_windows = min([window_length - 1, T])
             for t in range(n_padded_windows):
                 loss_mask[t, :(window_length - (t + 1))] = 0
@@ -122,14 +127,21 @@ def inference_loop(
                 chunk_end = min(chunk_start + batch_size, T)
                 windows_chunk = windows[chunk_start:chunk_end].to(device)
                 mask_chunk = loss_mask[chunk_start:chunk_end].to(device)
+                # make mask chunk boolean
+                mask_chunk = mask_chunk.bool()
 
                 if model_type == 'GRU':
                     risk_logits, _, _ = model(windows_chunk, mask=mask_chunk)
                     risk_logits = risk_logits.cpu()  # (batch_size, window_length, num_risks, num_time_bins)
                 else:
-                    risk_logits, _ = model(windows_chunk, padding_mask=mask_chunk)
+                    # risk_logits, _ = model(windows_chunk, padding_mask=mask_chunk)
+                    risk_logits, _ = model(windows_chunk)
                     risk_logits = [logits[:, -1, :].cpu() for logits in risk_logits]  # unpack tuple
                     risk_logits = torch.stack(risk_logits, dim=2)  # (batch_size, num_risks, num_time_bins)
+
+                    # check if risk_logits has any nulls
+                    if torch.isnan(risk_logits).any():
+                        raise ValueError(f"NaN values found in risk_logits for stay_id {stay_id} at chunk {chunk_start}-{chunk_end}")
 
                 # reshape to (T, K, D)
                 final_step_logits = risk_logits.permute(0, 2, 1)
@@ -190,15 +202,42 @@ def predict(config_manager):
         # run inference on test set
         dynamic_deephit_dataset = inference_loop(dynamic_deephit_model, test_processor, config_manager,device='cuda')
 
-    pass
+
+def plot_c_index(c_index_values, plot_dir):
+    # create 2 subplots, one for each model type
+    models = c_index_values.keys()
+    cohorts = c_index_values['GRU'].keys()
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6), sharey=True)
+    for ax, model_type in zip(axes, models):
+        data = []
+        for cohort in cohorts:
+            for c_index in c_index_values[model_type][cohort]:
+                data.append({'C-index': c_index, 'Cohort': cohort})
+        df = pd.DataFrame(data)
+        sns.boxplot(x='Cohort', y='C-index', data=df, ax=ax)
+        ax.set_title(f'C-index Distribution for {model_type} Model')
+        ax.set_xlabel('Cohort')
+        ax.set_ylabel('C-index')
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+    plt.tight_layout()
+    plot_path = os.path.join(plot_dir, 'c_index_boxplots.png')
+    plt.savefig(plot_path)
+    plt.close()
+    print(f"C-index boxplots saved to {plot_path}")
+
 
 
 def predict_all(config_manager): # for dynamic deephit models only
     models = ['GRU', 'transformer']
     cohorts = ['all', 'sepsis_strict', 'sepsis_broad', 'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad']
 
+    c_index_values = {}
+
     for model_type in models:
+        c_index_values[model_type] = {}
+
         for cohort in cohorts:
+            c_index_values[model_type][cohort] = []
             
             config_manager.reset_cohort(cohort)            
             
@@ -273,16 +312,30 @@ def predict_all(config_manager): # for dynamic deephit models only
                 end_idx = dynamic_deephit_dataset['index_ptr'][i+1]
                 event_label[start_idx:end_idx] = event[i]
             
-            # switch the last 2 dimesnsions of logits to match expected shape (N, D, K)
-            logits = np.transpose(logits, (0, 2, 1))
+            if model_type == 'GRU':
+                # switch the last 2 dimesnsions of logits to match expected shape (N, D, K)
+                logits = np.transpose(logits, (0, 2, 1))
 
             # convert logits, time_to_event, event_label to torch tensors
             logits = torch.from_numpy(logits)
             time_to_event = torch.from_numpy(time_to_event)
             event_label = torch.from_numpy(event_label) 
             
-            c_index_results = calculate_c_index(logits, time_to_event, event_label, random_sample=True)
-            pass
+            n_bootstrap_samples = 100
+            for i in range(n_bootstrap_samples):
+                c_index_results = calculate_c_index(logits, time_to_event, event_label, random_sample=True)
+                c_index_values[model_type][cohort].append(c_index_results["C_weighted_multi"])
+                if i % 10 == 0:
+                    print(f"Model: {model_type}, Cohort: {cohort}, Bootstrap Sample: {i}, C-index: {c_index_results['C_weighted_multi']:.4f}")
+
+    # save the c-index values to a json file
+    c_index_filepath = os.path.join(config_manager.paths['final_model_dir'], 'c_index_values.json')
+    with open(c_index_filepath, 'w') as f:
+        json.dump(c_index_values, f, indent=4)
+    print(f"C-index values saved to {c_index_filepath}")
+    
+    # plot c-index values
+    plot_c_index(c_index_values, plot_dir = config_manager.paths['final_model_dir'])
 
 
 

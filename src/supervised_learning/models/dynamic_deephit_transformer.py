@@ -262,17 +262,19 @@ class TransformerDeepHitMulti(nn.Module):
         # 3. Transformer Encoder
         # The attention mask (src_key_padding_mask) needs to be passed to the encoder.
         # PyTorch Transformer expects mask to be a boolean tensor where True means to IGNORE the key.
+        causal_mask = self.causal_mask[:seq_len, :seq_len].to(x.device).bool()
         if padding_mask is not None:
             # Mask should be True where padding exists (you should ensure your padding logic creates this mask)
             output = self.transformer_encoder(
                 x, 
-                mask=self.causal_mask[:seq_len, :seq_len], # Causal Mask
-                src_key_padding_mask=padding_mask
+                mask=causal_mask, # Causal Mask
+                # src_key_padding_mask=padding_mask
+                src_key_padding_mask=padding_mask.bool() if padding_mask is not None else None
             ) # [B, T, d_model]
         else:
             output = self.transformer_encoder(
                 x,
-                mask=self.causal_mask[:seq_len, :seq_len] # Causal Mask
+                mask=causal_mask # Causal Mask
             )
         
         # generate predictions for each timestep
@@ -309,6 +311,10 @@ class TransformerDeepHitMulti(nn.Module):
             # Reshape the logits back to sequence form for loss calculation
             logits = logits.reshape(batch_size, seq_len, self.num_time_bins) # [B, T, num_time_bins]
             risk_logits.append(logits)
+
+            # if any nans in logits, raise error
+            if torch.isnan(logits).any():
+                raise ValueError("NaN values found in risk_logits during forward pass.")
             
         return risk_logits, covariate_pred
 

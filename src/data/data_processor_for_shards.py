@@ -75,7 +75,7 @@ class ShardProcessor:
                 if 'predictions' in f:
                     self.dynamic_deephit_dataset['predictions'] = f['predictions'][:].astype(np.float32)
 
-                if config_manager._data_config['cohort'] is not None or config_manager._data_config['cohort'] != 'all':
+                if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
                     # filter the dataset to only include the specified cohort
                     logger.info(f"Filtering dynamic deephit dataset to only include cohort: {config_manager._data_config['cohort']}")
                     self.filter_cohort(config_manager)

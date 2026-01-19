@@ -113,6 +113,24 @@ class ConfigManager:
         else:
             self._data_config['cohort'] = 'all'
 
+
+    def reset_cohort(self, cohort):
+        """Reset the cohort in the data config."""
+        self.cohort = cohort
+        if self.cohort is not None and self.cohort != "all":
+            self._data_config['cohort'] = self.cohort   
+            self.data_config['cohort_dir'] = os.path.join(
+                self.get_data_dir,
+                'cohorts',
+                self._data_config['cohort']
+            )
+            self.data_config['cohort_stay_ids_path'] = os.path.join(
+                self.data_config['cohort_dir'],
+                'stay_ids.csv'
+            )
+        else:
+            self._data_config['cohort'] = 'all'
+
                 
     def get_config_path(self, config_type, custom_path=None):
         """Get config file path with variant support."""

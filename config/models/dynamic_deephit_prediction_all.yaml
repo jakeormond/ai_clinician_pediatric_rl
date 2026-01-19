@@ -6,7 +6,7 @@ checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save 
 window_length: 72 # Prediction horizon in hours - so 1 month
 device: "cuda"  # Device (cuda or cpu)
 
-tuning: True
+tuning: False
 use_windows_from_memory: False  # Whether to load precomputed windows into memory (only for smaller datasets)
 
 batch_size: 64  # Batch size for all networks

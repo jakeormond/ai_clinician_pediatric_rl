@@ -8,6 +8,7 @@ entire test dataset. Outputs predictions to a Parquet file along with metadata.
 import argparse
 import json
 import torch
+import numpy as np
 import pandas as pd
 import os
 
@@ -18,6 +19,7 @@ from ..rl.replay_buffer import DynamicDeepHit_Lazy, worker_init_fn
 from ..supervised_learning.models.dynamic_deephit import DynamicDeepHitMulti
 from ..supervised_learning.models.dynamic_deephit_transformer import TransformerDeepHitMulti
 from ..supervised_learning.training import create_processor_from_shards
+from ..supervised_learning.dynamic_deephit_evaluation import calculate_c_index
 
 
 def instantiate_model(
@@ -125,7 +127,7 @@ def inference_loop(
                     risk_logits, _, _ = model(windows_chunk, mask=mask_chunk)
                     risk_logits = risk_logits.cpu()  # (batch_size, window_length, num_risks, num_time_bins)
                 else:
-                    risk_logits, _ = model(windows_chunk, mask=mask_chunk)
+                    risk_logits, _ = model(windows_chunk, padding_mask=mask_chunk)
                     risk_logits = [logits[:, -1, :].cpu() for logits in risk_logits]  # unpack tuple
                     risk_logits = torch.stack(risk_logits, dim=2)  # (batch_size, num_risks, num_time_bins)
 
@@ -193,16 +195,20 @@ def predict(config_manager):
 
 def predict_all(config_manager): # for dynamic deephit models only
     models = ['GRU', 'transformer']
-    cohorts = ['all_stays', 'sepsis_strict', 'sepsis_broad', 'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad']
+    cohorts = ['all', 'sepsis_strict', 'sepsis_broad', 'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad']
 
     for model_type in models:
         for cohort in cohorts:
+            
+            config_manager.reset_cohort(cohort)            
+            
             cohort_final_model_dir = os.path.join(
                 config_manager.paths['final_model_dir'],
                 model_type,
                 cohort,
                 'final_model'
             )
+
             # find the experiment dir in the cohort_final_model_dir
             experiment_dirs = [d for d in os.listdir(cohort_final_model_dir) if 
                                os.path.isdir(os.path.join(cohort_final_model_dir, d))]
@@ -216,7 +222,9 @@ def predict_all(config_manager): # for dynamic deephit models only
             filename = 'test_set_predictions'
             filepath = os.path.join(experiment_dir, filename + '.h5')
             if os.path.exists(filepath):
-                continue
+                # load existing predictions
+                print(f"Loading existing predictions from {filepath}")
+                dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(filepath)
             else:
                 # create DataLoader for test dataset
                 # Create test_processor; note it will throw an error if the normalized test shard is missing.
@@ -243,7 +251,7 @@ def predict_all(config_manager): # for dynamic deephit models only
                     experiment_dir=experiment_dir
                     )
 
-                # run inference on test set
+                # run inference on test set - this function also saves the predictions to file
                 dynamic_deephit_dataset = inference_loop(
                     dynamic_deephit_model, 
                     test_processor, 
@@ -253,10 +261,28 @@ def predict_all(config_manager): # for dynamic deephit models only
                     device='cuda'
                     )
 
-                pass
+            # calculate c-index 
+            logits = dynamic_deephit_dataset['predictions']
+            time_to_event = dynamic_deephit_dataset['time_to_event']
+            event = dynamic_deephit_dataset['event']
 
+            # event_label needs to be expanded so the each trajecotry has a labal at every timestep
+            event_label = np.zeros_like(time_to_event, dtype=np.int32)
+            for i in range(len(event)):
+                start_idx = dynamic_deephit_dataset['index_ptr'][i]
+                end_idx = dynamic_deephit_dataset['index_ptr'][i+1]
+                event_label[start_idx:end_idx] = event[i]
+            
+            # switch the last 2 dimesnsions of logits to match expected shape (N, D, K)
+            logits = np.transpose(logits, (0, 2, 1))
 
-
+            # convert logits, time_to_event, event_label to torch tensors
+            logits = torch.from_numpy(logits)
+            time_to_event = torch.from_numpy(time_to_event)
+            event_label = torch.from_numpy(event_label) 
+            
+            c_index_results = calculate_c_index(logits, time_to_event, event_label, random_sample=True)
+            pass
 
 
 

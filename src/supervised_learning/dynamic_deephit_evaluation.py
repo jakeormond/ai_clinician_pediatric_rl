@@ -16,6 +16,13 @@ def calculate_cif(
     logits: torch.Tensor
     ):
     
+    # Ensure logits is a torch tensor
+    if isinstance(logits, np.ndarray):
+        logits = torch.from_numpy(logits)
+    
+    # Ensure tensor is contiguous before view
+    logits = logits.contiguous()
+
     B, K, T = logits.shape
     logits_flat = logits.view(B, K * T)   
     p = F.softmax(logits_flat, dim=1).view(B, K, T)   # [B, K, T]

@@ -475,3 +475,53 @@ calculate_roc_and_prc(logits, time_to_event, event_label)
                 'auroc': roc_and_prc_results['auroc'],
                 'average_precision': roc_and_prc_results['average_precision'],
                 'prevalence': roc_and_prc_results['prevalence']}
+        
+
+def calculate_all_bin_ece(logits, true_bins, true_events, n_calibration_bins=10):
+    """
+    Calculates the Expected Calibration Error (ECE) for each event and time bin.
+    
+    Args:
+        logits (np.ndarray or torch.Tensor): Shape [N, K, 8]
+        true_bins (np.ndarray): Shape [N], values 0-7 (event time bin)
+        true_events (np.ndarray): Shape [N], values 1 to K (event type label)
+        n_calibration_bins (int): Number of bins for the reliability grouping (default 10)
+        
+    Returns:
+        ece_matrix (np.ndarray): Shape [K, 8], where each cell is the ECE for that 
+                                 event at that specific cumulative time horizon.
+    """
+    # 1. Get CIF [N, K, 8] using your joint-softmax logic
+    cif_tensor = calculate_cif(logits)
+    cif = cif_tensor.detach().cpu().numpy()
+    
+    N, K, T = cif.shape
+    ece_matrix = np.zeros((K, T))
+    bin_boundaries = np.linspace(0, 1, n_calibration_bins + 1)
+
+    for k in range(K):
+        for t in range(T):
+            # Ground Truth: Did event 'k' happen at or before bin 't'?
+            actual_outcomes = ((true_bins <= t) & (true_events == k)).astype(float)
+            
+            # Predicted cumulative probability for event k at time t
+            pred_probs_t = cif[:, k, t]
+            
+            ece_t = 0.0
+            for i in range(n_calibration_bins):
+                # Mask samples that fall into the current probability bin (e.g., 0.1 to 0.2)
+                bin_mask = (pred_probs_t > bin_boundaries[i]) & (pred_probs_t <= bin_boundaries[i+1])
+                
+                bin_count = np.sum(bin_mask)
+                if bin_count > 0:
+                    # Average confidence: mean of predicted probabilities in bin
+                    avg_conf = np.mean(pred_probs_t[bin_mask])
+                    # Average accuracy: actual frequency of events in bin
+                    avg_acc = np.mean(actual_outcomes[bin_mask])
+                    
+                    # Weighted absolute calibration gap
+                    ece_t += (bin_count / N) * np.abs(avg_acc - avg_conf)
+            
+            ece_matrix[k, t] = ece_t
+            
+    return ece_matrix

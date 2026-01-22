@@ -481,49 +481,6 @@ def paired_bootstrap_evaluation(
     return c_index_bootstraps, brier_score_bootstraps, roc_prc_bootstraps, ece_bootstraps
 
 
-def get_bootstrap_storage_old(models, cohorts, outer_group, inner_group):
-    if outer_group == 'models':
-        outer_group = models
-        inner_group = cohorts
-    else:
-        outer_group = cohorts
-        inner_group = models
-           
-    c_index_bootstraps = {
-        m: {
-            cohort: {}
-            for cohort in inner_group
-        }
-        for m in outer_group
-        }
-    
-    brier_score_bootstraps = {
-        m: {    
-            cohort: {}
-            for cohort in inner_group
-        }
-        for m in outer_group
-        }
-    
-    roc_prc_bootstraps = {
-        m: {
-            cohort: {}
-            for cohort in inner_group
-        }
-        for m in outer_group
-        }
-    
-    ece_bootstraps = {
-        m: {
-            cohort: {}
-            for cohort in inner_group
-        }
-        for m in outer_group
-        }          
-    
-    return c_index_bootstraps, brier_score_bootstraps, roc_prc_bootstraps, ece_bootstraps
-
-
 def get_bootstrap_storage(outer_groups, inner_groups=None):
     if inner_groups is None:
         c_index_bootstraps = {
@@ -706,24 +663,32 @@ def predict_all(
     print(f"ECE values saved to {ece_bootstraps_filepath}")
 
 
-def plot_evaluation(config_manager):
+def plot_evaluation(
+        config_manager,
+        cohorts=['sepsis_strict', 'sepsis_broad', 'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad'],
+        models=['GRU', 'transformer'],
+        outer_group='models',
+        inner_group='cohorts',
+        base_filename='all_stays_model_comparison'
+    ):
+
     # load c-index values from json file
-    c_index_filepath = os.path.join(config_manager.paths['final_model_dir'], 'c_index_values.json')
+    c_index_filepath = os.path.join(config_manager.paths['final_model_dir'], base_filename + '_c_index_values.json')
     with open(c_index_filepath, 'r') as f:
         c_index_values = json.load(f)
     print(f"C-index values loaded from {c_index_filepath}")
 
-    brier_score_filepath = os.path.join(config_manager.paths['final_model_dir'], 'brier_score_values.json')
+    brier_score_filepath = os.path.join(config_manager.paths['final_model_dir'], base_filename + '_brier_score_values.json')
     with open(brier_score_filepath, 'r') as f:
         brier_score_values = json.load(f)
     print(f"Brier score values loaded from {brier_score_filepath}")
 
-    roc_prc_filepath = os.path.join(config_manager.paths['final_model_dir'], 'roc_prc_values.json')
+    roc_prc_filepath = os.path.join(config_manager.paths['final_model_dir'], base_filename + '_roc_prc_values.json')
     with open(roc_prc_filepath, 'r') as f:
         roc_prc_values = json.load(f)
     print(f"ROC and PRC values loaded from {roc_prc_filepath}")
 
-    ece_filepath = os.path.join(config_manager.paths['final_model_dir'], 'ece_values.json')
+    ece_filepath = os.path.join(config_manager.paths['final_model_dir'], base_filename + '_ece_values.json')
     with open(ece_filepath, 'r') as f:
         ece_values = json.load(f)
     print(f"ECE values loaded from {ece_filepath}")
@@ -750,10 +715,6 @@ def plot_evaluation(config_manager):
     # plot c-index comparison
     plot_dir = config_manager.paths['final_model_dir']
     plot_c_index(c_index_values, statistics, plot_dir)
-
-
-
-
 
 
 def main():

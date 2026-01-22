@@ -629,7 +629,8 @@ def get_trainer(
             verbose=True, 
             physiological_feature_type = train_processor.physiological_feature_type,
             # l1_params=l1_params,          # ← ADD THIS
-            l1_lambda=hyperparams['l1_lambda'],                
+            l1_lambda=hyperparams['l1_lambda'],   
+            final_timestep_only = config_manager.training_config['final_timestep_only']        
         )
 
     return trainer

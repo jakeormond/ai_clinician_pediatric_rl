@@ -240,15 +240,15 @@ def main():
             # )
             
             
-            predict_all(
-                config_manager, 
-                n_bootstrap_samples=100,
-                cohorts=['all'],
-                models=['GRU', 'transformer'],
-                outer_group='cohorts',
-                inner_group='models',
-                base_filename='all_stays_model_comparison'
-            )
+            # predict_all(
+            #     config_manager, 
+            #     n_bootstrap_samples=100,
+            #     cohorts=['all'],
+            #     models=['GRU', 'transformer'],
+            #     outer_group='cohorts',
+            #     inner_group='models',
+            #     base_filename='all_stays_model_comparison'
+            # )
            
             plot_evaluation(
                 config_manager,

@@ -6,50 +6,49 @@ checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save 
 window_length: 72 #168 # Prediction horizon in hours - so 1 month
 device: "cuda"  # Device (cuda or cpu)
 
-tuning: False
+tuning: True
 use_windows_from_memory: False  # Whether to load precomputed windows into memory (only for smaller datasets) - 
 # not necessary for transformer model as windows are already in memory in the self.dynamic_deephit_dataset
 
-learning_rate: "loguniform(1e-6, 1e-4)"         #      [1e-6]  # Learning rates to try - 1e-4 overfits quickly
+learning_rate: 9e-6          #      [1e-6]  # Learning rates to try - 1e-4 overfits quickly
 dropout: "uniform(0.1, 0.7)" # 0.5
 weight_decay: "loguniform(1e-5, 1e-2)" # "loguniform(1e-4, 1e-1)" # 5e-3
 use_layernorm: True
 batch_size: 64  # Batch size for all networks
 
-# transformer specific parameters
-d_model: [64, 128, 256] # [32, 64, 128]  # Dimension of the model
-num_encoder_layers: [1, 2, 4]
-ff_factor: [2, 4]  # dim_feedforward is ff_factor * d_model
-nhead: [4, 8] # [2, 4, 8]  # Number of attention heads - d_model must be divisible by nhead
+d_model: 128  # Dimension of the model
+num_encoder_layers: 4  # Number of encoder layers
+ff_factor: 2  # Dimension of feedforward network in transformer
+nhead: 8  # Number of attention heads
 
-hidden_dim: [32, 64, 128]  # Hidden dimension for all networks
-attn_hidden_dim: [32, 64, 128, 256]
-n_layers: [1, 2, 3, 4] # [1, 2, 3, 4]
+hidden_dim: 128  # Hidden dimension for all networks
+attn_hidden_dim: 64
+n_layers: 2
 
 loss_metric: "weighted_multi_C" # "combined_loss"  # Which metric to use for early stopping
 max_val_samples: 5000  # Max samples to use for validation during training
 
-l1_lambda: "loguniform(1e-6, 1e-4)"  # L1 regularization weight for classification head
+l1_lambda: 2e-06 # 1e-4  # L1 regularization weight for classification head
 
-alpha_class: [0.1, 0.25, 0.5]  # Weight for classification loss
-alpha_rank: [1.0, 2.0]   # Weight for ranking loss
-alpha_pred: [0.5, 1.0, 2.0]  # Weight for prediction loss
-sigma: [0.1, 0.2, 0.3] # for ranking loss
+alpha_class: 0.5
+alpha_rank: 2.0   # Weight for ranking loss
+alpha_pred: 1.0
+sigma: 0.3
 
 # gaussian sigma scheduling parameters
 start_sigma: 2.
-end_sigma: [0.3, 0.5, 0.7]
+end_sigma: 0.3
 
 # learning rate scheduling parameters
-pct_start: [0.1, 0.3, 0.5]
-div_factor: [10, 25, 50]
+pct_start: 0.3
+div_factor: 10
 
 # Early stopping parameters (fixed for all combinations)
-patience: 15       # Stop if no improvement for 15 evaluations
+patience: 10        # Stop if no improvement for 15 evaluations
 eval_freq: 1       # Evaluate every 20 epochs  
 min_delta: 0.0001   # Minimum improvement threshold
 
-grad_clip: [0.1, 0.5, 1.0, 5.0] # [0.5, 1]  # Gradient clipping value
+grad_clip: 0.1  # Gradient clipping value
 
 # for controls
 shuffle_inputs: False  # Whether to shuffle feature columns to confirm transformer not looking ahead

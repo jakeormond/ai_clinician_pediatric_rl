@@ -74,12 +74,17 @@ def parse_arguments():
                                  'single_split', 'development_single_split'],
                         help='Mode of training: single_fold or aggregate (default: single_fold)')
     
+    
     # mode-specific arguments    
     parser.add_argument('--fold', type=int, default=None,
                        help='Fold number to train (required for single_fold mode)')
     
     parser.add_argument('--experiment_folder', type=str, default=None,
                         help='Directory for experiment results (required for aggregate mode)')
+    
+    parser.add_argument('--final_timestep_only', type=str, default='False',
+                        choices=['True', 'False'],
+                        help='Whether to use only the final timestep for prediction (default: True)')
                         
     # Config file overrides (optional)
     parser.add_argument('--action_mode', 
@@ -175,7 +180,7 @@ def main():
         config_manager.model_type == "dynamic_deephit_prediction_all": 
         from ...supervised_learning.training import outer_training_loop, development_training_loop, single_split_training
         from ...supervised_learning.models.dynamic_deephit import make_mixed_resolution_time_bins
-        from ...supervised_learning.predict import predict, predict_all
+        from ...supervised_learning.predict import predict, plot_evaluation, predict_all
 
     else:
         from ...supervised_learning.training_scikitlearn import outer_training_loop, \
@@ -221,7 +226,37 @@ def main():
             """
             this is for generating predictions on the MIMIC IV dataset with a single train/val/test split.
             """
-            predict_all(config_manager)
+            cohorts = ['aki_broad', 'aki_strict', 'ards_broad', 'ards_strict',
+                       'sepsis_broad', 'sepsis_strict']
+            models = ['GRU', 'transformer']
+
+            # predict_all(
+            #     config_manager, 
+            #     cohorts=cohorts,
+            #     models=models,
+            #     outer_group='models',
+            #     inner_group='cohorts',
+            #     base_filename='cohort_model_comparison'
+            # )
+            
+            
+            predict_all(
+                config_manager, 
+                n_bootstrap_samples=100,
+                cohorts=['all'],
+                models=['GRU', 'transformer'],
+                outer_group='cohorts',
+                inner_group='models',
+                base_filename='all_stays_model_comparison'
+            )
+           
+            plot_evaluation(
+                config_manager,
+                cohorts=['all'],
+                models=['GRU', 'transformer'],
+                outer_group='cohorts',
+                inner_group='models',
+                base_filename='all_stays_model_comparison') 
             
     
     elif args.mode == 'development_single_split':

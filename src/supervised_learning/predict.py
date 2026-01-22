@@ -193,6 +193,9 @@ def inference_loop(
 
     # concatenate all patient predictions into a numpy array
     all_predictions = torch.cat(all_predictions, dim=0).cpu().numpy()
+    if model_type == 'GRU':
+        # switch the last 2 dimesnsions of logits to match expected shape (N, D, K)
+        all_predictions = np.transpose(all_predictions, (0, 2, 1))
 
     # add predictions to processor
     processor.dynamic_deephit_dataset['predictions'] = all_predictions
@@ -295,220 +298,462 @@ def plot_c_index(c_index_values, statistics, plot_dir):
     print(f"C-index comparison plot saved to {plot_path}")
             
 
+def get_model_dir(config_manager, model_type, data_cohort, model_cohort):
+    config_manager.reset_cohort(data_cohort)
 
-def predict_general_models(config_manager):
-    models = ['GRU', 'transformer']
-    cohort = 'all'
-    config_manager.reset_cohort(cohort)         
-    c_index_values = {}
+    cohort_final_model_dir = os.path.join(
+        config_manager.paths['final_model_dir'],
+        model_type,
+        model_cohort,
+        'final_model'
+    )
 
-    for model_type in models:
-        c_index_values[model_type] = []
+    # find the experiment dir in the cohort_final_model_dir
+    experiment_dirs = [d for d in os.listdir(cohort_final_model_dir) if 
+                    os.path.isdir(os.path.join(cohort_final_model_dir, d))]
+    if len(experiment_dirs) == 0:
+        raise ValueError(f"No experiment directories found in {cohort_final_model_dir}")
+    elif len(experiment_dirs) > 1:
+        raise ValueError(f"Multiple experiment directories found in {cohort_final_model_dir}, expected only one.")
+
+    experiment_dir = os.path.join(cohort_final_model_dir, experiment_dirs[0])
+    
+    return experiment_dir, cohort_final_model_dir
 
 
+def get_predictions(config_manager, model_type, experiment_dir, stay_ids=None):
+    filename = 'test_set_predictions'
+    filepath = os.path.join(experiment_dir, filename + '.h5')
+    if os.path.exists(filepath):
+        # load existing predictions
+        print(f"Loading existing predictions from {filepath}")
+        dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(filepath)
+    else:
+        # create DataLoader for test dataset
+        # Create test_processor; note it will throw an error if the normalized test shard is missing.
+        # All possible windows will be computed
+        _, _, test_processor = create_processor_from_shards(config_manager, normalize=True)
+
+        # instantiate the model
+        # load result.json from config_manager.experiment_dir to get hyperparameters
+        with open(
+            os.path.join(experiment_dir, 'results.json'), 'r'
+        ) as f:
+            results_dict = json.load(f)
+        hyperparams = results_dict['best_hyperparameters']    
+        time_bins = results_dict['time_bins']
+        n_time_bins = len(time_bins) - 1
+
+        dynamic_deephit_model = instantiate_model(
+            config_manager, 
+            hyperparams, 
+            n_time_bins, 
+            num_risks=2, 
+            model_type=model_type,
+            test_processor=test_processor,
+            experiment_dir=experiment_dir
+            )
+
+        # run inference on test set - this function also saves the predictions to file
+        dynamic_deephit_dataset = inference_loop(
+            dynamic_deephit_model, 
+            test_processor, 
+            config_manager,
+            model_type=model_type,
+            experiment_dir=experiment_dir,
+            device='cuda'
+            )
+        
+    if stay_ids is not None:
+        # filter event to only stays in the current cohort
+        dynamic_deephit_dataset = filter_cohort(dynamic_deephit_dataset, stay_ids)   
+
+    return dynamic_deephit_dataset 
 
 
+def paired_bootstrap_evaluation(
+        dynamic_deephit_datasets,
+        model_type,
+        cohort,
+        n_bootstrap_samples = 100,
+):
+    model_groups = dynamic_deephit_datasets.keys()
+    # create storage for logits, time_to_event, event_label
+    logits_dict = {}
 
+    for i, model_group in enumerate(model_groups):
+        dynamic_deephit_dataset = dynamic_deephit_datasets[model_group]
 
-def predict_all(config_manager): # for dynamic deephit models only
-    models = ['GRU', 'transformer']
-    # cohorts = ['all', 'sepsis_strict', 'sepsis_broad', 'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad']
-    cohorts = ['sepsis_strict', 'sepsis_broad', 'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad']
+        logits = dynamic_deephit_dataset['predictions']
+        logits = torch.from_numpy(logits)
+        logits_dict[model_group] = logits
+        
+        if i == 0:
+            time_to_event = dynamic_deephit_dataset['time_to_event']
+            event = dynamic_deephit_dataset['event']
 
-    c_index_values = {}
-    statistics = {}
-
-    for model_type in models:
-        c_index_values[model_type] = {}
-        statistics[model_type] = {}
-
-        # we need to calculate c-index for each cohort using either the general or cohort-specific model
-        # and compare
-        for cohort in cohorts:
-            if cohort == 'all':
-                continue
-
-            model_types = ['all', cohort]
-            c_index_values[model_type][cohort] = {}
-            statistics[model_type][cohort] = {}
-
-            model_types_reversed = model_types[::-1]
-            
-            # create storage for logits, time_to_event, event_label
-            logits_dict = {}
-            time_to_event_dict = {}
-            event_label_dict = {}
-            
-            for i, model_cohort in enumerate(model_types_reversed):
-                c_index_values[model_type][cohort][model_cohort] = []
+            # event_label needs to be expanded so the each trajectory has a label at every timestep
+            event_label = np.zeros_like(time_to_event, dtype=np.int32)
+            for i in range(len(event)):
+                start_idx = dynamic_deephit_dataset['index_ptr'][i]
+                end_idx = dynamic_deephit_dataset['index_ptr'][i+1]
+                event_label[start_idx:end_idx] = event[i]
                 
-                config_manager.reset_cohort(cohort)            
+            time_to_event = torch.from_numpy(time_to_event)
+            event_label = torch.from_numpy(event_label)
+
+    c_index_bootstraps = {model_group: [] for model_group in model_groups}
+    brier_score_bootstraps = {model_group: [] for model_group in model_groups}
+    roc_prc_bootstraps = {model_group: [] for model_group in model_groups}
+    ece_bootstraps = {model_group: [] for model_group in model_groups}   
+    
+    for i in range(n_bootstrap_samples):
+        for j, model_group in enumerate(model_groups):
+            logits = logits_dict[model_group]
+            
+            if j == 0:
+                n_samples = logits.shape[0]
+                # generate random sample indices with replacement                
+                sample_indices = np.random.choice(n_samples, size=n_samples, replace=True)
+
+                # downsampled indices for c-index calculation - we use 10,000 samples for speed
+                if n_samples > 10000:
+                    downsampled_indices = np.random.choice(n_samples, size=10000, replace=False)
+                else:
+                    downsampled_indices = np.arange(n_samples)
+            
+            c_index_results = calculate_c_index(
+                logits[downsampled_indices], 
+                time_to_event[downsampled_indices], 
+                event_label[downsampled_indices], 
+                random_sample=True
+            )
+            
+            # brier score
+            brier_score_results = calculate_brier_score(
+                logits[sample_indices],
+                time_to_event[sample_indices],
+                event_label[sample_indices]
+            )
+
+            # calculate roc and prc
+            roc_prc_results = calculate_roc_and_prc(
+                logits[sample_indices],
+                time_to_event[sample_indices],
+                event_label[sample_indices]
+            )
+
+            # calculate ece
+            ece_results = calculate_all_bin_ece(
+                logits[sample_indices].numpy(),
+                time_to_event[sample_indices].numpy(),
+                event_label[sample_indices].numpy()
+            )
+
+            # convert tensors to floats or arrays for JSON serialization
+            c_index_results = {k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else (v.cpu().numpy() if isinstance(v, torch.Tensor) else v) for k, v in c_index_results.items()}
+            brier_score_results = {k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else (v.cpu().numpy() if isinstance(v, torch.Tensor) else v) for k, v in brier_score_results.items()}
+            roc_prc_results = {k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else (v.cpu().numpy() if isinstance(v, torch.Tensor) else v) for k, v in roc_prc_results.items()}
+            
+            c_index_bootstraps[model_group].append(c_index_results)
+            brier_score_bootstraps[model_group].append(brier_score_results)
+            roc_prc_bootstraps[model_group].append(roc_prc_results)
+            ece_bootstraps[model_group].append(ece_results)
+            
+            if i % 10 == 0:
+                print(f"Model: {model_group}, Cohort: {cohort}, Bootstrap Sample: {i}, C-index: {c_index_results['C_weighted_multi']:.4f}")
+
+    for model_group in model_groups:
+        c_index_bootstraps[model_group] = {k: [d[k] for d in 
+            c_index_bootstraps[model_group]] for k in 
+                c_index_bootstraps[model_group][0]}
+        
+        brier_score_bootstraps[model_group] = {k: [d[k] for d in 
+            brier_score_bootstraps[model_group]] for k in 
+                brier_score_bootstraps[model_group][0]}
+        
+        roc_prc_bootstraps[model_group] = {k: [d[k] for d in 
+            roc_prc_bootstraps[model_group]] for k in 
+                roc_prc_bootstraps[model_group][0]}    
+
+    
+
+    return c_index_bootstraps, brier_score_bootstraps, roc_prc_bootstraps, ece_bootstraps
+
+
+def get_bootstrap_storage_old(models, cohorts, outer_group, inner_group):
+    if outer_group == 'models':
+        outer_group = models
+        inner_group = cohorts
+    else:
+        outer_group = cohorts
+        inner_group = models
+           
+    c_index_bootstraps = {
+        m: {
+            cohort: {}
+            for cohort in inner_group
+        }
+        for m in outer_group
+        }
+    
+    brier_score_bootstraps = {
+        m: {    
+            cohort: {}
+            for cohort in inner_group
+        }
+        for m in outer_group
+        }
+    
+    roc_prc_bootstraps = {
+        m: {
+            cohort: {}
+            for cohort in inner_group
+        }
+        for m in outer_group
+        }
+    
+    ece_bootstraps = {
+        m: {
+            cohort: {}
+            for cohort in inner_group
+        }
+        for m in outer_group
+        }          
+    
+    return c_index_bootstraps, brier_score_bootstraps, roc_prc_bootstraps, ece_bootstraps
+
+
+def get_bootstrap_storage(outer_groups, inner_groups=None):
+    if inner_groups is None:
+        c_index_bootstraps = {
+            outer: {}
+            for outer in outer_groups
+            }
+        
+        brier_score_bootstraps = {
+            outer: {}
+            for outer in outer_groups
+            }
+        
+        roc_prc_bootstraps = {
+            outer: {}
+            for outer in outer_groups
+            }
+        
+        ece_bootstraps = {
+            outer: {}
+            for outer in outer_groups
+            }          
+    else:
+        c_index_bootstraps = {
+            outer: {
+                inner: {}
+                for inner in inner_groups
+            }
+            for outer in outer_groups
+            }
+        
+        brier_score_bootstraps = {
+            outer: {    
+                inner: {}
+                for inner in inner_groups
+            }
+            for outer in outer_groups
+            }
+        
+        roc_prc_bootstraps = {
+            outer: {
+                inner: {}
+                for inner in inner_groups
+            }
+            for outer in outer_groups
+            }
+        
+        ece_bootstraps = {
+            outer: {
+                inner: {}
+                for inner in inner_groups
+            }
+            for outer in outer_groups
+            }
+        
+    return c_index_bootstraps, brier_score_bootstraps, roc_prc_bootstraps, ece_bootstraps
+
+
+def _to_jsonable(obj):
+    if isinstance(obj, torch.Tensor):
+        return obj.item() if obj.numel() == 1 else obj.cpu().numpy().tolist()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(v) for v in obj]
+    return obj
+
+
+def predict_all(
+        config_manager, 
+        n_bootstrap_samples=100,
+        models=['GRU', 'transformer'],
+        cohorts=['sepsis_strict', 'sepsis_broad', 'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad'],
+        outer_group='models',
+        inner_group='cohorts',
+        base_filename='all_cohorts'
+    ): # for dynamic deephit models only
+   
+    # generate bootstrap storage
+    # c_index_bootstraps, brier_score_bootstraps, roc_prc_bootstraps, ece_bootstraps \
+    #     = get_bootstrap_storage(models, cohorts, outer_group, inner_group)
+
+    if outer_group == 'models':
+        outer_groups = models
+        inner_groups = cohorts
+        c_index_bootstraps, brier_score_bootstraps, roc_prc_bootstraps, ece_bootstraps = \
+            get_bootstrap_storage(outer_groups, inner_groups=cohorts)
+
+    else:
+        outer_groups = cohorts
+        inner_groups = [models]
+        c_index_bootstraps, brier_score_bootstraps, roc_prc_bootstraps, ece_bootstraps = \
+            get_bootstrap_storage(outer_groups)    
+
+    for outer in outer_groups:
+        if outer_group == 'models':
+            model_types = [outer, outer]
+                        
+        else:
+            model_types = models            
+            # if outer group is cohort, there is only one cohort, we are comparing gru vs transformer
+            model_cohorts = [outer, outer]
+            model_cohorts_reversed = model_cohorts
+            cohort = outer
+        
+        for inner in inner_groups:
+            if outer_group == 'models':
+                model_cohorts = ['all', inner] 
+                cohort = inner    
+                inner = model_cohorts[::-1]
+                model_cohorts_reversed = model_cohorts[::-1]
+
+            dynamic_deephit_datasets = {}
+
+            for i in range(2):               
                 
-                cohort_final_model_dir = os.path.join(
-                    config_manager.paths['final_model_dir'],
-                    model_type,
-                    model_cohort,
-                    'final_model'
+                experiment_dir, cohort_final_model_dir = get_model_dir(
+                    config_manager, model_types[i], cohort, model_cohorts_reversed[i]
                 )
-
-                # find the experiment dir in the cohort_final_model_dir
-                experiment_dirs = [d for d in os.listdir(cohort_final_model_dir) if 
-                                os.path.isdir(os.path.join(cohort_final_model_dir, d))]
-                if len(experiment_dirs) == 0:
-                    raise ValueError(f"No experiment directories found in {cohort_final_model_dir}")
-                elif len(experiment_dirs) > 1:
-                    raise ValueError(f"Multiple experiment directories found in {cohort_final_model_dir}, expected only one.")
                 
-                experiment_dir = os.path.join(cohort_final_model_dir, experiment_dirs[0])
-
-                filename = 'test_set_predictions'
-                filepath = os.path.join(experiment_dir, filename + '.h5')
-                if os.path.exists(filepath):
-                    # load existing predictions
-                    print(f"Loading existing predictions from {filepath}")
-                    dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(filepath)
-                else:
-                    # create DataLoader for test dataset
-                    # Create test_processor; note it will throw an error if the normalized test shard is missing.
-                    # All possible windows will be computed
-                    _, _, test_processor = create_processor_from_shards(config_manager, normalize=True)
-
-                    # instantiate the model
-                    # load result.json from config_manager.experiment_dir to get hyperparameters
-                    with open(
-                        os.path.join(experiment_dir, 'results.json'), 'r'
-                    ) as f:
-                        results_dict = json.load(f)
-                    hyperparams = results_dict['best_hyperparameters']    
-                    time_bins = results_dict['time_bins']
-                    n_time_bins = len(time_bins) - 1
-
-                    dynamic_deephit_model = instantiate_model(
-                        config_manager, 
-                        hyperparams, 
-                        n_time_bins, 
-                        num_risks=2, 
-                        model_type=model_type,
-                        test_processor=test_processor,
-                        experiment_dir=experiment_dir
-                        )
-
-                    # run inference on test set - this function also saves the predictions to file
-                    dynamic_deephit_dataset = inference_loop(
-                        dynamic_deephit_model, 
-                        test_processor, 
-                        config_manager,
-                        model_type=model_type,
-                        experiment_dir=experiment_dir,
-                        device='cuda'
-                        )
                 if i == 0:
-                    stay_ids = dynamic_deephit_dataset['stay_ids']
+                    dynamic_deephit_datasets[inner[i]] = get_predictions(
+                        config_manager, 
+                        model_types[i], 
+                        experiment_dir
+                    )
+                    stay_ids = dynamic_deephit_datasets[inner[i]]['stay_ids']
                 else:
-                    # filter event to only stays in the current cohort
-                    dynamic_deephit_dataset = filter_cohort(dynamic_deephit_dataset, stay_ids)    
-                
-                # calculate c-index 
-                logits = dynamic_deephit_dataset['predictions']
-                time_to_event = dynamic_deephit_dataset['time_to_event']
-                event = dynamic_deephit_dataset['event']
-
-                # event_label needs to be expanded so the each trajectory has a label at every timestep
-                event_label = np.zeros_like(time_to_event, dtype=np.int32)
-                for i in range(len(event)):
-                    start_idx = dynamic_deephit_dataset['index_ptr'][i]
-                    end_idx = dynamic_deephit_dataset['index_ptr'][i+1]
-                    event_label[start_idx:end_idx] = event[i]
-                
-                if model_type == 'GRU':
-                    # switch the last 2 dimesnsions of logits to match expected shape (N, D, K)
-                    logits = np.transpose(logits, (0, 2, 1))
-
-                # convert logits, time_to_event, event_label to torch tensors
-                logits = torch.from_numpy(logits)
-                time_to_event = torch.from_numpy(time_to_event)
-                event_label = torch.from_numpy(event_label) 
-
-                logits_dict[model_cohort] = logits
-                time_to_event_dict[model_cohort] = time_to_event
-                event_label_dict[model_cohort] = event_label
+                    dynamic_deephit_datasets[inner[i]] = get_predictions(
+                        config_manager, 
+                        model_types[i], 
+                        experiment_dir,
+                        stay_ids=stay_ids
+                    )
+                                
+            # bootstrapped evaluation
+            c_index, brier_score, roc_prc, ece = paired_bootstrap_evaluation(
+                dynamic_deephit_datasets,
+                model_types,
+                cohort,
+                n_bootstrap_samples = n_bootstrap_samples,
+            )
             
-            # perform paired bootstrap
-            n_bootstrap_samples = 100
-            for i in range(n_bootstrap_samples):
-                for i, model_cohort in enumerate(model_types):
-                    logits = logits_dict[model_cohort]
-                    time_to_event = time_to_event_dict[model_cohort]
-                    event_label = event_label_dict[model_cohort]
+            if outer_group == 'cohorts':
+                for group in inner:
+                    c_index_bootstraps[outer][group] = c_index[group]
+                    brier_score_bootstraps[outer][group] = brier_score[group]
+                    roc_prc_bootstraps[outer][group] = roc_prc[group]
+                    ece_bootstraps[outer][group] = ece[group]     
 
-                    if i == 0:
-                        # generate random sample indices with replacement
-                        n_samples = logits.shape[0]
-                        sample_indices = np.random.choice(n_samples, size=n_samples, replace=True)
+            else:
+                for group in inner:
+                    c_index_bootstraps[outer][cohort][group] = c_index[group]
+                    brier_score_bootstraps[outer][cohort][group] = brier_score[group]
+                    roc_prc_bootstraps[outer][cohort][group] = roc_prc[group]
+                    ece_bootstraps[outer][cohort][group] = ece[group]       
 
-                        # downsampled indices for c-index calculation - we use 10,000 samples for speed
-                        if n_samples > 10000:
-                            downsampled_indices = np.random.choice(n_samples, size=10000, replace=False)
-                        else:
-                            downsampled_indices = np.arange(n_samples)
-                    
-                    c_index_results = calculate_c_index(
-                        logits[downsampled_indices], 
-                        time_to_event[downsampled_indices], 
-                        event_label[downsampled_indices], 
-                        random_sample=True
-                    )
-                    
-                    # brier score
-                    brier_score_results = calculate_brier_score(
-                        logits[sample_indices],
-                        time_to_event[sample_indices],
-                        event_label[sample_indices]
-                    )
-
-                    # calculate roc and prc
-                    roc_prc_results = calculate_roc_and_prc(
-                        logits[sample_indices],
-                        time_to_event[sample_indices],
-                        event_label[sample_indices]
-                    )
-
-                    # calculate ece
-                    ece_results = calculate_all_bin_ece(
-                        logits[sample_indices].numpy(),
-                        time_to_event[sample_indices].numpy(),
-                        event_label[sample_indices].numpy()
-                    )
-
-                    c_index_values[model_type][cohort][model_cohort].append(c_index_results["C_weighted_multi"])
-                    if i % 10 == 0:
-                        print(f"Model: {model_type}, Cohort: {cohort}, Bootstrap Sample: {i}, C-index: {c_index_results['C_weighted_multi']:.4f}")
-
-
-
-            # calculate statistical difference between between c_index_values[model_type][cohort]['all']
-            # and c_index_values[model_type][cohort][cohort] using a paired t-test
-            all_values = c_index_values[model_type][cohort]['all']  
-            cohort_values = c_index_values[model_type][cohort][cohort]
-            # run unpaired t-test
-            t_stat, p_value = stats.ttest_ind(all_values, cohort_values)
-            statistics[model_type][cohort]['t_stat'] = t_stat
-            statistics[model_type][cohort]['p_value'] = p_value            
-    
     # save the c-index values to a json file
-    c_index_filepath = os.path.join(config_manager.paths['final_model_dir'], 'c_index_values.json')
+    c_index_filepath = os.path.join(config_manager.paths['final_model_dir'], base_filename + '_c_index_values.json')
     with open(c_index_filepath, 'w') as f:
-        json.dump(c_index_values, f, indent=4)
+        json.dump(_to_jsonable(c_index_bootstraps), f, indent=4)
     print(f"C-index values saved to {c_index_filepath}")
-    
-    # plot c-index values
-    plot_c_index(c_index_values, statistics, plot_dir = config_manager.paths['final_model_dir'])
 
-    # save the statistics to a json file
-    statistics_filepath = os.path.join(config_manager.paths['final_model_dir'], 'c_index_statistics.json')
-    with open(statistics_filepath, 'w') as f:
-        json.dump(statistics, f, indent=4)
-    print(f"C-index statistics saved to {statistics_filepath}")
+    brier_score_bootstraps_filepath = os.path.join(config_manager.paths['final_model_dir'], base_filename + '_brier_score_values.json')
+    with open(brier_score_bootstraps_filepath, 'w') as f:
+        json.dump(_to_jsonable(brier_score_bootstraps), f, indent=4)
+    print(f"Brier score values saved to {brier_score_bootstraps_filepath}")
+
+    roc_prc_bootstraps_filepath = os.path.join(config_manager.paths['final_model_dir'], base_filename + '_roc_prc_values.json')
+    with open(roc_prc_bootstraps_filepath, 'w') as f:
+        json.dump(_to_jsonable(roc_prc_bootstraps), f, indent=4)
+    print(f"ROC and PRC values saved to {roc_prc_bootstraps_filepath}")
+
+    ece_bootstraps_filepath = os.path.join(config_manager.paths['final_model_dir'], base_filename + '_ece_values.json')
+    with open(ece_bootstraps_filepath, 'w') as f:
+        json.dump(_to_jsonable(ece_bootstraps), f, indent=4)
+    print(f"ECE values saved to {ece_bootstraps_filepath}")
+
+
+def plot_evaluation(config_manager):
+    # load c-index values from json file
+    c_index_filepath = os.path.join(config_manager.paths['final_model_dir'], 'c_index_values.json')
+    with open(c_index_filepath, 'r') as f:
+        c_index_values = json.load(f)
+    print(f"C-index values loaded from {c_index_filepath}")
+
+    brier_score_filepath = os.path.join(config_manager.paths['final_model_dir'], 'brier_score_values.json')
+    with open(brier_score_filepath, 'r') as f:
+        brier_score_values = json.load(f)
+    print(f"Brier score values loaded from {brier_score_filepath}")
+
+    roc_prc_filepath = os.path.join(config_manager.paths['final_model_dir'], 'roc_prc_values.json')
+    with open(roc_prc_filepath, 'r') as f:
+        roc_prc_values = json.load(f)
+    print(f"ROC and PRC values loaded from {roc_prc_filepath}")
+
+    ece_filepath = os.path.join(config_manager.paths['final_model_dir'], 'ece_values.json')
+    with open(ece_filepath, 'r') as f:
+        ece_values = json.load(f)
+    print(f"ECE values loaded from {ece_filepath}")
+
+    # compute p-values for each cohort between 'all' and cohort-specific models
+    statistics = {
+        model_type: {
+            cohort: {}
+            for cohort in c_index_values[model_type].keys()
+        }
+        for model_type in c_index_values.keys()
+    }
+
+    for model_type in c_index_values.keys():
+        for cohort in c_index_values[model_type].keys():
+            all_model_cindices = c_index_values[model_type][cohort]['all']
+            cohort_model_cindices = c_index_values[model_type][cohort][cohort]
+
+            # perform paired t-test
+            t_stat, p_value = stats.ttest_rel(all_model_cindices, cohort_model_cindices)
+            statistics[model_type][cohort]['t_stat'] = t_stat
+            statistics[model_type][cohort]['p_value'] = p_value
+
+    # plot c-index comparison
+    plot_dir = config_manager.paths['final_model_dir']
+    plot_c_index(c_index_values, statistics, plot_dir)
+
+
+
+
 
 
 def main():

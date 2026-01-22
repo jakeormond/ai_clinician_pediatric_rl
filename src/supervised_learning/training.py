@@ -288,6 +288,13 @@ def evaluate_model(
         
         
         time_to_event = batch['time_to_event']
+        mask = batch['loss_mask']
+        if config_manager.model_type == 'dynamic_deephit_transformer' and \
+            config_manager.training_config.get('final_timestep_only', True):
+            time_to_event = time_to_event[:, -1]
+            mask = mask[:, -1]
+
+
         event_labels = batch['event']
         
         # if logits has 4 dimension (i.e. transformer version), reshape to 3D by merging first two dimensions
@@ -302,7 +309,7 @@ def evaluate_model(
             event_labels = event_labels.reshape(B * T_cap)
 
             # get mask and reshape
-            mask = batch['loss_mask'].reshape(B * T_cap)
+            mask = mask.reshape(B * T_cap)
             logits = logits[mask]
             time_to_event = time_to_event[mask]
             event_labels = event_labels[mask]

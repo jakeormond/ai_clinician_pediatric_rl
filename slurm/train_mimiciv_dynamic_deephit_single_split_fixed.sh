@@ -68,7 +68,8 @@ python -m src.scripts.supervised.supervised_learning \
     --mode single_split \
     --search_variant fixed_hyperparameters \
     --n_epochs 200 \
-    --cohort sepsis_broad \
+    --cohort all \
+    --final_timestep_only True \
     --start_time $START_TIME     
 
 exit_code=$?

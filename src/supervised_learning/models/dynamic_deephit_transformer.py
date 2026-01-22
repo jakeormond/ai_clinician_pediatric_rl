@@ -349,6 +349,7 @@ class TransformerDeepHitTrainer:
         physiological_feature_type = None,
         l1_params: list = [],
         l1_lambda: float = 0.0,
+        final_timestep_only: bool = True,
     ):
         """
         Args:
@@ -379,6 +380,7 @@ class TransformerDeepHitTrainer:
         self.physiological_feature_type = physiological_feature_type
         self.l1_params = l1_params
         self.l1_lambda = float(l1_lambda)
+        self.final_timestep_only = final_timestep_only
 
     def train(self, batch: TensorBatch, epoch: int):
 
@@ -407,7 +409,7 @@ class TransformerDeepHitTrainer:
         
         # We need to restructure the risk_logits for the loss function:
         # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_risks, num_time_bins]
-        logits = torch.stack(risk_logits, dim=2)
+        logits = torch.stack(risk_logits, dim=2) 
 
         # Compute log loss and ranking loss
         loss, lik_loss, class_loss, rank_loss, pred_loss = self.loss_fn(
@@ -425,10 +427,15 @@ class TransformerDeepHitTrainer:
             predict_covariates=self.model.predict_covariates,
             predict_horizon=self.model.prediction_time_horizon,
             physiological_feature_type=self.physiological_feature_type,
-            mask = mask
+            mask = mask,
+            final_timestep_only = self.final_timestep_only
             )
         
         # calculate c index here for logging if needed
+        if self.final_timestep_only:
+            logits = logits[:, -1:, :, :]  # [B, 1, K, D]
+            time_to_event = time_to_event[:, -1:]  # [B, 1]
+        
         B, T_cap, K, D = logits.shape
         
         # reshape logits to [B*T_cap, K, num_time_bins] for c-index calculation
@@ -503,7 +510,7 @@ class TransformerDeepHitTrainer:
             risk_logits, covariate_pred = self.model(X, padding_mask=None)
             # We need to restructure the risk_logits for the loss function:
             # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_risks, num_time_bins]
-            logits = torch.stack(risk_logits, dim=2)
+            logits = torch.stack(risk_logits, dim=2)          
             
             # Compute log loss and ranking loss
             loss, lik_loss, class_loss, rank_loss, pred_loss = self.loss_fn(
@@ -521,8 +528,12 @@ class TransformerDeepHitTrainer:
                 predict_covariates=self.model.predict_covariates,
                 predict_horizon=self.model.prediction_time_horizon,
                 physiological_feature_type=self.physiological_feature_type,
-                mask = mask
+                mask = mask,
+                final_timestep_only = self.final_timestep_only
                 )
+            
+            if self.final_timestep_only:
+                logits = logits[:, -1:, :, :]  # [B, 1, K, D]
 
         # set model back to train mode
         self.model.train()
@@ -644,6 +655,7 @@ def dynamic_deephit_loss(
         eps=1e-8,
         g_sigma_scheduler=None,
         epoch=None,
+        final_timestep_only = True,
         ):
     """
     Dynamic-DeepHit loss for competing risks (multi-risk, discrete-time)
@@ -675,6 +687,13 @@ def dynamic_deephit_loss(
     # flatten tensors where needed
     # 2. Reshape to [B * T_cap, num_risks, num_time_bins] for the loss function
     #    (Assuming your existing loss function expects a flattened batch/time dimension)
+    if final_timestep_only:
+        # only keep the final timestep's logits for each patient
+        logits = logits[:, -1:, :, :]  # [B, 1, R, D]
+        time_to_event = time_to_event[:, -1:]  # [B]
+        event_label = event_label      # [B]
+        mask = mask[:, -1:]            # [B, 1]
+    
     B, T_cap, R, D = logits.shape
     logits_flat = logits.reshape(B * T_cap, R, D)
     

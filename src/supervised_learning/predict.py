@@ -7,6 +7,7 @@ entire test dataset. Outputs predictions to a Parquet file along with metadata.
 # predict.py
 import argparse
 import json
+from sklearn import metrics
 import torch
 import numpy as np
 import pandas as pd
@@ -244,7 +245,7 @@ def predict(config_manager):
         dynamic_deephit_dataset = inference_loop(dynamic_deephit_model, test_processor, config_manager,device='cuda')
 
 
-def plot_c_index(c_index_values, statistics, plot_dir):
+def plot_c_index(c_index_values, plot_dir):
     # create 2 subplots, one for each model type, and plot all the pairs of c-index values as boxplots
     models = c_index_values.keys()
     cohorts = c_index_values['GRU'].keys()
@@ -454,6 +455,7 @@ def paired_bootstrap_evaluation(
             c_index_results = {k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else (v.cpu().numpy() if isinstance(v, torch.Tensor) else v) for k, v in c_index_results.items()}
             brier_score_results = {k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else (v.cpu().numpy() if isinstance(v, torch.Tensor) else v) for k, v in brier_score_results.items()}
             roc_prc_results = {k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else (v.cpu().numpy() if isinstance(v, torch.Tensor) else v) for k, v in roc_prc_results.items()}
+            ece_results = {k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else (v.cpu().numpy() if isinstance(v, torch.Tensor) else v) for k, v in ece_results.items()}
             
             c_index_bootstraps[model_group].append(c_index_results)
             brier_score_bootstraps[model_group].append(brier_score_results)
@@ -476,7 +478,9 @@ def paired_bootstrap_evaluation(
             roc_prc_bootstraps[model_group]] for k in 
                 roc_prc_bootstraps[model_group][0]}    
 
-    
+        ece_bootstraps[model_group] = {k: [d[k] for d in 
+            ece_bootstraps[model_group]] for k in 
+                ece_bootstraps[model_group][0]}
 
     return c_index_bootstraps, brier_score_bootstraps, roc_prc_bootstraps, ece_bootstraps
 
@@ -663,6 +667,51 @@ def predict_all(
     print(f"ECE values saved to {ece_bootstraps_filepath}")
 
 
+def get_formatted_cell(boot_samples):
+    """
+    Takes a list of bootstrap scores and returns a 'Mean (CI_Low - CI_High)' string.
+    """
+    mean = np.mean(boot_samples)
+    low = np.percentile(boot_samples, 2.5)
+    high = np.percentile(boot_samples, 97.5)
+    
+    # Using 3 decimal places is standard for clinical journals
+    return f"{mean:.3f} ({low:.3f}–{high:.3f})"
+
+
+
+def create_summary_table(c_index_values, brier_score_values, roc_prc_values, ece_values, inner_group, config_manager):
+    outer_keys = c_index_values.keys()
+    inner_keys = c_index_values[list(outer_keys)[0]].keys()
+    if len(outer_keys) == 1:
+        # only one outer key, so inner keys are cohorts
+        rows = []
+        for inner_key in inner_keys:
+            rows.append({
+                inner_group: inner_key,
+                "Weighted C-Index": get_formatted_cell(c_index_values[list(outer_keys)[0]][inner_key]['C_weighted_multi']),
+                
+                "C-Index (Surv)": get_formatted_cell(np.array(c_index_values[list(outer_keys)[0]][inner_key]['C_integrated_k'])[:,0]),
+                "C-Index (Death)": get_formatted_cell(np.array(c_index_values[list(outer_keys)[0]][inner_key]['C_integrated_k'])[:,1]),
+                
+                "Brier (Multi)": get_formatted_cell(brier_score_values[list(outer_keys)[0]][inner_key]['ibs_multi']),
+                "Brier (Surv)": get_formatted_cell(np.array(brier_score_values[list(outer_keys)[0]][inner_key]['ibs_k'])[:,0]),
+                "Brier (Death)": get_formatted_cell(np.array(brier_score_values[list(outer_keys)[0]][inner_key]['ibs_k'])[:,1]),
+
+                "Weighted ECE": get_formatted_cell(ece_values[list(outer_keys)[0]][inner_key]['summary_ece']),
+                "Integrated ECE (Surv)": get_formatted_cell(np.array(ece_values[list(outer_keys)[0]][inner_key]['event_eces'])[:,0]),
+                "Integrated ECE (Death)": get_formatted_cell(np.array(ece_values[list(outer_keys)[0]][inner_key]['event_eces'])[:,1])
+            })
+            
+        df = pd.DataFrame(rows)    
+
+
+
+
+
+    pass
+
+
 def plot_evaluation(
         config_manager,
         cohorts=['sepsis_strict', 'sepsis_broad', 'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad'],
@@ -692,29 +741,15 @@ def plot_evaluation(
     with open(ece_filepath, 'r') as f:
         ece_values = json.load(f)
     print(f"ECE values loaded from {ece_filepath}")
+  
+    # create table of scores
+    create_summary_table(c_index_values, brier_score_values, roc_prc_values, ece_values, inner_group, config_manager)
 
+    
     # compute p-values for each cohort between 'all' and cohort-specific models
-    statistics = {
-        model_type: {
-            cohort: {}
-            for cohort in c_index_values[model_type].keys()
-        }
-        for model_type in c_index_values.keys()
-    }
-
-    for model_type in c_index_values.keys():
-        for cohort in c_index_values[model_type].keys():
-            all_model_cindices = c_index_values[model_type][cohort]['all']
-            cohort_model_cindices = c_index_values[model_type][cohort][cohort]
-
-            # perform paired t-test
-            t_stat, p_value = stats.ttest_rel(all_model_cindices, cohort_model_cindices)
-            statistics[model_type][cohort]['t_stat'] = t_stat
-            statistics[model_type][cohort]['p_value'] = p_value
-
     # plot c-index comparison
     plot_dir = config_manager.paths['final_model_dir']
-    plot_c_index(c_index_values, statistics, plot_dir)
+    plot_c_index(c_index_values, plot_dir)
 
 
 def main():

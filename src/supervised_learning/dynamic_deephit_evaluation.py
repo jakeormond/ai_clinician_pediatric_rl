@@ -524,4 +524,24 @@ def calculate_all_bin_ece(logits, true_bins, true_events, n_calibration_bins=10)
             
             ece_matrix[k, t] = ece_t
             
-    return ece_matrix
+    # calculate integrated and event weighted ECE
+    K, T = ece_matrix.shape
+    
+    # 1. Integrate over Time (Average across the 8 bins)
+    # This gives you one ECE value per event type
+    event_eces = np.mean(ece_matrix, axis=1) # Shape: [K]
+
+    # 2. Calculate Event Weights (Prevalence)
+    # Count how many of each event occurred in the test set
+    counts = np.array([np.sum(true_events == k) for k in range(K)])
+    weights = counts / np.sum(counts)
+
+    # 3. Final Weighted Scalar
+    summary_ece = np.sum(event_eces * weights)
+
+    return {
+        "ece_matrix": ece_matrix,
+        "event_eces": event_eces,
+        "summary_ece": summary_ece
+    }
+    

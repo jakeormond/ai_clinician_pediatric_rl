@@ -497,6 +497,8 @@ def calculate_all_bin_ece(logits, true_bins, true_events, n_calibration_bins=10)
     
     N, K, T = cif.shape
     ece_matrix = np.zeros((K, T))
+    # New: dictionary to store (mean_pred, mean_true, bin_counts) for plotting
+    curve_data = {}
     bin_boundaries = np.linspace(0, 1, n_calibration_bins + 1)
 
     for k in range(K):
@@ -506,6 +508,11 @@ def calculate_all_bin_ece(logits, true_bins, true_events, n_calibration_bins=10)
             
             # Predicted cumulative probability for event k at time t
             pred_probs_t = cif[:, k, t]
+
+            # Pre-initialize for 10 bins
+            confidences = np.full(n_calibration_bins, np.nan)
+            accuracies = np.full(n_calibration_bins, np.nan)
+            counts = np.zeros(n_calibration_bins)
             
             ece_t = 0.0
             for i in range(n_calibration_bins):
@@ -521,8 +528,19 @@ def calculate_all_bin_ece(logits, true_bins, true_events, n_calibration_bins=10)
                     
                     # Weighted absolute calibration gap
                     ece_t += (bin_count / N) * np.abs(avg_acc - avg_conf)
+
+                    # Save for plotting
+                    confidences[i] = avg_conf
+                    accuracies[i] = avg_acc
+                    counts[i] = bin_count
             
             ece_matrix[k, t] = ece_t
+            
+            curve_data[f"{k}_{t}"] = {
+                "confidences": confidences,
+                "accuracies": accuracies,
+                "counts": counts
+            }
             
     # calculate integrated and event weighted ECE
     K, T = ece_matrix.shape
@@ -542,6 +560,7 @@ def calculate_all_bin_ece(logits, true_bins, true_events, n_calibration_bins=10)
     return {
         "ece_matrix": ece_matrix,
         "event_eces": event_eces,
-        "summary_ece": summary_ece
+        "summary_ece": summary_ece,
+        "curve_data": curve_data
     }
     

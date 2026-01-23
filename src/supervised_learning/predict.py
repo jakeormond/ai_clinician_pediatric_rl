@@ -8,6 +8,7 @@ entire test dataset. Outputs predictions to a Parquet file along with metadata.
 import argparse
 import json
 from sklearn import metrics
+from supervised_learning.plotting import plot_calibration_curve
 import torch
 import numpy as np
 import pandas as pd
@@ -245,7 +246,7 @@ def predict(config_manager):
         dynamic_deephit_dataset = inference_loop(dynamic_deephit_model, test_processor, config_manager,device='cuda')
 
 
-def plot_c_index(c_index_values, plot_dir):
+def plot_c_index_boxplots(c_index_values, plot_dir):
     # create 2 subplots, one for each model type, and plot all the pairs of c-index values as boxplots
     models = c_index_values.keys()
     cohorts = c_index_values['GRU'].keys()
@@ -558,7 +559,7 @@ def _to_jsonable(obj):
 
 def predict_all(
         config_manager, 
-        n_bootstrap_samples=100,
+        n_bootstrap_samples=3,
         models=['GRU', 'transformer'],
         cohorts=['sepsis_strict', 'sepsis_broad', 'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad'],
         outer_group='models',
@@ -700,16 +701,210 @@ def create_summary_table(c_index_values, brier_score_values, roc_prc_values, ece
 
                 "Weighted ECE": get_formatted_cell(ece_values[list(outer_keys)[0]][inner_key]['summary_ece']),
                 "Integrated ECE (Surv)": get_formatted_cell(np.array(ece_values[list(outer_keys)[0]][inner_key]['event_eces'])[:,0]),
-                "Integrated ECE (Death)": get_formatted_cell(np.array(ece_values[list(outer_keys)[0]][inner_key]['event_eces'])[:,1])
+                "Integrated ECE (Death)": get_formatted_cell(np.array(ece_values[list(outer_keys)[0]][inner_key]['event_eces'])[:,1]),
+                
+                "auroc": get_formatted_cell(np.array(roc_prc_values[list(outer_keys)[0]][inner_key]['auroc'])),
+                "auprc": get_formatted_cell(np.array(roc_prc_values[list(outer_keys)[0]][inner_key]['average_precision']))
+            
             })
             
         df = pd.DataFrame(rows)    
+        table_filepath = os.path.join(config_manager.paths['final_model_dir'], 'all_stays_summary_table.csv')
+        df.to_csv(table_filepath, index=False)
+        print(f"Summary table saved to {table_filepath}")
+        return df
+
+    else:
+        # raise NotImplementedError for now
+        raise NotImplementedError("Summary table creation for multiple outer keys is not implemented yet.")
+
+
+def combine_calibration_bootstraps(calibration_bootstraps):
+    combined_data = {}
+    all_keys = calibration_bootstraps[0].keys() # ['0_0', '0_1', ..., '1_7']
+
+    for key in all_keys:
+        # 1. Collect all accuracy/confidence arrays for this specific key
+        # Using float to ensure 'null' from JSON becomes 'np.nan'
+        acc_list = [np.array(boot[key]['accuracies'], dtype=float) for boot in calibration_bootstraps]
+        conf_list = [np.array(boot[key]['confidences'], dtype=float) for boot in calibration_bootstraps]
+        count_list = [np.array(boot[key]['counts'], dtype=float) for boot in calibration_bootstraps]
+
+        # 2. Stack into 2D arrays: Shape (100, 10) 
+        # (100 bootstraps, 10 calibration bins)
+        acc_stack = np.stack(acc_list)
+        conf_stack = np.stack(conf_list)
+        count_stack = np.stack(count_list)
+
+        # 3. Calculate stats across axis 0 (the bootstrap dimension)
+        combined_data[key] = {
+            "mean_accuracy": np.nanmean(acc_stack, axis=0),
+            "lower_accuracy": np.nanpercentile(acc_stack, 2.5, axis=0),
+            "upper_accuracy": np.nanpercentile(acc_stack, 97.5, axis=0),
+            
+            "mean_confidence": np.nanmean(conf_stack, axis=0),
+            "total_counts": np.nansum(count_stack, axis=0)
+        }
+    
+    return combined_data
+
+
+def plot_calibration_panel(ax, calibration_data, risk_idx, time_bin, title="Calibration Plot"):
+    # The X-axis is the predicted probability (confidence)
+    keys = list(calibration_data.keys())
+    
+    # 1. Identity Line
+    ax.plot([0, 1], [0, 1], 'k--', alpha=0.5, label='Perfectly Calibrated')
+
+    for key in keys:
+        key_str = f"{risk_idx}_{time_bin}"
+
+        x = calibration_data[key][f"{risk_idx}_{time_bin}"]["mean_confidence"]
+        y = calibration_data[key][f"{risk_idx}_{time_bin}"]["mean_accuracy"]
+        y_low = calibration_data[key][f"{risk_idx}_{time_bin}"]["lower_accuracy"]
+        y_high = calibration_data[key][f"{risk_idx}_{time_bin}"]["upper_accuracy"]
+
+        # 2. Shaded Confidence Interval
+        # Note: fill_between works best if you filter out the NaNs first
+        mask = ~np.isnan(x) & ~np.isnan(y)
+        ax.fill_between(x[mask], y_low[mask], y_high[mask], alpha=0.2)
+
+        # 3. Mean Curve
+        ax.plot(x[mask], y[mask], 'o-', label=key)
+    ax.legend()
+
+    ax.set_title(title)
+    ax.set_xlabel("Predicted Probability")
+    ax.set_ylabel("Observed Frequency")
+    ax.set_xlim([0, 1])
+    ax.set_ylim([0, 1])
+    ax.grid(True, alpha=0.3)
+
+
+def plot_ece(ece_values, config_manager):
+        outer_keys = ece_values.keys()
+        inner_keys = ece_values[list(outer_keys)[0]].keys()
+        if len(outer_keys) == 1:
+            ece_data = {}
+            calibration_data = {}
+            for inner_key in inner_keys:
+                # load calibration curve data from json file
+                ece_matrix_bootstraps = np.array(ece_values[list(outer_keys)[0]][inner_key]['ece_matrix'])
+                calibration_bootstraps = ece_values[list(outer_keys)[0]][inner_key]['curve_data']
+                # calculate mean and 95% CI for each risk
+                ece_data[inner_key] = {}
+                for risk_idx, risk_name in enumerate(['Survival', 'Death']):
+                    mean_ece = np.mean(ece_matrix_bootstraps[:, risk_idx, :], axis=0)
+                    ci_lower = np.percentile(ece_matrix_bootstraps[:, risk_idx, :], 2.5, axis=0)
+                    ci_upper = np.percentile(ece_matrix_bootstraps[:, risk_idx, :], 97.5, axis=0)
+                  
+                    ece_data[inner_key][risk_name] = {
+                        'mean_ece': mean_ece,
+                        'ci_lower': ci_lower,
+                        'ci_upper': ci_upper
+                    }
+
+                    calibration_data[inner_key] = combine_calibration_bootstraps(calibration_bootstraps)
+
+            # plot ece
+            plot_path = os.path.join(
+                config_manager.paths['final_model_dir'], 
+                f'ece_{list(outer_keys)[0]}.png'
+            )
+
+            # 2 subplots, one for each risk
+            fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+            for risk_idx, risk_name in enumerate(['Survival', 'Death']):
+                ax = axes[risk_idx, 0]
+                for inner_key in inner_keys:
+                    mean_ece = ece_data[inner_key][risk_name]['mean_ece']
+                    ci_lower = ece_data[inner_key][risk_name]['ci_lower']
+                    ci_upper = ece_data[inner_key][risk_name]['ci_upper']
+
+                    ax.plot( 
+                        mean_ece, 
+                        label=f'Cohort: {inner_key}'
+                    )
+                    ax.fill_between(
+                        np.arange(len(mean_ece)), 
+                        ci_lower, 
+                        ci_upper, 
+                        alpha=0.3
+                    )
+                ax.set_title(f'Expected Calibration Error - {risk_name}')
+                ax.set_xlabel('time bins')
+                ax.set_ylabel('ECE')
+                ax.legend()
+
+                ax = axes[risk_idx, 1]
+                plot_calibration_panel(ax, calibration_data, risk_idx, time_bin=0, title=f"{risk_name}: Immediate Horizon (0-6h)")
+                ax = axes[risk_idx, 2]
+                plot_calibration_panel(ax, calibration_data, risk_idx, time_bin=7, title=f"{risk_name}: Distal Horizon (322-1435h)")
+
+            plt.tight_layout()
+            plt.savefig(plot_path)
+            print(f"ECE plot saved to {plot_path}")
+        
+        else:
+            raise NotImplementedError("ECE plotting for multiple outer keys is not implemented yet.")
+                               
 
 
 
+def plot_c_index(c_index_values, config_manager):
+    outer_keys = c_index_values.keys()
+    inner_keys = c_index_values[list(outer_keys)[0]].keys()
+    if len(outer_keys) == 1:
+        mean_c_index = {}
+        ci_lower = {}
+        ci_upper = {}
 
+        for inner_key in inner_keys:
+            # plot c-index over time for each cohort
+            c_index_matrix_bootstraps = np.array(c_index_values[list(outer_keys)[0]][inner_key]['C_k_t'])
+            mean_c_index[inner_key] = np.mean(c_index_matrix_bootstraps, axis=0)
+            ci_lower[inner_key] = np.percentile(c_index_matrix_bootstraps, 2.5, axis=0)
+            ci_upper[inner_key] = np.percentile(c_index_matrix_bootstraps, 97.5, axis=0)
 
-    pass
+        plot_path = os.path.join(
+            config_manager.paths['final_model_dir'], 
+            f'c_index_over_time_{list(outer_keys)[0]}.png'
+        )
+
+        fig, axes = plt.subplots(2, 1, figsize=(8, 12))
+        for risk_idx, risk_name in enumerate(['Survival', 'Death']):
+            ax = axes[risk_idx]
+            for inner_key in inner_keys:
+                mean_c_idx = mean_c_index[inner_key][risk_idx, :]
+                ci_low = ci_lower[inner_key][risk_idx, :]
+                ci_up = ci_upper[inner_key][risk_idx, :]
+
+                ax.plot( 
+                    mean_c_idx, 
+                    label=f'Cohort: {inner_key}'
+                )
+                ax.fill_between(
+                    np.arange(len(mean_c_idx)), 
+                    ci_low, 
+                    ci_up, 
+                    alpha=0.3
+                )
+            ax.set_title(f'C-Index Over Time - {risk_name}')
+            ax.set_xlabel('Time Bins')
+            ax.set_ylabel('C-Index')
+            ax.set_ylim([0.65, .9])
+            ax.grid(True, alpha=0.3)
+            ax.legend()
+
+        plt.tight_layout()
+        plt.savefig(plot_path)
+        print(f"C-index plot saved to {plot_path}")
+        
+        
+    
+    
+    else:
+        raise NotImplementedError("C-index plotting for multiple outer keys is not implemented yet.")
 
 
 def plot_evaluation(
@@ -745,11 +940,12 @@ def plot_evaluation(
     # create table of scores
     create_summary_table(c_index_values, brier_score_values, roc_prc_values, ece_values, inner_group, config_manager)
 
-    
+    # plot calibration curves
+    plot_ece(ece_values, inner_group, config_manager)
+
     # compute p-values for each cohort between 'all' and cohort-specific models
     # plot c-index comparison
-    plot_dir = config_manager.paths['final_model_dir']
-    plot_c_index(c_index_values, plot_dir)
+    plot_c_index(c_index_values, config_manager)
 
 
 def main():

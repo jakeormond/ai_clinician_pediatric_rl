@@ -941,7 +941,7 @@ def plot_evaluation(
     create_summary_table(c_index_values, brier_score_values, roc_prc_values, ece_values, inner_group, config_manager)
 
     # plot calibration curves
-    plot_ece(ece_values, inner_group, config_manager)
+    plot_ece(ece_values, config_manager)
 
     # compute p-values for each cohort between 'all' and cohort-specific models
     # plot c-index comparison

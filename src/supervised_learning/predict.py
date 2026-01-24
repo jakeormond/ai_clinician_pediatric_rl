@@ -8,7 +8,7 @@ entire test dataset. Outputs predictions to a Parquet file along with metadata.
 import argparse
 import json
 from sklearn import metrics
-from supervised_learning.plotting import plot_calibration_curve
+from ..supervised_learning.plotting import plot_calibration_curve
 import torch
 import numpy as np
 import pandas as pd

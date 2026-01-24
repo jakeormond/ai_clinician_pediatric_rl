@@ -881,7 +881,7 @@ def plot_c_index(c_index_values, config_manager):
 
                 ax.plot( 
                     mean_c_idx, 
-                    label=f'Cohort: {inner_key}'
+                    label=f'Model: {inner_key}'
                 )
                 ax.fill_between(
                     np.arange(len(mean_c_idx)), 

@@ -228,8 +228,28 @@ def main():
             """
             cohorts = ['aki_broad', 'aki_strict', 'ards_broad', 'ards_strict',
                        'sepsis_broad', 'sepsis_strict']
-            models = ['GRU', 'transformer']
-
+            
+            
+            # models = ['GRU', 'transformer']
+            # predict_all(
+            #     config_manager, 
+            #     n_bootstrap_samples=100,
+            #     cohorts=['all'],
+            #     models=models,
+            #     outer_group='cohorts',
+            #     inner_group='models',
+            #     base_filename='all_stays_model_comparison'
+            # )
+           
+            # plot_evaluation(
+            #     config_manager,
+            #     cohorts=['all'],
+            #     models=['GRU', 'transformer'],
+            #     outer_group='cohorts',
+            #     inner_group='models',
+            #     base_filename='all_stays_model_comparison') 
+            
+            # models = ['transformer']
             # predict_all(
             #     config_manager, 
             #     cohorts=cohorts,
@@ -238,25 +258,14 @@ def main():
             #     inner_group='cohorts',
             #     base_filename='cohort_model_comparison'
             # )
-            
-            
-            predict_all(
-                config_manager, 
-                n_bootstrap_samples=100,
-                cohorts=['all'],
-                models=['GRU', 'transformer'],
-                outer_group='cohorts',
-                inner_group='models',
-                base_filename='all_stays_model_comparison'
-            )
-           
+
             plot_evaluation(
                 config_manager,
-                cohorts=['all'],
-                models=['GRU', 'transformer'],
-                outer_group='cohorts',
-                inner_group='models',
-                base_filename='all_stays_model_comparison') 
+                cohorts=cohorts,
+                models=['transformer'],
+                outer_group='models',
+                inner_group='cohorts',
+                base_filename='cohort_model_comparison') 
             
     
     elif args.mode == 'development_single_split':

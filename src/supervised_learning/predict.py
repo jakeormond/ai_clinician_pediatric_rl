@@ -682,36 +682,59 @@ def get_formatted_cell(boot_samples):
 
 
 def create_summary_table(c_index_values, brier_score_values, roc_prc_values, ece_values, inner_group, config_manager):
-    outer_keys = c_index_values.keys()
-    inner_keys = c_index_values[list(outer_keys)[0]].keys()
+    outer_keys = c_index_values.keys()        
+    
+    if inner_group == 'models':
+        inner_keys = [list(c_index_values[list(outer_keys)[0]].keys())]
+    else:
+        inner_keys_temp = list(c_index_values[list(outer_keys)[0]].keys())
+        inner_keys = [[key, 'all'] for key in inner_keys_temp]
+    
     if len(outer_keys) == 1:
-        # only one outer key, so inner keys are cohorts
-        rows = []
         for inner_key in inner_keys:
-            rows.append({
-                inner_group: inner_key,
-                "Weighted C-Index": get_formatted_cell(c_index_values[list(outer_keys)[0]][inner_key]['C_weighted_multi']),
+            rows = []
+            for key in inner_key:
+                if inner_group == 'models':
+                    c_index_data = c_index_values[list(outer_keys)[0]][key]
+                    brier_score_data = brier_score_values[list(outer_keys)[0]][key]
+                    ece_data = ece_values[list(outer_keys)[0]][key]
+                    roc_prc_data = roc_prc_values[list(outer_keys)[0]][key]
+                else:
+                    c_index_data = c_index_values[list(outer_keys)[0]][inner_key[0]][key]
+                    brier_score_data = brier_score_values[list(outer_keys)[0]][inner_key[0]][key]
+                    ece_data = ece_values[list(outer_keys)[0]][inner_key[0]][key]
+                    roc_prc_data = roc_prc_values[list(outer_keys)[0]][inner_key[0]][key]               
                 
-                "C-Index (Surv)": get_formatted_cell(np.array(c_index_values[list(outer_keys)[0]][inner_key]['C_integrated_k'])[:,0]),
-                "C-Index (Death)": get_formatted_cell(np.array(c_index_values[list(outer_keys)[0]][inner_key]['C_integrated_k'])[:,1]),
+                rows.append({
+                    inner_group: key,
+                    "Weighted C-Index": get_formatted_cell(c_index_data['C_weighted_multi']),
+                    
+                    "C-Index (Surv)": get_formatted_cell(np.array(c_index_data['C_integrated_k'])[:,0]),
+                    "C-Index (Death)": get_formatted_cell(np.array(c_index_data['C_integrated_k'])[:,1]),
+                    
+                    "Brier (Multi)": get_formatted_cell(brier_score_data['ibs_multi']),
+                    "Brier (Surv)": get_formatted_cell(np.array(brier_score_data['ibs_k'])[:,0]),
+                    "Brier (Death)": get_formatted_cell(np.array(brier_score_data['ibs_k'])[:,1]),
+                    
+                    "Weighted ECE": get_formatted_cell(ece_data['summary_ece']),
+                    "Integrated ECE (Surv)": get_formatted_cell(np.array(ece_data['event_eces'])[:,0]),
+                    "Integrated ECE (Death)": get_formatted_cell(np.array(ece_data['event_eces'])[:,1]),
+                    
+                    "auroc": get_formatted_cell(np.array(roc_prc_data['auroc'])),
+                    "auprc": get_formatted_cell(np.array(roc_prc_data['average_precision']))
                 
-                "Brier (Multi)": get_formatted_cell(brier_score_values[list(outer_keys)[0]][inner_key]['ibs_multi']),
-                "Brier (Surv)": get_formatted_cell(np.array(brier_score_values[list(outer_keys)[0]][inner_key]['ibs_k'])[:,0]),
-                "Brier (Death)": get_formatted_cell(np.array(brier_score_values[list(outer_keys)[0]][inner_key]['ibs_k'])[:,1]),
-
-                "Weighted ECE": get_formatted_cell(ece_values[list(outer_keys)[0]][inner_key]['summary_ece']),
-                "Integrated ECE (Surv)": get_formatted_cell(np.array(ece_values[list(outer_keys)[0]][inner_key]['event_eces'])[:,0]),
-                "Integrated ECE (Death)": get_formatted_cell(np.array(ece_values[list(outer_keys)[0]][inner_key]['event_eces'])[:,1]),
-                
-                "auroc": get_formatted_cell(np.array(roc_prc_values[list(outer_keys)[0]][inner_key]['auroc'])),
-                "auprc": get_formatted_cell(np.array(roc_prc_values[list(outer_keys)[0]][inner_key]['average_precision']))
+                })
             
-            })
+            df = pd.DataFrame(rows)    
             
-        df = pd.DataFrame(rows)    
-        table_filepath = os.path.join(config_manager.paths['final_model_dir'], 'all_stays_summary_table.csv')
-        df.to_csv(table_filepath, index=False)
-        print(f"Summary table saved to {table_filepath}")
+            if inner_group == 'models':
+                table_filepath = os.path.join(config_manager.paths['final_model_dir'], 'all_models_summary_table.csv')
+            else:
+                table_filepath = os.path.join(config_manager.paths['final_model_dir'], f'{inner_key[0]}_summary_table.csv')
+            
+            df.to_csv(table_filepath, index=False)
+            print(f"Summary table saved to {table_filepath}")
+        
         return df
 
     else:
@@ -781,69 +804,86 @@ def plot_calibration_panel(ax, calibration_data, risk_idx, time_bin, title="Cali
     ax.grid(True, alpha=0.3)
 
 
-def plot_ece(ece_values, config_manager):
+def plot_ece(ece_values, inner_group, config_manager):
         outer_keys = ece_values.keys()
-        inner_keys = ece_values[list(outer_keys)[0]].keys()
+        
+        if inner_group == 'models':
+            inner_keys = [list(ece_values[list(outer_keys)[0]].keys())]
+        else:
+            inner_keys_temp = list(ece_values[list(outer_keys)[0]].keys())
+            inner_keys = [[key, 'all'] for key in inner_keys_temp]
+        
         if len(outer_keys) == 1:
-            ece_data = {}
-            calibration_data = {}
             for inner_key in inner_keys:
-                # load calibration curve data from json file
-                ece_matrix_bootstraps = np.array(ece_values[list(outer_keys)[0]][inner_key]['ece_matrix'])
-                calibration_bootstraps = ece_values[list(outer_keys)[0]][inner_key]['curve_data']
-                # calculate mean and 95% CI for each risk
-                ece_data[inner_key] = {}
+                ece_data = {}
+                calibration_data = {}
+                
+                for key in inner_key:
+                    if inner_group == 'models':
+                        ece_data[key] = ece_values[list(outer_keys)[0]][key]
+                    else:
+                        ece_data[key] = ece_values[list(outer_keys)[0]][inner_key[0]][key]
+                
+                    ece_matrix_bootstraps = np.array(ece_data[key]['ece_matrix'])
+                    calibration_bootstraps = ece_data[key]['curve_data']
+                    # calculate mean and 95% CI for each risk
+                    for risk_idx, risk_name in enumerate(['Survival', 'Death']):
+                        mean_ece = np.mean(ece_matrix_bootstraps[:, risk_idx, :], axis=0)
+                        ci_lower = np.percentile(ece_matrix_bootstraps[:, risk_idx, :], 2.5, axis=0)
+                        ci_upper = np.percentile(ece_matrix_bootstraps[:, risk_idx, :], 97.5, axis=0)
+                    
+                        ece_data[key][risk_name] = {
+                            'mean_ece': mean_ece,
+                            'ci_lower': ci_lower,
+                            'ci_upper': ci_upper
+                        }
+
+                    calibration_data[key] = combine_calibration_bootstraps(calibration_bootstraps)
+
+                # plot ece
+                if inner_group == 'models':
+                    plot_path = os.path.join(
+                        config_manager.paths['final_model_dir'], 
+                        f'ece_{list(outer_keys)[0]}.png'
+                    )
+                else:
+                    plot_path = os.path.join(
+                        config_manager.paths['final_model_dir'], 
+                        f'ece_{inner_key[0]}.png'
+                    )
+
+                # 2 subplots, one for each risk
+                fig, axes = plt.subplots(2, 3, figsize=(18, 12))
                 for risk_idx, risk_name in enumerate(['Survival', 'Death']):
-                    mean_ece = np.mean(ece_matrix_bootstraps[:, risk_idx, :], axis=0)
-                    ci_lower = np.percentile(ece_matrix_bootstraps[:, risk_idx, :], 2.5, axis=0)
-                    ci_upper = np.percentile(ece_matrix_bootstraps[:, risk_idx, :], 97.5, axis=0)
-                  
-                    ece_data[inner_key][risk_name] = {
-                        'mean_ece': mean_ece,
-                        'ci_lower': ci_lower,
-                        'ci_upper': ci_upper
-                    }
+                    ax = axes[risk_idx, 0]
+                    for key in inner_key:
+                        mean_ece = ece_data[key][risk_name]['mean_ece']
+                        ci_lower = ece_data[key][risk_name]['ci_lower']
+                        ci_upper = ece_data[key][risk_name]['ci_upper']
 
-                    calibration_data[inner_key] = combine_calibration_bootstraps(calibration_bootstraps)
+                        ax.plot( 
+                            mean_ece, 
+                            label=f'Cohort: {key}'
+                        )
+                        ax.fill_between(
+                            np.arange(len(mean_ece)), 
+                            ci_lower, 
+                            ci_upper, 
+                            alpha=0.3
+                        )
+                    ax.set_title(f'Expected Calibration Error - {risk_name}')
+                    ax.set_xlabel('time bins')
+                    ax.set_ylabel('ECE')
+                    ax.legend()
 
-            # plot ece
-            plot_path = os.path.join(
-                config_manager.paths['final_model_dir'], 
-                f'ece_{list(outer_keys)[0]}.png'
-            )
+                    ax = axes[risk_idx, 1]
+                    plot_calibration_panel(ax, calibration_data, risk_idx, time_bin=0, title=f"{risk_name}: Immediate Horizon (0-6h)")
+                    ax = axes[risk_idx, 2]
+                    plot_calibration_panel(ax, calibration_data, risk_idx, time_bin=7, title=f"{risk_name}: Distal Horizon (322-1435h)")
 
-            # 2 subplots, one for each risk
-            fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-            for risk_idx, risk_name in enumerate(['Survival', 'Death']):
-                ax = axes[risk_idx, 0]
-                for inner_key in inner_keys:
-                    mean_ece = ece_data[inner_key][risk_name]['mean_ece']
-                    ci_lower = ece_data[inner_key][risk_name]['ci_lower']
-                    ci_upper = ece_data[inner_key][risk_name]['ci_upper']
-
-                    ax.plot( 
-                        mean_ece, 
-                        label=f'Cohort: {inner_key}'
-                    )
-                    ax.fill_between(
-                        np.arange(len(mean_ece)), 
-                        ci_lower, 
-                        ci_upper, 
-                        alpha=0.3
-                    )
-                ax.set_title(f'Expected Calibration Error - {risk_name}')
-                ax.set_xlabel('time bins')
-                ax.set_ylabel('ECE')
-                ax.legend()
-
-                ax = axes[risk_idx, 1]
-                plot_calibration_panel(ax, calibration_data, risk_idx, time_bin=0, title=f"{risk_name}: Immediate Horizon (0-6h)")
-                ax = axes[risk_idx, 2]
-                plot_calibration_panel(ax, calibration_data, risk_idx, time_bin=7, title=f"{risk_name}: Distal Horizon (322-1435h)")
-
-            plt.tight_layout()
-            plt.savefig(plot_path)
-            print(f"ECE plot saved to {plot_path}")
+                plt.tight_layout()
+                plt.savefig(plot_path)
+                print(f"ECE plot saved to {plot_path}")
         
         else:
             raise NotImplementedError("ECE plotting for multiple outer keys is not implemented yet.")
@@ -851,58 +891,70 @@ def plot_ece(ece_values, config_manager):
 
 
 
-def plot_c_index(c_index_values, config_manager):
+def plot_c_index(c_index_values, inner_group,config_manager):
     outer_keys = c_index_values.keys()
-    inner_keys = c_index_values[list(outer_keys)[0]].keys()
+    
+    if inner_group == 'models':
+        inner_keys = [list(c_index_values[list(outer_keys)[0]].keys())]
+    else:
+        inner_keys_temp = list(c_index_values[list(outer_keys)[0]].keys())
+        inner_keys = [[key, 'all'] for key in inner_keys_temp]
+
     if len(outer_keys) == 1:
-        mean_c_index = {}
-        ci_lower = {}
-        ci_upper = {}
-
         for inner_key in inner_keys:
-            # plot c-index over time for each cohort
-            c_index_matrix_bootstraps = np.array(c_index_values[list(outer_keys)[0]][inner_key]['C_k_t'])
-            mean_c_index[inner_key] = np.mean(c_index_matrix_bootstraps, axis=0)
-            ci_lower[inner_key] = np.percentile(c_index_matrix_bootstraps, 2.5, axis=0)
-            ci_upper[inner_key] = np.percentile(c_index_matrix_bootstraps, 97.5, axis=0)
+            mean_c_index = {}
+            ci_lower = {}
+            ci_upper = {}
 
-        plot_path = os.path.join(
-            config_manager.paths['final_model_dir'], 
-            f'c_index_over_time_{list(outer_keys)[0]}.png'
-        )
+            for key in inner_key:
+                # plot c-index over time for each cohort
+                c_index_matrix_bootstraps = np.array(c_index_values[list(outer_keys)[0]][inner_key[0]][key]['C_k_t'])
+                mean_c_index[key] = np.mean(c_index_matrix_bootstraps, axis=0)
+                ci_lower[key] = np.percentile(c_index_matrix_bootstraps, 2.5, axis=0)
+                ci_upper[key] = np.percentile(c_index_matrix_bootstraps, 97.5, axis=0)
 
-        fig, axes = plt.subplots(2, 1, figsize=(8, 12))
-        for risk_idx, risk_name in enumerate(['Survival', 'Death']):
-            ax = axes[risk_idx]
-            for inner_key in inner_keys:
-                mean_c_idx = mean_c_index[inner_key][risk_idx, :]
-                ci_low = ci_lower[inner_key][risk_idx, :]
-                ci_up = ci_upper[inner_key][risk_idx, :]
-
-                ax.plot( 
-                    mean_c_idx, 
-                    label=f'Model: {inner_key}'
+            if inner_group == 'models':
+                plot_path = os.path.join(
+                    config_manager.paths['final_model_dir'], 
+                    f'c_index_over_time_{list(outer_keys)[0]}.png'
                 )
-                ax.fill_between(
-                    np.arange(len(mean_c_idx)), 
-                    ci_low, 
-                    ci_up, 
-                    alpha=0.3
+            else:
+                plot_path = os.path.join(
+                    config_manager.paths['final_model_dir'], 
+                    f'c_index_over_time_{inner_key[0]}.png'
                 )
-            ax.set_title(f'C-Index Over Time - {risk_name}')
-            ax.set_xlabel('Time Bins')
-            ax.set_ylabel('C-Index')
-            ax.set_ylim([0.65, .9])
-            ax.grid(True, alpha=0.3)
-            ax.legend()
+            
+            fig, axes = plt.subplots(2, 1, figsize=(8, 12))
+            for risk_idx, risk_name in enumerate(['Survival', 'Death']):
+                ax = axes[risk_idx]
+                for key in inner_key:
+                    mean_c_idx = mean_c_index[key][risk_idx, :]
+                    ci_low = ci_lower[key][risk_idx, :]
+                    ci_up = ci_upper[key][risk_idx, :]
 
-        plt.tight_layout()
-        plt.savefig(plot_path)
-        print(f"C-index plot saved to {plot_path}")
+                    ax.plot( 
+                        mean_c_idx, 
+                        label=f'Model: {key}'
+                    )
+                    ax.fill_between(
+                        np.arange(len(mean_c_idx)), 
+                        ci_low, 
+                        ci_up, 
+                        alpha=0.3
+                    )
+                ax.set_title(f'C-Index Over Time - {risk_name}')
+                ax.set_xlabel('Time Bins')
+                ax.set_ylabel('C-Index')
+                ax.set_ylim([0.65, .9])
+                ax.grid(True, alpha=0.3)
+                ax.legend()
+
+            plt.tight_layout()
+            plt.savefig(plot_path)
+            print(f"C-index plot saved to {plot_path}")
+            plt.close()
+            
         
-        
-    
-    
     else:
         raise NotImplementedError("C-index plotting for multiple outer keys is not implemented yet.")
 
@@ -941,12 +993,13 @@ def plot_evaluation(
     create_summary_table(c_index_values, brier_score_values, roc_prc_values, ece_values, inner_group, config_manager)
 
     # plot calibration curves
-    plot_ece(ece_values, config_manager)
+    plot_ece(ece_values, inner_group, config_manager)
 
     # compute p-values for each cohort between 'all' and cohort-specific models
     # plot c-index comparison
-    plot_c_index(c_index_values, config_manager)
+    plot_c_index(c_index_values, inner_group, config_manager)
 
+    pass
 
 def main():
     predict()

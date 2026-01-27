@@ -884,6 +884,7 @@ def plot_ece(ece_values, inner_group, config_manager):
                 plt.tight_layout()
                 plt.savefig(plot_path)
                 print(f"ECE plot saved to {plot_path}")
+                plt.close()
         
         else:
             raise NotImplementedError("ECE plotting for multiple outer keys is not implemented yet.")
@@ -908,7 +909,11 @@ def plot_c_index(c_index_values, inner_group,config_manager):
 
             for key in inner_key:
                 # plot c-index over time for each cohort
-                c_index_matrix_bootstraps = np.array(c_index_values[list(outer_keys)[0]][inner_key[0]][key]['C_k_t'])
+                if inner_group == 'models':
+                    c_index_matrix_bootstraps = np.array(c_index_values[list(outer_keys)[0]][key]['C_k_t'])
+                else:
+                    c_index_matrix_bootstraps = np.array(c_index_values[list(outer_keys)[0]][inner_key[0]][key]['C_k_t'])
+                
                 mean_c_index[key] = np.mean(c_index_matrix_bootstraps, axis=0)
                 ci_lower[key] = np.percentile(c_index_matrix_bootstraps, 2.5, axis=0)
                 ci_upper[key] = np.percentile(c_index_matrix_bootstraps, 97.5, axis=0)
@@ -957,7 +962,197 @@ def plot_c_index(c_index_values, inner_group,config_manager):
         
     else:
         raise NotImplementedError("C-index plotting for multiple outer keys is not implemented yet.")
+    
 
+def plot_brier_score(brier_score_values, inner_group, config_manager):
+    outer_keys = brier_score_values.keys()
+    
+    if inner_group == 'models':
+        inner_keys = [list(brier_score_values[list(outer_keys)[0]].keys())]
+    else:
+        inner_keys_temp = list(brier_score_values[list(outer_keys)[0]].keys())
+        inner_keys = [[key, 'all'] for key in inner_keys_temp]
+
+    if len(outer_keys) == 1:
+        for inner_key in inner_keys:
+            mean_brier_score = {}
+            ci_lower = {}
+            ci_upper = {}
+
+            for key in inner_key:
+                # plot brier score over time for each cohort
+                if inner_group == 'models':
+                    brier_score_matrix_bootstraps = np.array(brier_score_values[list(outer_keys)[0]][key]['bs_k_t'])
+                else:
+                    brier_score_matrix_bootstraps = np.array(brier_score_values[list(outer_keys)[0]][inner_key[0]][key]['bs_k_t'])
+                
+                mean_brier_score[key] = np.mean(brier_score_matrix_bootstraps, axis=0)
+                ci_lower[key] = np.percentile(brier_score_matrix_bootstraps, 2.5, axis=0)
+                ci_upper[key] = np.percentile(brier_score_matrix_bootstraps, 97.5, axis=0)
+
+            if inner_group == 'models':
+                plot_path = os.path.join(
+                    config_manager.paths['final_model_dir'], 
+                    f'brier_score_over_time_{list(outer_keys)[0]}.png'
+                )
+            else:
+                plot_path = os.path.join(
+                    config_manager.paths['final_model_dir'], 
+                    f'brier_score_over_time_{inner_key[0]}.png'
+                )
+
+            fig, axes = plt.subplots(2, 1, figsize=(8, 12))
+            for risk_idx, risk_name in enumerate(['Survival', 'Death']):
+                ax = axes[risk_idx]
+                for key in inner_key:
+                    mean_brier = mean_brier_score[key][risk_idx, :]
+                    ci_low = ci_lower[key][risk_idx, :]
+                    ci_up = ci_upper[key][risk_idx, :]
+
+                    ax.plot( 
+                        mean_brier, 
+                        label=f'Model: {key}'
+                    )
+                    ax.fill_between(
+                        np.arange(len(mean_brier)), 
+                        ci_low, 
+                        ci_up, 
+                        alpha=0.3
+                    )
+                ax.set_title(f'Brier Score Over Time - {risk_name}')
+                ax.set_xlabel('Time Bins')
+                ax.set_ylabel('Brier Score')
+                ax.set_ylim([0.0, 0.3])
+                ax.grid(True, alpha=0.3)
+                ax.legend()
+            
+            plt.tight_layout()
+            plt.savefig(plot_path)
+            print(f"Brier score plot saved to {plot_path}")
+            plt.close()
+        
+    else:
+        raise NotImplementedError("Brier score plotting for multiple outer keys is not implemented yet.")
+
+
+def plot_roc_prc(roc_prc_values, inner_group, config_manager):
+    outer_keys = roc_prc_values.keys()
+    
+    if inner_group == 'models':
+        inner_keys = [list(roc_prc_values[list(outer_keys)[0]].keys())]
+    else:
+        inner_keys_temp = list(roc_prc_values[list(outer_keys)[0]].keys())
+        inner_keys = [[key, 'all'] for key in inner_keys_temp]
+
+    if len(outer_keys) == 1:
+        for inner_key in inner_keys:
+            auroc = {}
+            auprc = {}
+            prevalence = {}
+           
+            for key in inner_key:
+                # plot auroc and auprc over time for each cohort
+                if inner_group == 'models':
+                    auroc_bootstraps = np.array(roc_prc_values[list(outer_keys)[0]][key]['auroc'])
+                    auprc_bootstraps = np.array(roc_prc_values[list(outer_keys)[0]][key]['average_precision'])
+                    prevalence_bootstraps = np.array(roc_prc_values[list(outer_keys)[0]][key]['prevalence'])
+                else:
+                    auroc_bootstraps = np.array(roc_prc_values[list(outer_keys)[0]][inner_key[0]][key]['auroc'])
+                    auprc_bootstraps = np.array(roc_prc_values[list(outer_keys)[0]][inner_key[0]][key]['average_precision'])
+                    prevalence_bootstraps = np.array(roc_prc_values[list(outer_keys)[0]][inner_key[0]][key]['prevalence'])
+                
+                auroc[key] = auroc_bootstraps
+                auprc[key] = auprc_bootstraps
+                prevalence[key] = prevalence_bootstraps
+
+                # confirm that prevalence is the same across bootstraps
+            if not np.array_equal(prevalence[inner_key[0]], prevalence[inner_key[1]]):
+                raise ValueError("Prevalence values differ across models, cannot plot AUPRC with prevalence line.")
+
+            prevalence_bootstraps = prevalence[inner_key[0]]
+
+            if inner_group == 'models':
+                plot_path = os.path.join(
+                    config_manager.paths['final_model_dir'], 
+                    f'roc_prc_{list(outer_keys)[0]}.png'
+                )
+            else:
+                plot_path = os.path.join(
+                    config_manager.paths['final_model_dir'], 
+                    f'roc_prc_{inner_key[0]}.png'
+                )
+
+            fig, axes = plt.subplots(2, 1, figsize=(8, 12))
+            
+            # AUROC violins
+            ax = axes[0]
+            df_auroc = pd.DataFrame({
+                "value": np.r_[auroc[inner_key[0]], auroc[inner_key[1]]],
+                "model": [inner_key[0]] * len(auroc[inner_key[0]]) + [inner_key[1]] * len(auroc [inner_key[1]])
+            })
+            sns.violinplot(data=df_auroc, x="model", y="value", cut=0, inner=None, ax=ax, palette="Set2")
+            sns.pointplot(data=df_auroc, x="model", y="value", estimator=np.median,
+                          join=False, color="k", markers="_", errwidth=2, scale=1.5, ax=ax)
+            
+            # Add 95% CI as horizontal lines
+            # for i, key in enumerate(inner_key):
+            #     ci_low = np.percentile(auroc[key], 2.5)
+            #     ci_high = np.percentile(auroc[key], 97.5)
+            #     ax.plot([i - 0.2, i + 0.2], [ci_low, ci_low], 'r-', linewidth=2, alpha=0.7)
+            #     ax.plot([i - 0.2, i + 0.2], [ci_high, ci_high], 'r-', linewidth=2, alpha=0.7)
+            
+            # get min and max for y-axis limits
+            min_auroc = min(np.min(auroc[inner_key[0]]), np.min(auroc[inner_key[1]]))
+            max_auroc = max(np.max(auroc[inner_key[0]]), np.max(auroc[inner_key[1]]))
+            ax.set_ylim([min_auroc - 0.05, max_auroc + 0.05])
+
+            ax.set_title("AUROC Distribution", fontsize=12, fontweight='bold')
+            ax.set_ylabel("AUROC")
+            ax.grid(True, alpha=0.3, axis='y')
+            
+            # AUPRC violins
+            ax = axes[1]
+            df_auprc = pd.DataFrame({
+                "value": np.r_[auprc[inner_key[0]], auprc[inner_key[1]]],
+                "model": [inner_key[0]] * len(auprc[inner_key[0]]) + [inner_key[1]] * len(auprc[inner_key[1]])
+            })
+            sns.violinplot(data=df_auprc, x="model", y="value", cut=0, inner=None, ax=ax, palette="Set2")
+            sns.pointplot(data=df_auprc, x="model", y="value", estimator=np.median,
+                          join=False, color="k", markers="_", errwidth=2, scale=1.5, ax=ax)
+            
+            # # Add 95% CI as horizontal lines
+            # for i, key in enumerate(inner_key):
+            #     ci_low = np.percentile(auprc[key], 2.5)
+            #     ci_high = np.percentile(auprc[key], 97.5)
+            #     ax.plot([i - 0.2, i + 0.2], [ci_low, ci_low], 'r-', linewidth=2, alpha=0.7)
+            #     ax.plot([i - 0.2, i + 0.2], [ci_high, ci_high], 'r-', linewidth=2, alpha=0.7)
+            
+            # add line for prevalence
+            prevalence_mean = np.mean(prevalence_bootstraps)
+            prevalence_5th = np.percentile(prevalence_bootstraps, 2.5)
+            prevalence_95th = np.percentile(prevalence_bootstraps, 97.5)
+            ax.axhline(prevalence_mean, color='r', linestyle='--', label='Prevalence Mean')
+            ax.fill_between(
+                x=[-0.5, 1.5], 
+                y1=prevalence_5th, 
+                y2=prevalence_95th, 
+                color='r', 
+                alpha=0.2,
+                label='Prevalence 95% CI'
+            )
+            ax.legend()            
+            
+            ax.set_title("AUPRC Distribution", fontsize=12, fontweight='bold')
+            ax.set_ylabel("AUPRC")
+            min_auprc = min(np.min(auprc[inner_key[0]]), np.min(auprc[inner_key[1]]))
+            max_auprc = max(np.max(auprc[inner_key[0]]), np.max(auprc[inner_key[1]]))
+            ax.set_ylim([prevalence_5th - 0.05, max_auprc + 0.05])
+            ax.grid(True, alpha=0.3, axis='y')
+
+            plt.tight_layout()
+            plt.savefig(plot_path)
+            print(f"ROC and PRC plot saved to {plot_path}")
+            plt.close()
 
 def plot_evaluation(
         config_manager,
@@ -999,6 +1194,10 @@ def plot_evaluation(
     # plot c-index comparison
     plot_c_index(c_index_values, inner_group, config_manager)
 
+    # plot brier score comparison
+    plot_brier_score(brier_score_values, inner_group, config_manager)
+
+    plot_roc_prc(roc_prc_values, inner_group, config_manager)
     pass
 
 def main():

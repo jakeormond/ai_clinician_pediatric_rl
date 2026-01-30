@@ -1,6 +1,7 @@
 """for evaluating feature importance of the transformer
 implementation of dynamic deephit"""
 
+import data
 import torch
 import numpy as np
 import os
@@ -8,6 +9,7 @@ import copy
 import json
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.colors as colors
 import seaborn as sns
 from collections import defaultdict
 from captum.attr import IntegratedGradients
@@ -104,9 +106,19 @@ def process_cohort_attributions(
     n_features = len(cohort_processor.dynamic_deephit_dataset['feature_names'])
     
     ig = IntegratedGradients(captum_forward_wrapper)
-    all_attr = {
+    all_features_attr = {
         'discharge': defaultdict(lambda: torch.zeros(n_features)),
         'death': defaultdict(lambda: torch.zeros(n_features))
+    }
+    window_length = config_manager.training_config['window_length']
+    all_times_attr = {
+        'discharge': defaultdict(lambda: torch.zeros(window_length)),
+        'death': defaultdict(lambda: torch.zeros(window_length))
+    }
+
+    all_attr = {
+        'discharge': defaultdict(lambda: torch.zeros(n_features, window_length)),
+        'death': defaultdict(lambda: torch.zeros(n_features, window_length))
     }
 
     for i, batch in enumerate(cohort_buffer):
@@ -128,23 +140,28 @@ def process_cohort_attributions(
 
                 # aggregate immediately to save memory
                 global_feat_imp = attr.abs().sum(dim=(1)).mean(dim=0).cpu().numpy()  # sum over batch and time
+                global_temporal_imp = attr.abs().sum(dim=(2)).mean(dim=0).cpu().numpy()  # sum over batch and features
+                global_imp = attr.abs().mean(dim=0).cpu().numpy()  # mean over batch
 
                 # accumulate
-                all_attr[event_type][timebin] += global_feat_imp
+                all_features_attr[event_type][timebin] += global_feat_imp
+                all_times_attr[event_type][timebin] += global_temporal_imp
+                all_attr[event_type][timebin] += global_imp.T
 
     for event_type in event_types:
         for timebin in range(n_timebins):
         # divide by number of samples to get mean
+            all_features_attr[event_type][timebin] /= n_batches
+            all_times_attr[event_type][timebin] /= n_batches
             all_attr[event_type][timebin] /= n_batches
 
     print("Completed attribution for cohort")        
-    return all_attr
-
+    return all_features_attr, all_times_attr, all_attr
 
 def get_feature_attributions(config_manager, n_batches=None):
     
     model_dir = get_model_dir(config_manager)
-    save_dir = os.path.join(model_dir, 'feature_attributions')
+    save_dir = os.path.join(model_dir, 'attributions')
     # check if save_dir exists 
     if not os.path.exists(save_dir):
         hyperparams, time_bins = load_hyperparams(model_dir)    
@@ -154,6 +171,7 @@ def get_feature_attributions(config_manager, n_batches=None):
         # Create test_processor; note it will throw an error if the normalized test shard is missing.
         # All possible windows will be computed
         test_processor = create_processor_from_shards(config_manager, normalize=True, set_to_return='test')
+        feature_names = test_processor.dynamic_deephit_dataset['feature_names']
         
         # set smaller batch size for attribution computation
         batch_size = 16
@@ -175,6 +193,8 @@ def get_feature_attributions(config_manager, n_batches=None):
         # load the cohort ids
         cohort_ids = get_cohort_ids(test_set, config_manager)
 
+        all_features_attr = {}
+        all_times_attr = {}
         all_attr = {}
         for cohort_name, stay_ids in cohort_ids.items():
             print(f"Processing cohort: {cohort_name} with {len(stay_ids)} patients")
@@ -186,7 +206,7 @@ def get_feature_attributions(config_manager, n_batches=None):
                 # filter the cohort_set to only include the stay_ids in this cohort
                 cohort_processor.dynamic_deephit_dataset = filter_cohort(cohort_processor.dynamic_deephit_dataset, list(stay_ids))
             
-            all_attr[cohort_name] = process_cohort_attributions(
+            all_features_attr[cohort_name], all_times_attr[cohort_name], all_attr[cohort_name] = process_cohort_attributions(
                 dynamic_deephit_model,
                 cohort_processor,
                 config_manager,
@@ -195,72 +215,170 @@ def get_feature_attributions(config_manager, n_batches=None):
             )
 
         # save the attributions
-        save_dir = os.path.join(model_dir, 'feature_attributions')
         os.makedirs(save_dir, exist_ok=True)
-        for cohort_name, cohort_attr in all_attr.items():
+        for cohort_name, cohort_attr in all_features_attr.items():
             for event_type, event_attr in cohort_attr.items():
                 
                 data = {}
                 for timebin, attr_values in event_attr.items():
                     data[f'timebin_{timebin}'] = attr_values
                 
-                attr_df = pd.DataFrame({
+                attr_feature_df = pd.DataFrame({
                     'feature': test_processor.dynamic_deephit_dataset['feature_names'],
                     **data
                 })
                 
-                filename = f"attributions_{cohort_name}_{event_type}.csv"
-                attr_df.to_csv(os.path.join(save_dir, filename), index=False)
+                filename = f"feature_attributions_{cohort_name}_{event_type}.csv"
+                attr_feature_df.to_csv(os.path.join(save_dir, filename), index=False)
                 print(f"Saved attributions to {filename}")
+
+            for event_type, event_attr in all_times_attr[cohort_name].items():
+                data = {}
+                for timepoint, attr_values in event_attr.items():
+                    data[f'timepoint_{timepoint}'] = attr_values
+                
+                attr_time_df = pd.DataFrame(data)
+                
+                filename = f"temporal_attributions_{cohort_name}_{event_type}.csv"
+                attr_time_df.to_csv(os.path.join(save_dir, filename), index=False)
+                print(f"Saved temporal attributions to {filename}")
+
+            for event_type, event_attr in all_attr[cohort_name].items():
+                # combine the arrays across timebins
+                all_attr_array = np.stack([event_attr[timebin] for timebin in range(len(event_attr))], axis=1)  # [Features, Timebins]
+                # save as npy
+                filename = f"full_attributions_{cohort_name}_{event_type}.npy"
+                np.save(os.path.join(save_dir, filename), all_attr_array)
+                print(f"Saved full attributions to {filename}")
+
+                pass # currently not saving the full attributions
 
     else: # load existing attributions
         print(f"Attributions already exist in {save_dir}, loading...")
         cohorts = [folder for folder in os.listdir(os.path.join(config_manager.paths['data_dir'], 'cohorts'))]
         cohorts = ['all'] + cohorts
+        all_features_attr = {}
+        all_times_attr = {}
         all_attr = {}
         for cohort_name in cohorts:
+            all_features_attr[cohort_name] = {}
+            all_times_attr[cohort_name] = {}
             all_attr[cohort_name] = {}
             for event_type in ['discharge', 'death']:
-                filename = f"attributions_{cohort_name}_{event_type}.csv"
-                attr_df = pd.read_csv(os.path.join(save_dir, filename))
+                filename = f"feature_attributions_{cohort_name}_{event_type}.csv"
+                attr_features_df = pd.read_csv(os.path.join(save_dir, filename))
                 
-                event_attr = {}
-                for timebin in range(len(attr_df.columns) - 1):
-                    event_attr[timebin] = attr_df[f'timebin_{timebin}'].values
-                all_attr[cohort_name][event_type] = event_attr
-        feature_names = attr_df['feature'].values
+                event_features_attr = {}
+                for timebin in range(len(attr_features_df.columns) - 1):
+                    event_features_attr[timebin] = attr_features_df[f'timebin_{timebin}'].values
+                all_features_attr[cohort_name][event_type] = event_features_attr
+
+                filename = f"temporal_attributions_{cohort_name}_{event_type}.csv"
+                attr_times_df = pd.read_csv(os.path.join(save_dir, filename))
+
+                event_times_attr = {}
+                for timepoint in range(len(attr_times_df.columns)):
+                    event_times_attr[timepoint] = attr_times_df[f'timepoint_{timepoint}'].values
+                all_times_attr[cohort_name][event_type] = event_times_attr        
+
+                filename = f"full_attributions_{cohort_name}_{event_type}.npy"
+                all_attr_array = np.load(os.path.join(save_dir, filename))
+                all_attr[cohort_name][event_type] = {}
+                for timebin in range(all_attr_array.shape[1]):
+                    all_attr[cohort_name][event_type][timebin] = all_attr_array[:, timebin]
+
+        feature_names = attr_features_df['feature'].values
+                
         print("Loaded all attributions from disk")
 
-    return all_attr, feature_names
+    # plot_feature_importance(all_features_attr, feature_names, save_dir)
+    plot_temporal_importance(all_times_attr, save_dir)
+
+    return all_features_attr, all_times_attr, all_attr, feature_names
 
 
-def plot_feature_importance(all_attr, feature_names, save_path):
-    n_timebins = len(next(iter(all_attr['all']['death'].keys())))
+def plot_temporal_importance(all_times_attr, save_path=None):
+    n_timebins = len(all_times_attr['all']['death'].keys())
     event_types = ['discharge', 'death']
-    
-    for cohort_name, cohort_attr in all_attr.items():
-        for event_type in event_types:
-            plt.figure(figsize=(15, 5 * n_timebins))
-            for timebin in range(n_timebins):
-                plt.subplot(n_timebins, 1, timebin + 1)
-                attr_values = cohort_attr[event_type][timebin]
-                
-                # Create a DataFrame for plotting
-                df = pd.DataFrame({
-                    'feature': feature_names,
-                    'importance': attr_values
-                }).sort_values(by='importance', ascending=False).head(20)
-                
-                sns.barplot(x='importance', y='feature', data=df, palette='viridis')
-                plt.title(f'Cohort: {cohort_name} | Event: {event_type} | Timebin: {timebin}')
-                plt.xlabel('Mean Absolute Attribution')
-                plt.ylabel('Feature')
+    cohorts = list(all_times_attr.keys())
+
+    for event_type in event_types:
+        plt.figure(figsize=(10, 6))
+        for cohort_name in cohorts:
+            attr = all_times_attr[cohort_name][event_type]
+            # concatenate all timepoints for plotting
+            data_array = np.array([attr[timepoint] for timepoint in range(n_timebins)])  # [Timepoints]
+
+            plt.figure(figsize=(12, 5))
+                        
+            sns.heatmap(
+                data_array, 
+                norm=colors.PowerNorm(gamma=0.5), 
+                cmap='magma', 
+                xticklabels=10, 
+                yticklabels=[f'Bin {i+1}' for i in range(8)],
+                cbar_kws={'label': 'Importance (Power Scaled: γ=0.5)'})
+
+            plt.title(f"Temporal Attribution Focus across Prediction Horizons - Event: {event_type} - Cohort: {cohort_name}")
+            plt.xlabel("Window Timepoints (hours)")
+            plt.ylabel("Prediction Horizon (Bin)")
+            plt.tight_layout(pad=2.0, w_pad=4.0, h_pad=2.0)
+            plt.savefig(os.path.join(save_path, f'temporal_importance_{cohort_name}_{event_type}.png'))
+            plt.close()
+            print(f"Saved temporal importance plot to temporal_importance_{cohort_name}_{event_type}.png")
+
+def plot_feature_importance(all_attr, feature_names, normalize=False, save_path=None):
+    n_timebins = len(all_attr['all']['death'].keys())
+    event_types = ['discharge', 'death']
+    cohorts = list(all_attr.keys())
+
+    for event_type in event_types:
+        df = pd.DataFrame(feature_names, columns=['feature'])
+        mean_attr = {}
+        for cohort_name in cohorts:
+            attr = all_attr[cohort_name][event_type]
+            # concatenate all timebins for plotting
+            attr = np.array([attr[timebin] for timebin in range(n_timebins)])  # [Timebins, Features]
+            # take the mean across timebins
+            mean_attr[cohort_name] = attr.mean(axis=0)
+
+            if normalize:
+                # normalize to sum to 1
+                mean_attr[cohort_name] = mean_attr[cohort_name] / mean_attr[cohort_name].sum()
+
+            # add cohort column
+            df[cohort_name] = mean_attr[cohort_name]
+
+        for cohort_name, cohort_attr in all_attr.items():
+            # create a new list of cohorts, where cohort_name is first, then the rest
+            other_cohorts = [c for c in cohorts if c != cohort_name]
+            ordered_cohorts = [cohort_name] + other_cohorts
             
-            plt.tight_layout()
-            plot_filename = f'feature_importance_{cohort_name}_{event_type}.png'
+            # order the dataframe columns accordingly
+            df_ordered = df[['feature'] + ordered_cohorts]
+            # order the rows by the values of the first cohort
+            df_ordered = df_ordered.sort_values(by=cohort_name, ascending=False)
+
+            # plot the top 20 features as horizontal bar plot
+            plt.figure(figsize=(10, 6))     
+            sns.barplot(data=df_ordered.head(20).melt(id_vars='feature', value_vars=ordered_cohorts), 
+                        y='feature', x='value', hue='variable', orient='h')
+            plt.xlabel('Mean Absolute Attribution')
+            plt.ylabel('Features')
+            plt.title(f'Feature Importance for {cohort_name} - Event: {event_type}')   
+                
+            plt.tight_layout(pad=2.0, w_pad=4.0, h_pad=2.0)
+            if normalize:
+                plot_filename = f'feature_importance_normalized_{cohort_name}_{event_type}.png'
+            else:
+                plot_filename = f'feature_importance_{cohort_name}_{event_type}.png'
             plt.savefig(os.path.join(save_path, plot_filename))
             plt.close()
             print(f"Saved feature importance plot to {plot_filename}")
+
+
+
+        pass
 
 
 

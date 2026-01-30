@@ -140,14 +140,22 @@ def create_processors(dataset, train_id, val_id, config_manager):
     return train_processor, val_processor, norm_params
 
 
-def create_processor_from_shards(config_manager, normalize=True):
+def create_processor_from_shards(config_manager, normalize=True, set_to_return='all'):
     train_processor = ShardProcessor(config_manager, normalize=normalize, split='train')
     val_processor = ShardProcessor(config_manager, split='val',
                                   norm_params=train_processor.get_normalization_params())
     test_processor = ShardProcessor(config_manager, split='test',
                                    norm_params=train_processor.get_normalization_params())
 
-    return train_processor, val_processor, test_processor
+    if set_to_return == 'all':
+        return train_processor, val_processor, test_processor
+    elif set_to_return == 'train':
+        return train_processor
+    elif set_to_return == 'val':
+        return val_processor
+    elif set_to_return == 'test':
+        return test_processor
+    
 
 def create_buffer(processor, batch_size, config_manager, shuffle=True):
     if config_manager.hospital == 'choc' and config_manager.model_type == 'dynamic_deephit':

@@ -50,9 +50,10 @@ def filter_cohort(dynamic_deephit_dataset, cohort_stay_ids):
     dynamic_deephit_dataset['stay_ids'] = dynamic_deephit_dataset['stay_ids'][mask]
     dynamic_deephit_dataset['event'] = dynamic_deephit_dataset['event'][mask]
     dynamic_deephit_dataset['trajectories'] = dynamic_deephit_dataset['trajectories'][traj_mask]
-    dynamic_deephit_dataset['predictions'] = dynamic_deephit_dataset['predictions'][traj_mask]
     dynamic_deephit_dataset['time_to_event_raw'] = dynamic_deephit_dataset['time_to_event_raw'][traj_mask]
     dynamic_deephit_dataset['time_to_event'] = dynamic_deephit_dataset['time_to_event'][traj_mask]
+    if 'predictions' in dynamic_deephit_dataset:
+        dynamic_deephit_dataset['predictions'] = dynamic_deephit_dataset['predictions'][traj_mask]
 
     # Rebuild index_ptr
     new_index_ptr = np.zeros(len(indices_to_keep) + 1, dtype=np.int32)

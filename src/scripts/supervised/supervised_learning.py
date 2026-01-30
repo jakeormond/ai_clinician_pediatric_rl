@@ -95,7 +95,7 @@ def parse_arguments():
 
 
     parser.add_argument('--experiment_variant', type=str, default='standard',
-                       choices=['standard', 'quick_test', 'full_search', 'prediction'],
+                       choices=['standard', 'quick_test', 'full_search', 'prediction', 'feature_evaluation'],
                        help='Experiment variant determines config defaults')
 
     parser.add_argument('--search_variant', type=str, default=None,
@@ -211,7 +211,7 @@ def main():
             print(f"Running on {config_manager.environment} environment")         
         
         
-        if args.experiment_variant != 'prediction':      
+        if args.experiment_variant != 'prediction' and args.experiment_variant != 'feature_evaluation':      
             """
             this is for training on the MIMIC IV dataset with a single train/val/test split.
             Because the data is in hdf5 shards, we can't do much processing here, 
@@ -266,6 +266,18 @@ def main():
                 outer_group='models',
                 inner_group='cohorts',
                 base_filename='cohort_model_comparison') 
+            
+        elif args.experiment_variant == 'feature_evaluation':
+            """
+            this is for generating feature attributions on the MIMIC IV dataset with a single train/val/test split.
+            """
+            from ...supervised_learning.dynamic_deephit_feature_evaluation import get_feature_attributions
+
+            sample_size = 100
+            get_feature_attributions(
+                config_manager,
+                n_batches=sample_size
+            )
             
     
     elif args.mode == 'development_single_split':

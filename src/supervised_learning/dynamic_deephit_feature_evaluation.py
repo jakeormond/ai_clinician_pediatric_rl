@@ -291,10 +291,46 @@ def get_feature_attributions(config_manager, n_batches=None):
                 
         print("Loaded all attributions from disk")
 
-    # plot_feature_importance(all_features_attr, feature_names, save_dir)
+    plot_feature_importance_by_time(all_attr, feature_names, save_dir)
+    plot_feature_importance(all_features_attr, feature_names, save_dir)
     plot_temporal_importance(all_times_attr, save_dir)
 
     return all_features_attr, all_times_attr, all_attr, feature_names
+
+
+def plot_feature_importance_by_time(all_attr, feature_names, save_path=None):
+    # plot heatmaps of feature importance across timebins
+    cohorts = list(all_attr.keys())
+    event_types = list(all_attr[cohorts[0]].keys())
+    timebins = list(all_attr[cohorts[0]][event_types[0]].keys())    
+    n_timebins = len(timebins)
+    for event_type in event_types:
+        for cohort_name in cohorts:
+            for timebin in range(n_timebins):
+                attr = all_attr[cohort_name][event_type][timebin]
+                # concatenate all timebins for plotting
+
+                plt.figure(figsize=(18, 12))
+                            
+                norm = colors.PowerNorm(gamma=0.5, vmin=0, vmax=0.5)
+                sns.heatmap(
+                    attr, 
+                    norm=norm, 
+                    cmap='magma', 
+                    xticklabels=10, 
+                    yticklabels=feature_names,
+                    cbar_kws={'label': 'Importance (Power Scaled: γ=0.5)'})
+
+                plt.title(f"Feature Attribution across Prediction Horizons - Event: {event_type} - Cohort: {cohort_name} - Timebin: {timebin}")
+                plt.xlabel("Features")
+                plt.ylabel("Prediction Horizon (Bin)")
+                plt.tight_layout(pad=2.0, w_pad=4.0, h_pad=2.0)
+                plt.savefig(os.path.join(save_path, f'feature_importance_by_time_{cohort_name}_{event_type}_{timebin}.png'))
+                plt.close()
+                print(f"Saved feature importance by time plot to feature_importance_by_time_{cohort_name}_{event_type}_{timebin}.png")
+
+
+
 
 
 def plot_temporal_importance(all_times_attr, save_path=None):

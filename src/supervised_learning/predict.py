@@ -1201,6 +1201,26 @@ def plot_evaluation(
     plot_roc_prc(roc_prc_values, inner_group, config_manager)
     pass
 
+
+def plot_predictions(
+        config_manager,
+        model='transformer',
+        cohort='all',
+):
+    experiment_dir, cohort_final_model_dir = get_model_dir(
+        config_manager, model, cohort, cohort
+    )
+
+    filename = 'test_set_predictions'
+    filepath = os.path.join(experiment_dir, filename + '.h5')
+    # load existing predictions
+    print(f"Loading existing predictions from {filepath}")
+    dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(filepath)
+
+    pass
+
+
+
 def main():
     predict()
 

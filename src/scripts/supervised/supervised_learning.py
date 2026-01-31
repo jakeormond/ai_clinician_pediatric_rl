@@ -180,7 +180,7 @@ def main():
         config_manager.model_type == "dynamic_deephit_prediction_all": 
         from ...supervised_learning.training import outer_training_loop, development_training_loop, single_split_training
         from ...supervised_learning.models.dynamic_deephit import make_mixed_resolution_time_bins
-        from ...supervised_learning.predict import predict, plot_evaluation, predict_all, plot_predictions
+        from ...supervised_learning.predict import predict, plot_evaluation, predict_all, plot_random_predictions
 
     else:
         from ...supervised_learning.training_scikitlearn import outer_training_loop, \
@@ -267,14 +267,8 @@ def main():
             #     inner_group='cohorts',
             #     base_filename='cohort_model_comparison')
 
-            plot_predictions(config_manager)   
-            
-        elif args.experiment_variant == 'prediction' and not args.cohort:
-            """
-            this is for generating predictions on the MIMIC IV dataset with a single train/val/test split.
-            """
-            plot_predictions(config_manager)          
-        
+            plot_random_predictions(config_manager)   
+                   
         
         elif args.experiment_variant == 'feature_evaluation':
             """

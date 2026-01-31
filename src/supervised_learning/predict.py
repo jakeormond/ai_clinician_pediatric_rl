@@ -15,6 +15,8 @@ import pandas as pd
 import os
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
+import matplotlib.ticker as ticker
 import seaborn as sns
 from scipy import stats
 
@@ -25,7 +27,7 @@ from ..rl.replay_buffer import DynamicDeepHit_Lazy, worker_init_fn
 from ..supervised_learning.models.dynamic_deephit import DynamicDeepHitMulti
 from ..supervised_learning.models.dynamic_deephit_transformer import TransformerDeepHitMulti
 from ..supervised_learning.training import create_processor_from_shards
-from ..supervised_learning.dynamic_deephit_evaluation import calculate_c_index, calculate_brier_score, calculate_roc_and_prc, calculate_all_bin_ece
+from ..supervised_learning.dynamic_deephit_evaluation import calculate_probabilities, calculate_c_index, calculate_brier_score, calculate_roc_and_prc, calculate_all_bin_ece
 
 
 def filter_cohort(dynamic_deephit_dataset, cohort_stay_ids):
@@ -1202,14 +1204,18 @@ def plot_evaluation(
     pass
 
 
-def plot_predictions(
+def plot_random_predictions(
         config_manager,
         model='transformer',
         cohort='all',
-):
+    ):
+    
     experiment_dir, cohort_final_model_dir = get_model_dir(
         config_manager, model, cohort, cohort
     )
+
+    plot_dir = os.path.join(experiment_dir, 'prediction_plots')
+    os.makedirs(plot_dir, exist_ok=True)
 
     filename = 'test_set_predictions'
     filepath = os.path.join(experiment_dir, filename + '.h5')
@@ -1217,7 +1223,116 @@ def plot_predictions(
     print(f"Loading existing predictions from {filepath}")
     dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(filepath)
 
-    pass
+    # plot predictions for a random sample of 10 patients
+    stay_ids = dynamic_deephit_dataset['stay_ids']
+    events = dynamic_deephit_dataset['event']
+
+    death_events = [i for i, e in enumerate(events) if e == 1]
+    survival_events = [i for i, e in enumerate(events) if e == 0]
+
+    # randomly sample 50 of each event type
+    np.random.seed(42)
+    n_samples_per_event = 50
+    sampled_death_indices = np.random.choice(death_events, size=n_samples_per_event, replace=False)
+    sampled_survival_indices = np.random.choice(survival_events, size=n_samples_per_event, replace=False)
+
+    sampled_indices = np.concatenate([sampled_death_indices, sampled_survival_indices])
+
+    for idx in sampled_indices:
+        stay_id = stay_ids[idx]
+        event = dynamic_deephit_dataset['event'][idx]
+
+        start_idx = dynamic_deephit_dataset['index_ptr'][idx]
+        end_idx = dynamic_deephit_dataset['index_ptr'][idx + 1]
+
+        predictions = dynamic_deephit_dataset['predictions'][start_idx:end_idx]
+        probabilities = calculate_probabilities(predictions)
+
+        patient_data = {
+            'stay_id': stay_id,
+            'event': event,
+            'time_bins': config_manager.time_bins,
+            'probabilities': probabilities
+        }   
+
+        plot_individual_patient_predictions(
+            patient_data,
+            plot_dir = plot_dir
+        )
+        print(f"Prediction plot for patient {stay_id} saved to {plot_dir}")
+
+
+def plot_individual_patient_predictions(        
+        patient_data,
+        plot_dir = None
+    ):
+    stay_id = patient_data['stay_id']
+    event = patient_data['event']
+    bin_edges = patient_data['time_bins']
+    probs = patient_data['probabilities']
+
+    event_types = ['Survival', 'Death']
+    event_type = event_types[event]
+
+    plot_title = f"Patient ID: {stay_id} | Event: {event_type}"
+
+    # 1. Reshape for heatmap: (16 bins) x (timesteps)
+    # We stack Event 0 and Event 1 vertically
+    timesteps = probs.shape[0]
+    # Transpose to get (events, bins, timesteps) -> reshape to (16, timesteps)
+    heatmap_data = probs.permute(1, 2, 0).reshape(16, -1).detach().cpu().numpy()
+
+    # 2. Create Labels for the Y-axis
+    # Formats as "Death [0-6h]", "Discharge [0-6h]", etc.
+    y_labels = []
+    for event in event_types:
+        for i in range(len(bin_edges) - 1):
+            y_labels.append(f"{event} [{bin_edges[i]}-{bin_edges[i+1]}h]")
+
+    # 3. Plotting
+    plt.figure(figsize=(12, 8))
+    
+    # Use LogNorm if your probabilities are very small (typical in ICU survival)
+    # Use vmin/vmax to keep the colorbar consistent
+    ax = sns.heatmap(
+        heatmap_data, 
+        xticklabels=False, # We will handle ticks manually for better control
+        yticklabels=y_labels,
+        cmap="YlGnBu", 
+        norm=LogNorm(vmin=1e-4, vmax=heatmap_data.max()),
+        cbar_kws={'label': 'Joint Probability $P(T, E)$'}
+    )
+
+    # Add a visual divider between Event 1 and Event 2
+    plt.axhline(y=8, color='red', linewidth=2, linestyle='--')
+    
+    # 2. Get the number of timesteps
+    num_timesteps = heatmap_data.shape[1]
+
+    # 3. Manually configure the X-axis
+    # MaxNLocator decides WHICH indices to label (e.g., [0, 50, 100...])
+    ax.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+
+    # This Formatter ensures the label shown is the actual integer index (Hour)
+    @ticker.FuncFormatter
+    def major_formatter(x, pos):
+        return f"{int(x)}"
+    
+    ax.xaxis.set_major_formatter(major_formatter)
+
+    # 4. Force the ticks to be visible (Seaborn sometimes turns them off)
+    ax.tick_params(axis='x', which='major', bottom=True, labelbottom=True, rotation=0)
+    
+    plt.title(plot_title)
+    plt.xlabel("ICU Stay Duration (Hours)")
+    plt.ylabel("Event & Forecast Horizon")
+    plt.tight_layout()
+    plt.savefig(os.path.join(plot_dir, f"{stay_id}_{event_type}_prediction_heatmap.png"))
+    plt.close()
+    
+    
+
+
 
 
 

@@ -249,23 +249,24 @@ def main():
             #     inner_group='models',
             #     base_filename='all_stays_model_comparison') 
             
-            # models = ['transformer']
-            # predict_all(
-            #     config_manager, 
-            #     cohorts=cohorts,
-            #     models=models,
-            #     outer_group='models',
-            #     inner_group='cohorts',
-            #     base_filename='cohort_model_comparison'
-            # )
+            models = ['transformer']
+            predict_all(
+                config_manager, 
+                n_bootstrap_samples=100,
+                cohorts=cohorts,
+                models=models,
+                outer_group='models',
+                inner_group='cohorts',
+                base_filename='cohort_model_comparison'
+            )
 
-            # plot_evaluation(
-            #     config_manager,
-            #     cohorts=cohorts,
-            #     models=['transformer'],
-            #     outer_group='models',
-            #     inner_group='cohorts',
-            #     base_filename='cohort_model_comparison')
+            plot_evaluation(
+                config_manager,
+                cohorts=cohorts,
+                models=['transformer'],
+                outer_group='models',
+                inner_group='cohorts',
+                base_filename='cohort_model_comparison')
 
             plot_random_predictions(config_manager)   
                    

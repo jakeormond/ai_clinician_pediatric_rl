@@ -562,7 +562,7 @@ def _to_jsonable(obj):
 
 def predict_all(
         config_manager, 
-        n_bootstrap_samples=3,
+        n_bootstrap_samples=100,
         models=['GRU', 'transformer'],
         cohorts=['sepsis_strict', 'sepsis_broad', 'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad'],
         outer_group='models',
@@ -1331,9 +1331,6 @@ def plot_individual_patient_predictions(
     plt.close()
     
     
-
-
-
 
 
 def main():

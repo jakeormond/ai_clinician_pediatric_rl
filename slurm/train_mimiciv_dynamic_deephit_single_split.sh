@@ -69,7 +69,7 @@ python -m src.scripts.supervised.supervised_learning \
     --search_variant random_search \
     --n_epochs 200 \
     --n_search_iterations 12 \
-    --cohort ards_strict \
+    --cohort sepsis_strict \
     --final_timestep_only True \
     --start_time $START_TIME     
 

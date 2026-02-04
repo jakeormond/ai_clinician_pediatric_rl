@@ -268,7 +268,7 @@ def main():
                 inner_group='cohorts',
                 base_filename='cohort_model_comparison')
 
-            plot_random_predictions(config_manager)   
+            # plot_random_predictions(config_manager)   
                    
         
         elif args.experiment_variant == 'feature_evaluation':

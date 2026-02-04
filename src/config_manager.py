@@ -39,7 +39,7 @@ class ConfigManager:
                         self.paths['final_model_dir'], 
                         "GRU", "final_model"
                     )
-                elif self.model_type == "dynamic_deephit_transformer":
+                elif self.model_type == "dynamic_deephit_transformer" and self.cohort != 'all':
                     results_dir = os.path.join(
                         self.paths['final_model_dir'], 
                         "transformer", "final_model"

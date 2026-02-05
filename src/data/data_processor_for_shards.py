@@ -44,12 +44,18 @@ class ShardProcessor:
             self.split = 'tuning'
 
         # find the shards for the given split
-        if not config_manager.training_config['tuning']:
-            self.shard_dir = os.path.join(config_manager.paths['data_dir'], 
-                        config_manager.data_config['shard_dir'], 'training_set')
+        if config_manager.data_config['split_num'] is None:
+            shard_dir = os.path.join(config_manager.paths['data_dir'], 
+                        config_manager.data_config['shard_dir'])
         else:
-            self.shard_dir = os.path.join(config_manager.paths['data_dir'], 
-                        config_manager.data_config['shard_dir'], 'tuning_set')
+            shard_dir = os.path.join(config_manager.paths['data_dir'], 
+                        config_manager.data_config['shard_dir'], 
+                        f"split_{config_manager.data_config['split_num']}")
+
+        if not config_manager.training_config['tuning']:
+            self.shard_dir = os.path.join(shard_dir, 'training_set')
+        else:
+            self.shard_dir = os.path.join(shard_dir, 'tuning_set')
         
         final_file_name = f"{self.split}_dynamic_deephit_dataset.h5"
         final_file_path = os.path.join(self.shard_dir, final_file_name)
@@ -103,8 +109,13 @@ class ShardProcessor:
 
         all_files = os.listdir(self.shard_dir)                
         
+        # raw_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
+        #                         f.startswith(self.split) and f.endswith("_shard.h5")]
         raw_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
-                                f.startswith(self.split) and f.endswith("_shard.h5")]
+                                f.startswith(self.split) and f.endswith(".h5")]
+        if len(raw_shard_files) == 0:
+            raise ValueError(f"No shard files found for split {self.split} in directory {self.shard_dir}")
+
         # sort the files to ensure consistent order
         self.raw_shard_files = sorted(raw_shard_files)
 

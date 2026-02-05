@@ -560,6 +560,59 @@ def _to_jsonable(obj):
     return obj
 
 
+def filter_by_time_since_admission(dynamic_deephit_dataset, time_since_admission):
+    index_ptr = dynamic_deephit_dataset['index_ptr']
+    time_raw = dynamic_deephit_dataset['time_to_event_raw']
+
+    n_rows = len(time_raw)
+    keep_mask = np.zeros(n_rows, dtype=bool)
+    keep_stay = []
+
+    n_stays = len(index_ptr) - 1
+    
+    for s in range(n_stays):
+        start_idx = index_ptr[s]
+        end_idx = index_ptr[s + 1]
+
+        t = time_raw[start_idx:end_idx][::-1]  # reversed
+
+        if time_since_admission == '0-24':
+            mask = (t >= 0) & (t <= 24)
+        elif time_since_admission == '24-72':
+            mask = (t > 24) & (t <= 72)
+        else:  # '72+'
+            mask = t > 72
+
+        if mask.any():
+            keep_mask[start_idx:end_idx] = mask
+            keep_stay.append(True)
+        else:
+            keep_stay.append(False)
+
+        # ---- Apply mask ONCE ----
+    for key in ['trajectories', 'time_to_event_raw', 'time_to_event', 'predictions']:
+        dynamic_deephit_dataset[key] = dynamic_deephit_dataset[key][keep_mask]
+
+    # ---- Filter stay-level arrays ----
+    dynamic_deephit_dataset['stay_ids'] = dynamic_deephit_dataset['stay_ids'][keep_stay]
+    dynamic_deephit_dataset['event'] = dynamic_deephit_dataset['event'][keep_stay]
+
+    # ---- Rebuild index_ptr (much simpler) ----
+    lengths = []
+    for s in range(n_stays):
+        if keep_stay[s]:
+            start_idx = index_ptr[s]
+            end_idx = index_ptr[s + 1]
+            lengths.append(keep_mask[start_idx:end_idx].sum())
+
+    new_index_ptr = np.zeros(len(lengths) + 1, dtype=int)
+    new_index_ptr[1:] = np.cumsum(lengths)
+    dynamic_deephit_dataset['index_ptr'] = new_index_ptr
+
+    return dynamic_deephit_dataset
+    
+    
+
 def predict_all(
         config_manager, 
         n_bootstrap_samples=100,
@@ -567,7 +620,8 @@ def predict_all(
         cohorts=['sepsis_strict', 'sepsis_broad', 'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad'],
         outer_group='models',
         inner_group='cohorts',
-        base_filename='all_cohorts'
+        base_filename='all_cohorts',
+        time_since_admission=None
     ): # for dynamic deephit models only
    
     # generate bootstrap storage
@@ -626,7 +680,14 @@ def predict_all(
                         experiment_dir,
                         stay_ids=stay_ids
                     )
-                                
+
+            if time_since_admission is not None:
+                for key in dynamic_deephit_datasets.keys():
+                    dynamic_deephit_datasets[key] = filter_by_time_since_admission(
+                        dynamic_deephit_datasets[key],
+                        time_since_admission
+                    )                    
+                       
             # bootstrapped evaluation
             c_index, brier_score, roc_prc, ece = paired_bootstrap_evaluation(
                 dynamic_deephit_datasets,
@@ -650,6 +711,9 @@ def predict_all(
                     ece_bootstraps[outer][cohort][group] = ece[group]       
 
     # save the c-index values to a json file
+    if time_since_admission is not None:
+        base_filename = f"{base_filename}_time_since_admission_{time_since_admission}"
+    
     c_index_filepath = os.path.join(config_manager.paths['final_model_dir'], base_filename + '_c_index_values.json')
     with open(c_index_filepath, 'w') as f:
         json.dump(_to_jsonable(c_index_bootstraps), f, indent=4)

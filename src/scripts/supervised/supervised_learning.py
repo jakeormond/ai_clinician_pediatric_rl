@@ -240,7 +240,43 @@ def main():
             #     inner_group='models',
             #     base_filename='all_stays_model_comparison'
             # )
-           
+
+            # models = ['GRU', 'transformer']
+            # predict_all(
+            #     config_manager, 
+            #     n_bootstrap_samples=100,
+            #     cohorts=['all'],
+            #     models=models,
+            #     outer_group='cohorts',
+            #     inner_group='models',
+            #     base_filename='all_stays_model_comparison',
+            #     time_since_admission='0-24'
+            # )
+
+            # models = ['GRU', 'transformer']
+            # predict_all(
+            #     config_manager, 
+            #     n_bootstrap_samples=100,
+            #     cohorts=['all'],
+            #     models=models,
+            #     outer_group='cohorts',
+            #     inner_group='models',
+            #     base_filename='all_stays_model_comparison',
+            #     time_since_admission='24-72'
+            # )
+
+            # models = ['GRU', 'transformer']
+            # predict_all(
+            #     config_manager, 
+            #     n_bootstrap_samples=100,
+            #     cohorts=['all'],
+            #     models=models,
+            #     outer_group='cohorts',
+            #     inner_group='models',
+            #     base_filename='all_stays_model_comparison',
+            #     time_since_admission='72+'
+            # )
+                      
             # plot_evaluation(
             #     config_manager,
             #     cohorts=['all'],
@@ -249,6 +285,17 @@ def main():
             #     inner_group='models',
             #     base_filename='all_stays_model_comparison') 
             
+            # models = ['transformer']
+            # predict_all(
+            #     config_manager, 
+            #     n_bootstrap_samples=100,
+            #     cohorts=cohorts,
+            #     models=models,
+            #     outer_group='models',
+            #     inner_group='cohorts',
+            #     base_filename='cohort_model_comparison'
+            # )
+
             models = ['transformer']
             predict_all(
                 config_manager, 
@@ -257,7 +304,30 @@ def main():
                 models=models,
                 outer_group='models',
                 inner_group='cohorts',
-                base_filename='cohort_model_comparison'
+                base_filename='cohort_model_comparison',
+                time_since_admission='0-24'
+            )
+
+            predict_all(
+                config_manager, 
+                n_bootstrap_samples=100,
+                cohorts=cohorts,
+                models=models,
+                outer_group='models',
+                inner_group='cohorts',
+                base_filename='cohort_model_comparison',
+                time_since_admission='24-72'
+            )
+
+            predict_all(
+                config_manager, 
+                n_bootstrap_samples=100,
+                cohorts=cohorts,
+                models=models,
+                outer_group='models',
+                inner_group='cohorts',
+                base_filename='cohort_model_comparison',
+                time_since_admission='72+'
             )
 
             plot_evaluation(

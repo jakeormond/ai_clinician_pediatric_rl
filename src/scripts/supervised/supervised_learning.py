@@ -74,6 +74,9 @@ def parse_arguments():
                                  'single_split', 'development_single_split'],
                         help='Mode of training: single_fold or aggregate (default: single_fold)')
     
+    parser.add_argument('--split_num', type=int, default=None,
+                        help='Split number to train (not strictly required for single_split mode)')
+    
     
     # mode-specific arguments    
     parser.add_argument('--fold', type=int, default=None,

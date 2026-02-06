@@ -125,6 +125,7 @@
                 "--model_type", "dynamic_deephit_transformer", 
                 "--prediction_type", "discharge_mortality_tte",
                 "--mode", "single_split", 
+                "--split_num", "0",
                 "--search_variant", "random_search",
                 "--n_search_iterations", "1",
                 "--n_epochs", "2",

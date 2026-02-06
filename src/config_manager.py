@@ -321,6 +321,9 @@ class ConfigManager:
         if self.experiment_type == "supervised_learning":
             if self.cohort is not None and self.cohort != "all":
                 self.experiment_variant = f"{self.experiment_variant}_{self.cohort}"
+            if self.split_num is not None:
+                self.experiment_variant = f"{self.experiment_variant}_split_{self.split_num}"
+            
             self.experiment_name = \
                 f"{self.hospital}_{self.model_type}_{self.prediction_type}_{self.experiment_variant}_{self.start_time}"
         else:

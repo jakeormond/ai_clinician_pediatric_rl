@@ -44,13 +44,13 @@ class ShardProcessor:
             self.split = 'tuning'
 
         # find the shards for the given split
-        if config_manager.data_config['split_num'] is None:
+        if config_manager.split_num is None:
             shard_dir = os.path.join(config_manager.paths['data_dir'], 
                         config_manager.data_config['shard_dir'])
         else:
             shard_dir = os.path.join(config_manager.paths['data_dir'], 
                         config_manager.data_config['shard_dir'], 
-                        f"split_{config_manager.data_config['split_num']}")
+                        f"split_{config_manager.split_num}")
 
         if not config_manager.training_config['tuning']:
             self.shard_dir = os.path.join(shard_dir, 'training_set')
@@ -122,7 +122,7 @@ class ShardProcessor:
         
         ########### Normalized Shards - we remove long trajectories first ##############
         normalized_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
-                        f.startswith(self.split) and f.endswith("_shard_normalized.h5")]
+                        f.startswith(self.split) and f.endswith("_normalized.h5")]
         # sort the files to ensure consistent order
         self.normalized_shard_files = sorted(normalized_shard_files)
 
@@ -131,7 +131,7 @@ class ShardProcessor:
             all_files = os.listdir(self.shard_dir)
 
             normalized_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
-                                f.startswith(self.split) and f.endswith("_shard_normalized.h5")]
+                                f.startswith(self.split) and f.endswith("_normalized.h5")]
             
             # sort the files to ensure consistent order
             self.normalized_shard_files = sorted(normalized_shard_files)        
@@ -538,7 +538,7 @@ class ShardProcessor:
                         raise ValueError(f"Extreme values found in normalized feature {feature} in shard {shard_file}")
                  
             
-            normalized_shard_file = shard_file.replace("_shard.h5", "_shard_normalized.h5")
+            normalized_shard_file = shard_file.replace(".h5", "_normalized.h5")
 
             with h5py.File(normalized_shard_file, 'w') as f:
                 f.create_dataset('feature_names', data=[name.encode('utf-8') for name in feature_names])

@@ -1,5 +1,4 @@
 shard_dir: "combined_data/hourly_all_patients"
-split_num: 0
 features_to_use_path: "features_to_use/features_to_use_with_proportions.csv"
 model_type: "supervised_learning"
 

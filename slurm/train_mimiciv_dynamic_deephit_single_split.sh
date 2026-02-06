@@ -66,7 +66,7 @@ python -m src.scripts.supervised.supervised_learning \
     --model_type dynamic_deephit_transformer \
     --prediction_type discharge_mortality_tte \
     --mode single_split \
-    --split_num 0 \
+    --split_num 2 \
     --search_variant random_search \
     --n_epochs 200 \
     --n_search_iterations 12 \

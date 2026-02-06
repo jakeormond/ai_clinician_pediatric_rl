@@ -66,9 +66,9 @@ python -m src.scripts.supervised.supervised_learning \
     --model_type dynamic_deephit_transformer \
     --prediction_type discharge_mortality_tte \
     --mode single_split \
+    --split_num 0 \
     --search_variant fixed_hyperparameters \
     --n_epochs 200 \
-    --cohort all \
     --final_timestep_only True \
     --start_time $START_TIME     
 

@@ -21,6 +21,7 @@ import seaborn as sns
 from scipy import stats
 
 from torch.utils.data import DataLoader
+import torch.nn.functional as F
 
 from ..data.data_processor_for_shards import ShardProcessor
 from ..rl.replay_buffer import DynamicDeepHit_Lazy, worker_init_fn
@@ -202,8 +203,15 @@ def inference_loop(
         # switch the last 2 dimesnsions of logits to match expected shape (N, D, K)
         all_predictions = np.transpose(all_predictions, (0, 2, 1))
 
+    # calculate entropy and health score for each prediction and add to all_predictions
+    entropy = calculate_prediction_entropy(torch.from_numpy(all_predictions))  # (N, T)
+    
+    health_score = calculate_comprehensive_health_score(torch.from_numpy(all_predictions))
+    
     # add predictions to processor
     processor.dynamic_deephit_dataset['predictions'] = all_predictions
+    processor.dynamic_deephit_dataset['entropy'] = entropy.cpu().numpy()
+    processor.dynamic_deephit_dataset['health_score'] = health_score.cpu().numpy()
 
     # save all values in processor.dynamic_deephit_dataset to an h5 file
     if filename is not None:
@@ -215,6 +223,61 @@ def inference_loop(
     dynamic_deephit_dataset = processor.dynamic_deephit_dataset
 
     return dynamic_deephit_dataset
+
+
+def calculate_prediction_entropy(risk_logits):
+    """
+    Args:
+        risk_logits: List of 2 tensors, each [batch, seq_len, 8]
+    Returns:
+        entropy: Tensor of shape [batch, seq_len]
+    """
+    # 1. Stack the risks: [batch, seq_len, 2, 8]
+    # 2. Flatten to a single distribution: [batch, seq_len, 16]
+    combined_logits = torch.stack(risk_logits, dim=2).flatten(start_dim=2)
+    
+    # 3. Convert to probabilities
+    probs = calculate_probabilities(combined_logits.cpu().numpy())  # (batch, seq_len, 16)
+    
+    # 4. Calculate Shannon Entropy: -sum(p * log(p))
+    # We add a tiny epsilon to avoid log(0)
+    entropy = -torch.sum(probs * torch.log(probs + 1e-9), dim=-1)
+    
+    return entropy
+
+
+def calculate_comprehensive_health_score(risk_logits):
+    """
+    risk_logits: List [Death_Logits, Discharge_Logits] 
+                 Each is [Batch, Seq, 8]
+    """
+    # 1. Combine into a single distribution [Batch, Seq, 16]
+    # Dim 2 is [Death_0...Death_7, Disc_0...Disc_7]
+    combined_logits = torch.cat(risk_logits, dim=-1)
+    probs = F.softmax(combined_logits, dim=-1)
+
+    # 2. Create the Weight Vector
+    # We want a linear progression for each event type
+    # Death weights: -1.0 (soon) to -0.2 (distant)
+    death_weights = torch.linspace(-1.0, -0.2, steps=8)
+    
+    # Discharge weights: 0.4 (distant) to 1.0 (soon)
+    # Note: Distant discharge (Bin 7) is index 8, Soon discharge (Bin 0) is index 15
+    # after the cat() and flipping the order for Discharge
+    disc_weights = torch.linspace(0.4, 1.0, steps=8)
+    disc_weights = torch.flip(disc_weights, dims=[0]) # So Bin 0 is 1.0
+
+    weights = torch.cat([death_weights, disc_weights]).to(probs.device)
+
+    # 3. Calculate Weighted Sum (Expected Health Value)
+    # Result is between -1.0 and 1.0
+    raw_score = torch.sum(probs * weights, dim=-1)
+
+    # 4. Rescale to 0-100 for better clinical visualization
+    # -1.0 -> 0 (Death Soon), 1.0 -> 100 (Discharge Soon)
+    health_score = (raw_score + 1.0) * 50
+    
+    return health_score
 
 
 def predict(config_manager):
@@ -374,6 +437,87 @@ def get_predictions(config_manager, model_type, experiment_dir, stay_ids=None):
         dynamic_deephit_dataset = filter_cohort(dynamic_deephit_dataset, stay_ids)   
 
     return dynamic_deephit_dataset 
+
+
+def bootstrap_evaluation(
+        dynamic_deephit_dataset,
+        n_bootstrap_samples = 100,
+        config_manager=None 
+):
+    logits = dynamic_deephit_dataset['predictions']
+    logits = torch.from_numpy(logits)
+
+    time_to_event = dynamic_deephit_dataset['time_to_event']
+    event = dynamic_deephit_dataset['event']
+
+    # event_label needs to be expanded so the each trajectory has a label at every timestep
+    event_label = np.zeros_like(time_to_event, dtype=np.int32)
+    for i in range(len(event)):
+        start_idx = dynamic_deephit_dataset['index_ptr'][i]
+        end_idx = dynamic_deephit_dataset['index_ptr'][i+1]
+        event_label[start_idx:end_idx] = event[i]
+        
+    time_to_event = torch.from_numpy(time_to_event)
+    event_label = torch.from_numpy(event_label)
+
+    for i in range(n_bootstrap_samples):
+        n_samples = logits.shape[0]
+        # generate random sample indices with replacement
+        sample_indices = np.random.choice(n_samples, size=n_samples, replace=True)
+
+        # downsampled indices for c-index calculation - we use 10,000 samples for speed
+        if n_samples > 10000:
+            downsampled_indices = np.random.choice(n_samples, size=10000, replace=False)
+        else:
+            downsampled_indices = np.arange(n_samples)
+
+        c_index_results = calculate_c_index(
+            logits[downsampled_indices], 
+            time_to_event[downsampled_indices], 
+            event_label[downsampled_indices], 
+            random_sample=True
+        )
+        
+        # brier score
+        brier_score_results = calculate_brier_score(
+            logits[sample_indices],
+            time_to_event[sample_indices],
+            event_label[sample_indices]
+        )
+
+        # calculate roc and prc
+        roc_prc_results = calculate_roc_and_prc(
+            logits[sample_indices],
+            time_to_event[sample_indices],
+            event_label[sample_indices]
+        )
+
+        # calculate ece
+        ece_results = calculate_all_bin_ece(
+            logits[sample_indices].numpy(),
+            time_to_event[sample_indices].numpy(),
+            event_label[sample_indices].numpy()
+        )
+
+    c_index_filepath = os.path.join(config_manager.paths['final_model_dir'], 'c_index_bootstrap_results.json')
+    with open(c_index_filepath, 'w') as f:
+        json.dump(c_index_results, f)
+    print(f"C-index bootstrap results saved to {c_index_filepath}")
+
+    brier_score_filepath = os.path.join(config_manager.paths['final_model_dir'], 'brier_score_bootstrap_results.json')
+    with open(brier_score_filepath, 'w') as f:
+        json.dump(brier_score_results, f)
+    print(f"Brier score bootstrap results saved to {brier_score_filepath}")
+
+    roc_prc_filepath = os.path.join(config_manager.paths['final_model_dir'], 'roc_prc_bootstrap_results.json')
+    with open(roc_prc_filepath, 'w') as f:
+        json.dump(roc_prc_results, f)
+    print(f"ROC and PRC bootstrap results saved to {roc_prc_filepath}")
+
+    ece_filepath = os.path.join(config_manager.paths['final_model_dir'], 'ece_bootstrap_results.json')
+    with open(ece_filepath, 'w') as f:
+        json.dump(ece_results, f)
+    print(f"ECE bootstrap results saved to {ece_filepath}")
 
 
 def paired_bootstrap_evaluation(
@@ -1312,11 +1456,16 @@ def plot_random_predictions(
         predictions = dynamic_deephit_dataset['predictions'][start_idx:end_idx]
         probabilities = calculate_probabilities(predictions)
 
+        entropy = dynamic_deephit_dataset['entropy'][start_idx:end_idx]
+        health_score = dynamic_deephit_dataset['health_score'][start_idx:end_idx]
+
         patient_data = {
             'stay_id': stay_id,
             'event': event,
             'time_bins': config_manager.time_bins,
-            'probabilities': probabilities
+            'probabilities': probabilities,
+            'entropy': entropy,
+            'health_score': health_score
         }   
 
         plot_individual_patient_predictions(
@@ -1324,6 +1473,7 @@ def plot_random_predictions(
             plot_dir = plot_dir
         )
         print(f"Prediction plot for patient {stay_id} saved to {plot_dir}")
+
 
 
 def plot_individual_patient_predictions(        
@@ -1334,6 +1484,99 @@ def plot_individual_patient_predictions(
     event = patient_data['event']
     bin_edges = patient_data['time_bins']
     probs = patient_data['probabilities']
+    entropy = patient_data['entropy']
+    health_score = patient_data['health_score']
+
+    event_types = ['Survival', 'Death']
+    event_type = event_types[event]
+
+    plot_title = f"Patient ID: {stay_id} | Event: {event_type}"
+
+    # 1. Reshape for heatmap: (16 bins) x (timesteps)
+    timesteps = probs.shape[0]
+    heatmap_data = probs.permute(1, 2, 0).reshape(16, -1).detach().cpu().numpy()
+
+    # 2. Create Labels for the Y-axis
+    y_labels = []
+    for event in event_types:
+        for i in range(len(bin_edges) - 1):
+            y_labels.append(f"{event} [{bin_edges[i]}-{bin_edges[i+1]}h]")
+
+    # 3. Create 2 subplots: predictions heatmap (top) + dual-axis entropy/health_score (bottom)
+    fig, axes = plt.subplots(2, 1, figsize=(14, 10), gridspec_kw={'height_ratios': [2, 1]})
+    
+    # ===== SUBPLOT 1: Predictions Heatmap =====
+    ax_heatmap = axes[0]
+    sns.heatmap(
+        heatmap_data, 
+        xticklabels=False,
+        yticklabels=y_labels,
+        cmap="YlGnBu", 
+        norm=LogNorm(vmin=1e-4, vmax=heatmap_data.max()),
+        cbar_kws={'label': 'Joint Probability $P(T, E)$'},
+        ax=ax_heatmap
+    )
+    ax_heatmap.axhline(y=8, color='red', linewidth=2, linestyle='--')
+    ax_heatmap.set_title(f"Model Predictions - {plot_title}", fontsize=12, fontweight='bold')
+    ax_heatmap.set_ylabel("Event & Forecast Horizon", fontsize=11)
+    
+    # ===== SUBPLOT 2: Dual-Axis Entropy & Health Score =====
+    ax_entropy = axes[1]
+    
+    # Convert tensors to numpy if needed
+    entropy_np = entropy.cpu().numpy() if isinstance(entropy, torch.Tensor) else entropy
+    health_score_np = health_score.cpu().numpy() if isinstance(health_score, torch.Tensor) else health_score
+    
+    # Plot entropy on left y-axis
+    color_entropy = 'steelblue'
+    ax_entropy.set_xlabel('ICU Stay Duration (Hours)', fontsize=11, fontweight='bold')
+    ax_entropy.set_ylabel('Entropy', color=color_entropy, fontsize=11, fontweight='bold')
+    line1 = ax_entropy.plot(entropy_np, color=color_entropy, linewidth=2.5, label='Entropy', zorder=3)
+    ax_entropy.fill_between(range(len(entropy_np)), entropy_np, alpha=0.2, color=color_entropy)
+    ax_entropy.tick_params(axis='y', labelcolor=color_entropy)
+    ax_entropy.grid(True, alpha=0.3, zorder=0)
+    
+    # Create second y-axis for health_score
+    ax_health = ax_entropy.twinx()
+    color_health = 'coral'
+    ax_health.set_ylabel('Health Score (0-100)', color=color_health, fontsize=11, fontweight='bold')
+    line2 = ax_health.plot(health_score_np, color=color_health, linewidth=2.5, label='Health Score', zorder=3)
+    ax_health.fill_between(range(len(health_score_np)), health_score_np, alpha=0.2, color=color_health)
+    ax_health.tick_params(axis='y', labelcolor=color_health)
+    ax_health.set_ylim([0, 100])
+    
+    # Add legend combining both axes
+    lines = line1 + line2
+    labels = [l.get_label() for l in lines]
+    ax_entropy.legend(lines, labels, loc='upper left', fontsize=10)
+    
+    # Configure X-axis for both
+    num_timesteps = heatmap_data.shape[1]
+    ax_entropy.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    
+    @ticker.FuncFormatter
+    def major_formatter(x, pos):
+        return f"{int(x)}"
+    
+    ax_entropy.xaxis.set_major_formatter(major_formatter)
+    ax_entropy.tick_params(axis='x', which='major', bottom=True, labelbottom=True, rotation=0)
+    
+    # Align x-axis between both subplots
+    ax_heatmap.set_xlim(ax_entropy.get_xlim())
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(plot_dir, f"{stay_id}_{event_type}_prediction_heatmap.png"), dpi=150, bbox_inches='tight')
+    plt.close()
+
+
+def plot_individual_patient_predictions_old(        
+        patient_data,
+        plot_dir = None
+    ):
+    stay_id = patient_data['stay_id']
+    event = patient_data['event']
+    bin_edges = patient_data['time_bins']
+    probs = patient_data['proabbilities']
 
     event_types = ['Survival', 'Death']
     event_type = event_types[event]

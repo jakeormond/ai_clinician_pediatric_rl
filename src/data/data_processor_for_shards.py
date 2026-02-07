@@ -258,6 +258,11 @@ class ShardProcessor:
             
             if 'predictions' in self.dynamic_deephit_dataset:
                 f.create_dataset('predictions', data=self.dynamic_deephit_dataset['predictions'], dtype=np.float32)
+            if 'entropy' in self.dynamic_deephit_dataset:
+                f.create_dataset('entropy', data=self.dynamic_deephit_dataset['entropy'], dtype=np.float32)
+            if 'health_score' in self.dynamic_deephit_dataset:
+                f.create_dataset('health_score', data=self.dynamic_deephit_dataset['health_score'], dtype=np.float32)
+
 
         logger.info(f"Saved dynamic deephit dataset to {file_path}")
 
@@ -578,6 +583,10 @@ class ShardProcessor:
 
             if 'predictions' in f:
                 dynamic_deephit_dataset['predictions'] = f['predictions'][:].astype(np.float32)
+            if 'entropy' in f:
+                dynamic_deephit_dataset['entropy'] = f['entropy'][:].astype(np.float32)
+            if 'health_score' in f:
+                dynamic_deephit_dataset['health_score'] = f['health_score'][:].astype(np.float32)
 
         return dynamic_deephit_dataset
 

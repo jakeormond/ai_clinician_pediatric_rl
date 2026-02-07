@@ -39,11 +39,17 @@ class ConfigManager:
                         self.paths['final_model_dir'], 
                         "GRU", "final_model"
                     )
-                elif self.model_type == "dynamic_deephit_transformer" and self.cohort != 'all':
+                elif self.model_type == "dynamic_deephit_transformer" and self.cohort != 'all' and self.cohort is not None:
                     results_dir = os.path.join(
                         self.paths['final_model_dir'], 
                         "transformer", "final_model"
                     )
+                elif self.model_type == "dynamic_deephit_transformer" and self.split_num is not None:
+                    results_dir = os.path.join(
+                        self.paths['final_model_dir'], 
+                        "five_splits", f"split_{self.split_num}", "final_model"
+                    )
+
                 elif self.cohort == 'all':
                     # we will build the paths in the prediction function
                     results_dir = None

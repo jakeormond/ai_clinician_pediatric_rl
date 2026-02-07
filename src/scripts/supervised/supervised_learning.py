@@ -74,7 +74,7 @@ def parse_arguments():
                                  'single_split', 'development_single_split'],
                         help='Mode of training: single_fold or aggregate (default: single_fold)')
     
-    parser.add_argument('--split_num', type=int, default=None,
+    parser.add_argument('--split_num', type=int, nargs='+', default=None,
                         help='Split number to train (not strictly required for single_split mode)')
     
     
@@ -176,6 +176,55 @@ def main():
     logger.info("Logging configured (level=%s)", logging.getLevelName(logging.getLogger().getEffectiveLevel()))
     validate_arguments(args)
 
+    if args.experiment_variant == 'prediction' and args.split_num is not None:
+        """
+        this is for generating predictions on the MIMIC IV dataset with a single train/val/test split, for a specific split number.
+        """
+        from ...supervised_learning.predict import get_predictions, bootstrap_evaluation
+
+        split_nums = args.split_num if isinstance(args.split_num, list) else [args.split_num]
+        
+        for split_num in split_nums:
+            args.split_num = split_num
+
+            config_manager = ConfigManager(args)
+            # set training config
+            config_manager.set_training_config()
+            
+            # set max encounter length as 2 months
+            max_encounter_length = 24 * 60  # hours
+
+            if config_manager.hospital == "mimic_iv":
+                time_bins = [0, 13, 28, 47, 75, 116, 185, 322, 1435]
+            else:            
+                time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
+            config_manager.max_encounter_length = max_encounter_length
+            config_manager.time_bins = time_bins  
+
+            print(f"Running on {config_manager.environment} environment")    
+
+            logger.info(f"Processing split {split_num}")
+            config_manager.split_num = split_num
+
+            model_type = config_manager.model_type
+            experiment_dir = config_manager.experiment_dir
+
+            dynamic_deephit_dataset = get_predictions(
+                config_manager, 
+                model_type, 
+                experiment_dir
+            ) # generates the predictions, need to modify to get entropy and health score
+
+            bootstrap_evaluation(
+                dynamic_deephit_dataset,
+                config_manager=config_manager,
+                n_bootstrap_samples=100
+            ) # generates the bootstrap evaluation results for the predictions
+
+            plot_random_predictions(config_manager)
+            return
+
+    
     # Initialize config manager, it holds paths and environment info
     config_manager = ConfigManager(args)
 
@@ -225,6 +274,8 @@ def main():
             results = single_split_training(config_manager)
 
 
+        
+        
         elif args.experiment_variant == 'prediction' and args.cohort == 'all':
             """
             this is for generating predictions on the MIMIC IV dataset with a single train/val/test split.
@@ -341,7 +392,7 @@ def main():
                 inner_group='cohorts',
                 base_filename='cohort_model_comparison')
 
-            # plot_random_predictions(config_manager)   
+            plot_random_predictions(config_manager)   
                    
         
         elif args.experiment_variant == 'feature_evaluation':

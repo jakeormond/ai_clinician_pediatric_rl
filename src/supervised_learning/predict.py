@@ -234,14 +234,17 @@ def calculate_prediction_entropy(risk_logits):
     """
     # 1. Stack the risks: [batch, seq_len, 2, 8]
     # 2. Flatten to a single distribution: [batch, seq_len, 16]
-    combined_logits = torch.stack(risk_logits, dim=2).flatten(start_dim=2)
+    batch_size = risk_logits.shape[0]
     
     # 3. Convert to probabilities
-    probs = calculate_probabilities(combined_logits.cpu().numpy())  # (batch, seq_len, 16)
+    probs = calculate_probabilities(risk_logits.cpu().numpy())  # (batch, seq_len, 16)
     
+    # reshape
+    reshaped_probs = probs.reshape(batch_size, -1)
+
     # 4. Calculate Shannon Entropy: -sum(p * log(p))
     # We add a tiny epsilon to avoid log(0)
-    entropy = -torch.sum(probs * torch.log(probs + 1e-9), dim=-1)
+    entropy = -torch.sum(reshaped_probs * torch.log(reshaped_probs + 1e-9), dim=-1)
     
     return entropy
 
@@ -253,25 +256,26 @@ def calculate_comprehensive_health_score(risk_logits):
     """
     # 1. Combine into a single distribution [Batch, Seq, 16]
     # Dim 2 is [Death_0...Death_7, Disc_0...Disc_7]
-    combined_logits = torch.cat(risk_logits, dim=-1)
-    probs = F.softmax(combined_logits, dim=-1)
+    batch_size, k, t = risk_logits.shape
+    probs = calculate_probabilities(risk_logits)
+    probs_reshaped = probs.reshape(batch_size, -1)  # (batch, seq_len, 16)
 
     # 2. Create the Weight Vector
     # We want a linear progression for each event type
     # Death weights: -1.0 (soon) to -0.2 (distant)
-    death_weights = torch.linspace(-1.0, -0.2, steps=8)
+    death_weights = torch.linspace(-1.0, -0.2, steps=t)
     
     # Discharge weights: 0.4 (distant) to 1.0 (soon)
     # Note: Distant discharge (Bin 7) is index 8, Soon discharge (Bin 0) is index 15
     # after the cat() and flipping the order for Discharge
-    disc_weights = torch.linspace(0.4, 1.0, steps=8)
+    disc_weights = torch.linspace(0.2, 1.0, steps=t)
     disc_weights = torch.flip(disc_weights, dims=[0]) # So Bin 0 is 1.0
 
-    weights = torch.cat([death_weights, disc_weights]).to(probs.device)
+    weights = torch.cat([disc_weights, death_weights]).to(probs.device)
 
     # 3. Calculate Weighted Sum (Expected Health Value)
     # Result is between -1.0 and 1.0
-    raw_score = torch.sum(probs * weights, dim=-1)
+    raw_score = torch.sum(probs_reshaped * weights, dim=-1)
 
     # 4. Rescale to 0-100 for better clinical visualization
     # -1.0 -> 0 (Death Soon), 1.0 -> 100 (Discharge Soon)

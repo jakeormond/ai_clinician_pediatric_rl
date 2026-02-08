@@ -6,7 +6,7 @@ checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save 
 window_length: 72 #168 # Prediction horizon in hours - so 1 month
 device: "cuda"  # Device (cuda or cpu)
 
-tuning: True
+tuning: False
 use_windows_from_memory: False  # Whether to load precomputed windows into memory (only for smaller datasets) - 
 # not necessary for transformer model as windows are already in memory in the self.dynamic_deephit_dataset
 

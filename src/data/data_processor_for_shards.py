@@ -589,6 +589,42 @@ class ShardProcessor:
                 dynamic_deephit_dataset['health_score'] = f['health_score'][:].astype(np.float32)
 
         return dynamic_deephit_dataset
+    
+    @ staticmethod
+    def concatenate_dynamic_deephit_datasets(dataset_list):
+        # check that all datasets have the same feature_names
+        feature_names = dataset_list[0]['feature_names']
+        for dataset in dataset_list:
+            if not np.array_equal(dataset['feature_names'], feature_names):
+                raise ValueError("All datasets must have the same feature_names to concatenate")
+
+        concatenated_dataset = {}
+        concatenated_dataset['feature_names'] = feature_names
+
+        stay_ids_list = []
+        index_ptr_list = []
+        trajectories_list = []
+        event_list = []
+        time_to_event_raw_list = []
+        time_to_event_list = []
+
+        for dataset in dataset_list:
+            stay_ids_list.append(dataset['stay_ids'])
+            index_ptr_list.append(dataset['index_ptr'])
+            trajectories_list.append(dataset['trajectories'])
+            event_list.append(dataset['event'])
+            time_to_event_raw_list.append(dataset['time_to_event_raw'])
+            time_to_event_list.append(dataset['time_to_event'])
+
+        concatenated_dataset['stay_ids'] = np.concatenate(stay_ids_list, axis=0)
+        concatenated_dataset['index_ptr'] = np.concatenate(index_ptr_list, axis=0)
+        concatenated_dataset['trajectories'] = np.concatenate(trajectories_list, axis=0)
+        concatenated_dataset['event'] = np.concatenate(event_list, axis=0)
+        concatenated_dataset['time_to_event_raw'] = np.concatenate(time_to_event_raw_list, axis=0)
+        concatenated_dataset['time_to_event'] = np.concatenate(time_to_event_list, axis=0)
+
+        return concatenated_dataset
+
 
         
 def main():

@@ -18,6 +18,8 @@ import wandb
 import logging
 import sys
 
+from src.data.data_processor_for_shards import ShardProcessor
+
 
 from ...config_manager import ConfigManager  # Import the config manager
 from ...supervised_learning.dataset import Dataset
@@ -184,6 +186,7 @@ def main():
 
         split_nums = args.split_num if isinstance(args.split_num, list) else [args.split_num]
         
+        dynamic_deephit_datasets = []
         for split_num in split_nums:
             args.split_num = split_num
 
@@ -215,13 +218,22 @@ def main():
                 experiment_dir
             ) # generates the predictions, need to modify to get entropy and health score
 
-            bootstrap_evaluation(
-                dynamic_deephit_dataset,
-                config_manager=config_manager,
-                n_bootstrap_samples=100
-            ) # generates the bootstrap evaluation results for the predictions
+            dynamic_deephit_datasets.append(dynamic_deephit_dataset)
 
-            plot_random_predictions(config_manager)
+            # bootstrap_evaluation(
+            #     dynamic_deephit_dataset,
+            #     config_manager=config_manager,
+            #     n_bootstrap_samples=100
+            # ) # generates the bootstrap evaluation results for the predictions
+
+            # plot_random_predictions(config_manager)
+        
+        # after generating predictions for all specified splits, we can aggregate the results
+        combined_dynamic_deephit_dataset = ShardProcessor.concatenate_dynamic_deephit_datasets(dynamic_deephit_datasets)
+        
+        pass
+        
+        
         return
 
     

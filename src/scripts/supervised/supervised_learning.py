@@ -180,7 +180,7 @@ def main():
         """
         this is for generating predictions on the MIMIC IV dataset with a single train/val/test split, for a specific split number.
         """
-        from ...supervised_learning.predict import get_predictions, bootstrap_evaluation
+        from ...supervised_learning.predict import get_predictions, bootstrap_evaluation, plot_random_predictions
 
         split_nums = args.split_num if isinstance(args.split_num, list) else [args.split_num]
         
@@ -222,7 +222,7 @@ def main():
             ) # generates the bootstrap evaluation results for the predictions
 
             plot_random_predictions(config_manager)
-            return
+        return
 
     
     # Initialize config manager, it holds paths and environment info

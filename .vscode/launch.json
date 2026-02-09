@@ -146,7 +146,7 @@
                 "--prediction_type", "discharge_mortality_tte",
                 "--model_type", "dynamic_deephit_transformer",
                 "--mode", "single_split", 
-                "--split_num", "0", "1", "2", "3", "4",
+                "--split_num", "1", "2", "3", "4",
                 "--experiment_variant", "prediction"
             ],
             "console": "integratedTerminal",

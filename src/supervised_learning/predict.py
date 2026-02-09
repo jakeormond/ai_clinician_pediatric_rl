@@ -503,24 +503,31 @@ def bootstrap_evaluation(
             event_label[sample_indices].numpy()
         )
 
-    c_index_filepath = os.path.join(config_manager.paths['final_model_dir'], 'c_index_bootstrap_results.json')
+        # convert tensors to floats or arrays for JSON serialization
+        c_index_results = {k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else (v.cpu().numpy() if isinstance(v, torch.Tensor) else v) for k, v in c_index_results.items()}
+        brier_score_results = {k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else (v.cpu().numpy() if isinstance(v, torch.Tensor) else v) for k, v in brier_score_results.items()}
+        roc_prc_results = {k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else (v.cpu().numpy() if isinstance(v, torch.Tensor) else v) for k, v in roc_prc_results.items()}
+        ece_results = {k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else (v.cpu().numpy() if isinstance(v, torch.Tensor) else v) for k, v in ece_results.items()}
+
+    
+    c_index_filepath = os.path.join(config_manager.experiment_dir, 'c_index_bootstrap_results.json')
     with open(c_index_filepath, 'w') as f:
-        json.dump(c_index_results, f)
+        json.dump(_to_jsonable(c_index_results), f, indent=4)
     print(f"C-index bootstrap results saved to {c_index_filepath}")
 
-    brier_score_filepath = os.path.join(config_manager.paths['final_model_dir'], 'brier_score_bootstrap_results.json')
+    brier_score_filepath = os.path.join(config_manager.experiment_dir, 'brier_score_bootstrap_results.json')
     with open(brier_score_filepath, 'w') as f:
-        json.dump(brier_score_results, f)
+        json.dump(_to_jsonable(brier_score_results), f, indent=4)
     print(f"Brier score bootstrap results saved to {brier_score_filepath}")
 
-    roc_prc_filepath = os.path.join(config_manager.paths['final_model_dir'], 'roc_prc_bootstrap_results.json')
+    roc_prc_filepath = os.path.join(config_manager.experiment_dir, 'roc_prc_bootstrap_results.json')
     with open(roc_prc_filepath, 'w') as f:
-        json.dump(roc_prc_results, f)
+        json.dump(_to_jsonable(roc_prc_results), f, indent=4)
     print(f"ROC and PRC bootstrap results saved to {roc_prc_filepath}")
 
-    ece_filepath = os.path.join(config_manager.paths['final_model_dir'], 'ece_bootstrap_results.json')
+    ece_filepath = os.path.join(config_manager.experiment_dir, 'ece_bootstrap_results.json')
     with open(ece_filepath, 'w') as f:
-        json.dump(ece_results, f)
+        json.dump(_to_jsonable(ece_results), f, indent=4)
     print(f"ECE bootstrap results saved to {ece_filepath}")
 
 
@@ -1422,15 +1429,15 @@ def plot_random_predictions(
         cohort='all',
     ):
     
-    experiment_dir, cohort_final_model_dir = get_model_dir(
-        config_manager, model, cohort, cohort
-    )
+    # experiment_dir, cohort_final_model_dir = get_model_dir(
+    #     config_manager, model, cohort, cohort
+    # )
 
-    plot_dir = os.path.join(experiment_dir, 'prediction_plots')
+    plot_dir = os.path.join(config_manager.experiment_dir, 'prediction_plots')
     os.makedirs(plot_dir, exist_ok=True)
 
     filename = 'test_set_predictions'
-    filepath = os.path.join(experiment_dir, filename + '.h5')
+    filepath = os.path.join(config_manager.experiment_dir, filename + '.h5')
     # load existing predictions
     print(f"Loading existing predictions from {filepath}")
     dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(filepath)

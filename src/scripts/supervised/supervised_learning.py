@@ -17,6 +17,7 @@ from datetime import datetime
 import wandb
 import logging
 import sys
+from pathlib import Path
 
 from src.data.data_processor_for_shards import ShardProcessor
 
@@ -229,7 +230,9 @@ def main():
             # plot_random_predictions(config_manager)
         
         # after generating predictions for all specified splits, we can aggregate the results
-        combined_dynamic_deephit_dataset = ShardProcessor.concatenate_dynamic_deephit_datasets(dynamic_deephit_datasets)
+            save_dir = Path(config_manager.experiment_dir).parents[2]
+
+        combined_dynamic_deephit_dataset = ShardProcessor.concatenate_dynamic_deephit_datasets(dynamic_deephit_datasets, save_dir = save_dir)
         
         pass
         

@@ -7,6 +7,7 @@ import copy
 import h5py
 import os
 import glob
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import time
@@ -591,7 +592,7 @@ class ShardProcessor:
         return dynamic_deephit_dataset
     
     @ staticmethod
-    def concatenate_dynamic_deephit_datasets(dataset_list):
+    def concatenate_dynamic_deephit_datasets(dataset_list, save_dir = None):
         # check that all datasets have the same feature_names
         feature_names = dataset_list[0]['feature_names']
         for dataset in dataset_list:
@@ -607,14 +608,28 @@ class ShardProcessor:
         event_list = []
         time_to_event_raw_list = []
         time_to_event_list = []
+        predictions_list = []
+        entropy_list = []
+        health_score_list = []
 
-        for dataset in dataset_list:
+        for i, dataset in enumerate(dataset_list):
             stay_ids_list.append(dataset['stay_ids'])
-            index_ptr_list.append(dataset['index_ptr'])
+            
+            if i == 0:
+                index_ptr_list.append(dataset['index_ptr'])
+            else:
+                dataset['index_ptr'] = dataset['index_ptr'] + index_ptr_list[-1][-1]  # shift index_ptr by the last value of the previous dataset's index_ptr
+                index_ptr_list[i-1] = index_ptr_list[i-1][:-1]  # remove the last value of the previous dataset's index_ptr to avoid duplication
+                index_ptr_list.append(dataset['index_ptr'])
+
             trajectories_list.append(dataset['trajectories'])
             event_list.append(dataset['event'])
             time_to_event_raw_list.append(dataset['time_to_event_raw'])
             time_to_event_list.append(dataset['time_to_event'])
+        
+            predictions_list.append(dataset['predictions'])
+            entropy_list.append(dataset['entropy'])
+            health_score_list.append(dataset['health_score'])
 
         concatenated_dataset['stay_ids'] = np.concatenate(stay_ids_list, axis=0)
         concatenated_dataset['index_ptr'] = np.concatenate(index_ptr_list, axis=0)
@@ -622,6 +637,13 @@ class ShardProcessor:
         concatenated_dataset['event'] = np.concatenate(event_list, axis=0)
         concatenated_dataset['time_to_event_raw'] = np.concatenate(time_to_event_raw_list, axis=0)
         concatenated_dataset['time_to_event'] = np.concatenate(time_to_event_list, axis=0)
+        concatenated_dataset['predictions'] = np.concatenate(predictions_list, axis=0)
+        concatenated_dataset['entropy'] = np.concatenate(entropy_list, axis=0)
+        concatenated_dataset['health_score'] = np.concatenate(health_score_list, axis=0)
+
+        if save_dir is not None:
+            save_path = Path(save_dir) / "concatenated_dynamic_deephit_dataset.h5"
+            ShardProcessor.save_dynamic_deephit_dataset_to_h5(concatenated_dataset, save_path)
 
         return concatenated_dataset
 

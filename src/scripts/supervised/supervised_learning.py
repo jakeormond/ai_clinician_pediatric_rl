@@ -233,10 +233,7 @@ def main():
             save_dir = Path(config_manager.experiment_dir).parents[2]
 
         combined_dynamic_deephit_dataset = ShardProcessor.concatenate_dynamic_deephit_datasets(dynamic_deephit_datasets, save_dir = save_dir)
-        
-        pass
-        
-        
+                
         return
 
     

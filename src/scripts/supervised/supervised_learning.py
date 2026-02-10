@@ -296,16 +296,30 @@ def main():
                        'sepsis_broad', 'sepsis_strict']
             
             
-            # models = ['GRU', 'transformer']
-            # predict_all(
-            #     config_manager, 
-            #     n_bootstrap_samples=100,
-            #     cohorts=['all'],
-            #     models=models,
-            #     outer_group='cohorts',
-            #     inner_group='models',
-            #     base_filename='all_stays_model_comparison'
-            # )
+            models = ['transformer']
+            # cohort comparisons
+            predict_all(
+                config_manager, 
+                n_bootstrap_samples=100,
+                cohorts=cohorts,
+                models=models,
+                outer_group='models',
+                inner_group='cohorts',
+                base_filename='cohort_comparison'
+            )
+            
+            
+            models = ['GRU', 'transformer']
+            
+            predict_all(
+                config_manager, 
+                n_bootstrap_samples=100,
+                cohorts=['all'],
+                models=models,
+                outer_group='cohorts',
+                inner_group='models',
+                base_filename='all_stays_model_comparison'
+            )
 
             # models = ['GRU', 'transformer']
             # predict_all(

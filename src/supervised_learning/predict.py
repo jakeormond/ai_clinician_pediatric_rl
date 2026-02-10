@@ -375,6 +375,7 @@ def get_model_dir(config_manager, model_type, data_cohort, model_cohort):
 
     cohort_final_model_dir = os.path.join(
         config_manager.paths['final_model_dir'],
+        'disease_cohort_results',
         model_type,
         model_cohort,
         'final_model'

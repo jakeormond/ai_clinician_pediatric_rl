@@ -643,7 +643,24 @@ class ShardProcessor:
 
         if save_dir is not None:
             save_path = Path(save_dir) / "concatenated_dynamic_deephit_dataset.h5"
-            ShardProcessor.save_dynamic_deephit_dataset_to_h5(concatenated_dataset, save_path)
+            
+            with h5py.File(save_path, 'w') as f:
+                f.create_dataset('feature_names', data=concatenated_dataset['feature_names'])
+                f.create_dataset('stay_ids', data=concatenated_dataset['stay_ids'], dtype=np.int32)
+                f.create_dataset('index_ptr', data=concatenated_dataset['index_ptr'], dtype=np.int32)
+                f.create_dataset('trajectories', data=concatenated_dataset['trajectories'], dtype=np.float32, 
+                                 chunks=(1, concatenated_dataset['trajectories'].shape[1]))
+                f.create_dataset('event', data=concatenated_dataset['event'], dtype=np.int32)
+                f.create_dataset('time_to_event_raw', data=concatenated_dataset['time_to_event_raw'], dtype=np.int32)
+                f.create_dataset('time_to_event', data=concatenated_dataset['time_to_event'], dtype=np.int32)
+
+                if 'predictions' in concatenated_dataset:
+                    f.create_dataset('predictions', data=concatenated_dataset['predictions'], dtype=np.float32)
+                if 'entropy' in concatenated_dataset:
+                    f.create_dataset('entropy', data=concatenated_dataset['entropy'], dtype=np.float32)
+                if 'health_score' in concatenated_dataset:
+                    f.create_dataset('health_score', data=concatenated_dataset['health_score'], dtype=np.float32)
+
 
         return concatenated_dataset
 

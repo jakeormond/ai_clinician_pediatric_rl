@@ -195,9 +195,9 @@ class ShardProcessor:
         self.physiological_feature_type = []
 
         physiological_feature_sets = [
-            'hemodynamics', 'labs', 'neurological', 'routine_vital_signs'Home (9A Sunnyside Rd S)
+            'hemodynamics', 'labs', 'neurological', 'routine_vital_signs', 'respiratory'
             ]
-        
+                
         for i, feature in enumerate(feature_names):
             if feature == 'time':
                 continue
@@ -206,7 +206,8 @@ class ShardProcessor:
                 feature_row = self.features_to_use[self.features_to_use['feature'] == feature]            
                 feature_set = feature_row['feature_set'].values[0]
                 data_type = feature_row['data_type'].values[0]
-                if feature_set in physiological_feature_sets:
+                response_intervention = feature_row['response_intervention'].values[0]
+                if feature_set in physiological_feature_sets and response_intervention == 'response':
                     self.physiological_feature_ind.append(i)
                     self.physiological_feature_type.append(data_type)
 
@@ -536,7 +537,8 @@ class ShardProcessor:
                             data_type = 'delta' # if it's delta, gemini said min-max it
                             
 
-                if data_type == 'ordinal' or data_type == 'delta' or feature_set == 'medications':
+                if data_type == 'ordinal' or data_type == 'delta' or feature_set == 'medications' or \
+                    feature_set == 'combined_hourly_iv':
                     # min-max normalize the feature
                     max_min_diff = self.obs_norm_dict[feature]['max'] - self.obs_norm_dict[feature]['min']
                     trajectories[:, j] = (trajectories[:, j] - self.obs_norm_dict[feature]['min']) / max_min_diff  

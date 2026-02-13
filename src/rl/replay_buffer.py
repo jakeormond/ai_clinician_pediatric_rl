@@ -104,7 +104,36 @@ class DynamicDeepHitTransformerDataset(Dataset):
         # for an epoch, we will sample self.n_windows/window_length windows
         self.n_samples = self.n_windows // self.window_length
 
+        self.features_to_use = pd.read_csv(config_manager.data_config['features_to_use_path'])
+        
+        # get indices of response features to zero out or carry forward at the final timestep (for RL setting)
+        self.response_zero_ind = []
+        self.carry_forward_ind = []        
+
+        for i, feature in enumerate(self.feature_names):
+            feature_row = self.features_to_use[self.features_to_use['feature'] == feature]            
+            
+            if feature_row.empty:
+                continue
+
+            response_intervention = feature_row['response_intervention'].values[0]
+            feature_set = feature_row['feature_set'].values[0]
+            if response_intervention == 'intervention':
+                if feature_set in ['fluids_intake', 'medications', 'combined_hourly_iv']:
+                    self.response_zero_ind.append(i)
+                else:
+                    self.carry_forward_ind.append(i)
+            
+                if f"{feature}_mask" in self.feature_names:
+                    mask_ind = self.feature_names.index(f"{feature}_mask")
+                    self.carry_forward_ind.append(mask_ind)
+                
+                if f"{feature}_delta" in self.feature_names:
+                    delta_ind = self.feature_names.index(f"{feature}_delta")
+                    self.carry_forward_ind.append(delta_ind)
+        
         self.reshuffle_subsample() 
+
 
     def reshuffle_subsample(self):
         """shuffle self.window_end_indices and select first n_samples indices"""
@@ -153,6 +182,12 @@ class DynamicDeepHitTransformerDataset(Dataset):
             trajectories = torch.cat([pad_block, trajectories], dim=0)
             tte_pad_block = time_to_event[0:1].repeat(pad)
             time_to_event = torch.cat([tte_pad_block, time_to_event], dim=0)
+
+        # zero out or carry forward response features at final timestep for RL setting
+        if self.response_zero_ind:
+            trajectories[-1, self.response_zero_ind] = 0.0
+        if self.carry_forward_ind:
+            trajectories[-1, self.carry_forward_ind] = trajectories[-2, self.carry_forward_ind]
 
 
         return {

@@ -133,6 +133,28 @@ class ResidualCausalStem(nn.Module):
         return self.dropout(out)
 
 
+class FeatureDropout(nn.Module):
+    def __init__(self, p=0.1):
+        super().__init__()
+        self.p = p
+
+    def forward(self, x):
+        # 1. Automatic Deactivation:
+        # If the model is in .eval() mode OR dropout is 0, skip the logic
+        if not self.training or self.p == 0:
+            return x
+        
+        # 2. Training Logic:
+        batch_size, _, num_features = x.shape
+        # Create a mask: 1 for 'keep', 0 for 'drop'
+        mask = torch.bernoulli(torch.full((batch_size, 1, num_features), 1 - self.p)).to(x.device)
+        
+        # Standard dropout scaling (divide by 1-p) so that the 
+        # total energy of the signal stays consistent between train and eval
+        return x * mask * (1.0 / (1.0 - self.p))
+
+
+
 class TransformerDeepHitMulti(nn.Module):
     def __init__(
         self,
@@ -144,6 +166,7 @@ class TransformerDeepHitMulti(nn.Module):
         num_time_bins: int,
         num_risks: int,
         dropout: float = 0.3,
+        feature_dropout_p: float = 0.0, # Probability of dropping each feature (column) during training
         max_seq_len: int = 768, # For Positional Encoding and padding
         predict_covariates: list = None,
         prediction_time_horizon: int = 4, # How many steps ahead to predict 
@@ -172,6 +195,7 @@ class TransformerDeepHitMulti(nn.Module):
         self.num_time_bins = int(num_time_bins)
         self.num_risks = int(num_risks)
         self.dropout = dropout
+        self.feature_dropout_p = feature_dropout_p
         self.max_seq_len = max_seq_len
         self.predict_covariates = predict_covariates if predict_covariates else []
         self.prediction_time_horizon = prediction_time_horizon
@@ -179,6 +203,10 @@ class TransformerDeepHitMulti(nn.Module):
         # Pre-calculate the fixed-size Causal Mask
         self.register_buffer('causal_mask', self.generate_square_subsequent_mask(max_seq_len))
         
+        # feature dropout
+        # 1. Feature Dropout (The Column Dropout we discussed)
+        self.feature_dropout = FeatureDropout(p=feature_dropout_p)
+
         # ---- NEW: CNN Embedding Stem ---
         # Calculate the total receptive field offset
         # causal_padding = (cnn_kernel_size - 1) * cnn_dilation
@@ -292,6 +320,10 @@ class TransformerDeepHitMulti(nn.Module):
         """
         # Ensure we only use the part of the pre-calculated mask relevant to the batch sequence length
         batch_size, seq_len, _ = x.shape
+
+        # FEATURE DROPOUT
+        # Apply Feature (Column) Dropout first
+        x = self.feature_dropout(x)
         
         # --- NEW: 1. Process with CNN Stem ---
         # Input x is [B, T, F]. Conv1d wants [B, F, T]
@@ -364,7 +396,8 @@ class TransformerDeepHitMulti(nn.Module):
             if torch.isnan(logits).any():
                 raise ValueError("NaN values found in risk_logits during forward pass.")
             
-        return risk_logits, covariate_pred
+        # return the output for the final timestep only, as that's what we use for prediction and evaluation    
+        return risk_logits, covariate_pred, output[:, -1, :] # return the final timestep's output for potential use in loss functions
 
 
 def get_grad_norm(model):
@@ -453,7 +486,7 @@ class TransformerDeepHitTrainer:
         # Forward pass
         # risk_logits: list of tensors, where each tensor is [B, T_cap, num_time_bins]
         # covariate_pred: None (or [B, T_cap, num_covariates] if implemented)
-        risk_logits, covariate_pred = self.model(X, padding_mask=None)
+        risk_logits, covariate_pred, _ = self.model(X, padding_mask=None)
         
         # We need to restructure the risk_logits for the loss function:
         # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_risks, num_time_bins]
@@ -555,7 +588,7 @@ class TransformerDeepHitTrainer:
 
         # Forward pass
         with torch.no_grad():
-            risk_logits, covariate_pred = self.model(X, padding_mask=None)
+            risk_logits, covariate_pred, _ = self.model(X, padding_mask=None)
             # We need to restructure the risk_logits for the loss function:
             # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_risks, num_time_bins]
             logits = torch.stack(risk_logits, dim=2)          
@@ -618,6 +651,7 @@ def get_trainer(
         num_time_bins=n_time_bins,
         num_risks=num_risks,
         dropout=hyperparams['dropout'],
+        feature_dropout_p=hyperparams['feature_dropout_p'],
         ff_factor=hyperparams['ff_factor'],
         max_seq_len=config_manager.training_config['window_length'],
         predict_covariates=train_processor.physiological_feature_ind,       

@@ -12,6 +12,7 @@ use_windows_from_memory: False  # Whether to load precomputed windows into memor
 
 learning_rate: 1.1e-05          #      [1e-6]  # Learning rates to try - 1e-4 overfits quickly
 dropout: 0.159 # 0.138422
+feature_dropout_p: 0.05 # 0.0 means 'off', up to 20% features dropped
 weight_decay: 0.000266 # 1.1e-5 # 5e-3
 use_layernorm: True
 batch_size: 64  # Batch size for all networks

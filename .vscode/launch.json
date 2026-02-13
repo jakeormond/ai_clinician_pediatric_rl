@@ -65,8 +65,9 @@
                 "--model_type", "dynamic_deephit_transformer", 
                 "--prediction_type", "discharge_mortality_tte",
                 "--mode", "single_split", 
+                "--split_num", "0",
                 "--search_variant", "fixed_hyperparameters",
-                "--final_timestep_only", "True",
+                "--final_timestep_only", "True",                
                 "--cohort", "all",
                 "--n_epochs", "2",
             ],
@@ -467,7 +468,31 @@
         },
 
         {
-            "name": "td3_bc",
+            "name": "mimiciv_td3_bc",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.rl.reinforcement_learning",
+            "args": [
+                "--hospital", "mimic_iv", 
+                "--experiment_type", "reinforcement_learning",
+                "--model_type", "td3_bc", 
+                "--mode", "single_fold", 
+                "--fold", "0",
+                "--experiment_variant", "standard",
+                "--search_variant", "random_search",
+                "--n_search_iterations", "1",
+                "--testing",
+                "--n_epochs", "200",
+                "--action_mode", "continuous_only",
+            
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
+            "name": "choc_td3_bc",
             "type": "debugpy",
             "request": "launch",
             "module": "src.scripts.rl.reinforcement_learning",

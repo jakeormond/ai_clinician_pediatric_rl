@@ -195,19 +195,20 @@ class ShardProcessor:
         self.physiological_feature_type = []
 
         physiological_feature_sets = [
-            'hemodynamics', 'labs', 'neurological', 'routine_vital_signs'
+            'hemodynamics', 'labs', 'neurological', 'routine_vital_signs'Home (9A Sunnyside Rd S)
             ]
         
         for i, feature in enumerate(feature_names):
             if feature == 'time':
                 continue
             
-            feature_row = self.features_to_use[self.features_to_use['feature'] == feature]            
-            feature_set = feature_row['feature_set'].values[0]
-            data_type = feature_row['data_type'].values[0]
-            if feature_set in physiological_feature_sets:
-                self.physiological_feature_ind.append(i)
-                self.physiological_feature_type.append(data_type)
+            if feature in self.features_to_use['feature'].values:
+                feature_row = self.features_to_use[self.features_to_use['feature'] == feature]            
+                feature_set = feature_row['feature_set'].values[0]
+                data_type = feature_row['data_type'].values[0]
+                if feature_set in physiological_feature_sets:
+                    self.physiological_feature_ind.append(i)
+                    self.physiological_feature_type.append(data_type)
 
         final_file_name = f"{self.split}_dynamic_deephit_dataset.h5"
         final_file_path = os.path.join(self.shard_dir, final_file_name)
@@ -494,55 +495,65 @@ class ShardProcessor:
                 index_ptr = f['index_ptr'][:]
                 trajectories = f['trajectories'][:]
 
-                # drop trajectories longer than max_time
-                # remove long trajectories beyond max_time
-                trajectories, stay_ids, index_ptr = self.drop_long_trajectories(
-                    trajectories, stay_ids, index_ptr)
-                
-                if config_manager.data_config['add_time_col']:
-                    # add time column to trajectories
-                    trajectories, feature_names = self.add_time_column(trajectories, stay_ids, index_ptr, feature_names)
-                
+            # drop trajectories longer than max_time
+            # remove long trajectories beyond max_time
+            trajectories, stay_ids, index_ptr = self.drop_long_trajectories(
+                trajectories, stay_ids, index_ptr)
+            
+            if config_manager.data_config['add_time_col']:
+                # add time column to trajectories
+                trajectories, feature_names = self.add_time_column(trajectories, stay_ids, index_ptr, feature_names)
+            
 
-                # get the index of the death feature, and drop it from the trajectories
-                death_feature_index = feature_names.index('death')
-                
-                # extract death feature values before removing
-                death_values = trajectories[:, death_feature_index]
-                
-                # update feature_names
-                feature_names.pop(death_feature_index)
-                n_features = len(feature_names)
-                trajectories = np.delete(trajectories, death_feature_index, axis=1)
+            # get the index of the death feature, and drop it from the trajectories
+            death_feature_index = feature_names.index('death')
+            
+            # extract death feature values before removing
+            death_values = trajectories[:, death_feature_index]
+            
+            # update feature_names
+            feature_names.pop(death_feature_index)
+            n_features = len(feature_names)
+            trajectories = np.delete(trajectories, death_feature_index, axis=1)
 
-                # normalize the trajectories
-                for j, feature in enumerate(feature_names):
-                    if feature == 'time':
-                        data_type = 'continuous'
-                        feature_set = 'time'
-                    else:
+            # normalize the trajectories
+            for j, feature in enumerate(feature_names):
+                if feature == 'time':
+                    data_type = 'continuous'
+                    feature_set = 'time'
+                else:
+                    if feature in self.features_to_use['feature'].values:
                         feature_row = self.features_to_use[self.features_to_use['feature'] == feature]
                         data_type = feature_row['data_type'].values[0]
                         feature_set = feature_row['feature_set'].values[0]
+                    else: 
+                        # must either be mask or delta
+                        feature_set = 'blank' # we just need a placeholder
 
-                    if data_type == 'ordinal' or feature_set == 'medications':
-                        # min-max normalize the feature
-                        max_min_diff = self.obs_norm_dict[feature]['max'] - self.obs_norm_dict[feature]['min']
-                        trajectories[:, j] = (trajectories[:, j] - self.obs_norm_dict[feature]['min']) / max_min_diff  
-                    
-                    elif data_type == 'continuous':
-                        # z-score normalize the feature
-                        trajectories[:, j] = (trajectories[:, j] - self.obs_norm_dict[feature]['mean']) / self.obs_norm_dict[feature]['std']
-                    
-                    # for binary features, do nothing
-                    # throw error if any nans, infs, or valeus greater than 1e6
-                    if np.isnan(trajectories[:, j]).any():
-                        raise ValueError(f"NaNs found in normalized feature {feature} in shard {shard_file}")
-                    if np.isinf(trajectories[:, j]).any():
-                        raise ValueError(f"Infs found in normalized feature {feature} in shard {shard_file}")
-                    if np.abs(trajectories[:, j]).max() > 1e6:
-                        raise ValueError(f"Extreme values found in normalized feature {feature} in shard {shard_file}")
-                 
+                        if "mask" in feature:
+                            data_type = 'binary' # if it's a mask, it's binary, no need to normalize
+                        elif "delta" in feature: 
+                            data_type = 'delta' # if it's delta, gemini said min-max it
+                            
+
+                if data_type == 'ordinal' or data_type == 'delta' or feature_set == 'medications':
+                    # min-max normalize the feature
+                    max_min_diff = self.obs_norm_dict[feature]['max'] - self.obs_norm_dict[feature]['min']
+                    trajectories[:, j] = (trajectories[:, j] - self.obs_norm_dict[feature]['min']) / max_min_diff  
+                
+                elif data_type == 'continuous':
+                    # z-score normalize the feature
+                    trajectories[:, j] = (trajectories[:, j] - self.obs_norm_dict[feature]['mean']) / self.obs_norm_dict[feature]['std']
+                
+                # for binary features, do nothing
+                # throw error if any nans, infs, or valeus greater than 1e6
+                if np.isnan(trajectories[:, j]).any():
+                    raise ValueError(f"NaNs found in normalized feature {feature} in shard {shard_file}")
+                if np.isinf(trajectories[:, j]).any():
+                    raise ValueError(f"Infs found in normalized feature {feature} in shard {shard_file}")
+                if np.abs(trajectories[:, j]).max() > 1e6:
+                    raise ValueError(f"Extreme values found in normalized feature {feature} in shard {shard_file}")
+                
             
             normalized_shard_file = shard_file.replace(".h5", "_normalized.h5")
 

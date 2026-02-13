@@ -5,7 +5,8 @@ local:
     code_dir: "/home/jake/Documents/AI_Clinician/choc_code"
   mimic_iv:
     experiments_dir: "/home/jake/Documents/AI_Clinician/experiments"
-    final_model_dir: "/home/jake/Documents/AI_Clinician/dynamic_deephit_results/mimic_iv/"
+    supervised_final_model_dir: "/home/jake/Documents/AI_Clinician/dynamic_deephit_results/mimic_iv/"
+    rl_final_model_dir: "/home/jake/Documents/AI_Clinician/reinforcement_learning/mimic_iv/"
     data_dir: "/home/jake/Documents/AI_Clinician//mimic_iv_3.1_data"
     code_dir: "/home/jake/Documents/AI_Clinician/mimic_iv_3.1_code/mimic_iv_icu_data_processing"
   

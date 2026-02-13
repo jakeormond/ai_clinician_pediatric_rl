@@ -44,7 +44,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Train RL model')
     parser.add_argument('--hospital', 
                         default='choc', 
-                        choices=['choc', 'mimic'], 
+                        choices=['choc', 'mimic_iv'], 
                         help='Hospital dataset to use (default: choc)')
     
     parser.add_argument('--experiment_type', 

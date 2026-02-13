@@ -46,7 +46,7 @@ class LayerNormChannels(nn.Module):
         return x.transpose(1, 2)       # [B, C, T] back for the next CNN layer
 
 
-class ResidualCausalStem(nn.Module):
+class ResidualCausalStem_V1(nn.Module): # this causes stripiness because of dilated convolution aliasing
     def __init__(self, feature_dim, d_model, kernel_size, dilation, dropout):
         super().__init__()
         # 1. Path A: The Convolutional Trend Extractor
@@ -83,6 +83,54 @@ class ResidualCausalStem(nn.Module):
         out = out.transpose(1, 2)
         out = self.dropout(self.relu(self.norm(out)))
         return out.transpose(1, 2)
+
+
+
+class ResidualCausalStem(nn.Module):
+    def __init__(self, feature_dim, d_model, kernel_size, dilation, dropout):
+        super().__init__()
+        # 1. Path A: Local Feature Mixing (Dilation=1)
+        # This prevents the "checkerboard" effect by ensuring no timesteps are skipped
+        self.local_conv = nn.Sequential(
+            nn.ConstantPad1d((2, 0), 0), # (Left Padding, Right Padding)
+            nn.Conv1d(feature_dim, d_model, kernel_size=3, dilation=1, bias=False),
+            nn.ReLU()
+        )
+        
+        # 2. Path B: The Dilated Trend Extractor (Dilation=d)
+        causal_padding = (kernel_size - 1) * dilation
+        self.pad_dilated = nn.ConstantPad1d((causal_padding, 0), 0)
+        self.dilated_conv = nn.Conv1d(
+            d_model, d_model, kernel_size, 
+            dilation=dilation, bias=False
+        )
+        
+        # 3. Path C: The Skip Connection (Projection)
+        self.raw_proj = nn.Linear(feature_dim, d_model)
+        
+        self.norm = nn.LayerNorm(d_model) # Simplified Norm
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # x: [B, T, F]
+        
+        # Step 1: Raw State Projection
+        raw_state = self.raw_proj(x) # [B, T, d_model]
+        
+        # Step 2: Causal Trend Extraction
+        x_conv = x.transpose(1, 2) # [B, F, T]
+        
+        # First pass: local mixing (fills the "dilation gaps")
+        feat_mixed = self.local_conv(x_conv) # [B, d_model, T]
+        
+        # Second pass: dilated trend
+        trends = self.dilated_conv(self.pad_dilated(feat_mixed))
+        trends = trends.transpose(1, 2) # [B, T, d_model]
+        
+        # Step 3: Combined Residual
+        # Now every timestep in the kernel window contributes to 'trends'
+        out = self.norm(trends + raw_state)
+        return self.dropout(out)
 
 
 class TransformerDeepHitMulti(nn.Module):

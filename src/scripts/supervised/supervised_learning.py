@@ -148,6 +148,8 @@ def parse_arguments():
                 or os.getpid())
     args.start_time = f"{ts}_job{job_id}"
 
+    if len(args.split_num) == 1: args.split_num = args.split_num[0]
+    
     return args
 
 
@@ -263,7 +265,7 @@ def main():
             config_manager.set_training_config()
             
             # set max encounter length as 2 months
-            max_encounter_length = 24 * 60  # hours
+            max_encounter_length = 24 * 60  # hours - CONFIRM THIS IS CODED IN THE DATA PREP
             
             if config_manager.hospital == "mimic_iv":
                 time_bins = [0, 13, 28, 47, 75, 116, 185, 322, 1435]

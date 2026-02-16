@@ -134,7 +134,8 @@ def inference_loop(
     window_length = config_manager.training_config['window_length']
 
     # create storage for predictions
-    all_predictions = []    
+    all_predictions = []   
+    all_outputs = [] 
     model.eval()
     with torch.no_grad():
         for i, stay_id in enumerate(stay_ids):
@@ -166,6 +167,7 @@ def inference_loop(
             # 4. Batch Inference
             batch_size = 64
             all_preds = []
+            all_outs = []
             
             for chunk_start in range(0, T, batch_size):
                 chunk_end = min(chunk_start + batch_size, T)
@@ -179,7 +181,7 @@ def inference_loop(
                     risk_logits = risk_logits.cpu()  # (batch_size, window_length, num_risks, num_time_bins)
                 else:
                     # risk_logits, _ = model(windows_chunk, padding_mask=mask_chunk)
-                    risk_logits, _ = model(windows_chunk)
+                    risk_logits, _, output = model(windows_chunk)
                     risk_logits = [logits[:, -1, :].cpu() for logits in risk_logits]  # unpack tuple
                     risk_logits = torch.stack(risk_logits, dim=2)  # (batch_size, num_risks, num_time_bins)
 
@@ -187,18 +189,25 @@ def inference_loop(
                     if torch.isnan(risk_logits).any():
                         raise ValueError(f"NaN values found in risk_logits for stay_id {stay_id} at chunk {chunk_start}-{chunk_end}")
 
+                    # check if output has any nulls
+                    if torch.isnan(output).any():
+                        raise ValueError(f"NaN values found in model output for stay_id {stay_id} at chunk {chunk_start}-{chunk_end}")
+
                 # reshape to (T, K, D)
                 final_step_logits = risk_logits.permute(0, 2, 1)
 
                 # add to list of all predictions    
                 all_preds.append(final_step_logits)
+                all_outs.append(output.cpu())
             
             # 5. concatenate all predictions for this patient
             patient_preds = torch.cat(all_preds, dim=0)  
             all_predictions.append(patient_preds)
+            all_outputs.append(torch.cat(all_outs, dim=0))           
 
     # concatenate all patient predictions into a numpy array
     all_predictions = torch.cat(all_predictions, dim=0).cpu().numpy()
+    all_outputs = torch.cat(all_outputs, dim=0).cpu().numpy()
     if model_type == 'GRU':
         # switch the last 2 dimesnsions of logits to match expected shape (N, D, K)
         all_predictions = np.transpose(all_predictions, (0, 2, 1))
@@ -212,6 +221,7 @@ def inference_loop(
     processor.dynamic_deephit_dataset['predictions'] = all_predictions
     processor.dynamic_deephit_dataset['entropy'] = entropy.cpu().numpy()
     processor.dynamic_deephit_dataset['health_score'] = health_score.cpu().numpy()
+    processor.dynamic_deephit_dataset['model_outputs'] = all_outputs
 
     # save all values in processor.dynamic_deephit_dataset to an h5 file
     if filename is not None:

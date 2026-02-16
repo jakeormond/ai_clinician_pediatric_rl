@@ -46,7 +46,7 @@ class ConfigManager:
                     )
                 elif self.model_type == "dynamic_deephit_transformer" and self.split_num is not None:
                     results_dir = os.path.join(
-                        self.paths['final_model_dir'], 
+                        self.paths['supervised_final_model_dir'], 
                         "five_splits", f"split_{self.split_num}", "final_model"
                     )
 

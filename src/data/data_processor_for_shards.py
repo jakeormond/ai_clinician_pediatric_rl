@@ -265,6 +265,8 @@ class ShardProcessor:
                 f.create_dataset('entropy', data=self.dynamic_deephit_dataset['entropy'], dtype=np.float32)
             if 'health_score' in self.dynamic_deephit_dataset:
                 f.create_dataset('health_score', data=self.dynamic_deephit_dataset['health_score'], dtype=np.float32)
+            if 'model_outputs' in self.dynamic_deephit_dataset:
+                f.create_dataset('model_outputs', data=self.dynamic_deephit_dataset['model_outputs'], dtype=np.float32)
 
 
         logger.info(f"Saved dynamic deephit dataset to {file_path}")
@@ -624,6 +626,7 @@ class ShardProcessor:
         predictions_list = []
         entropy_list = []
         health_score_list = []
+        model_outputs_list = []
 
         for i, dataset in enumerate(dataset_list):
             stay_ids_list.append(dataset['stay_ids'])
@@ -643,6 +646,8 @@ class ShardProcessor:
             predictions_list.append(dataset['predictions'])
             entropy_list.append(dataset['entropy'])
             health_score_list.append(dataset['health_score'])
+            if 'model_outputs' in dataset:
+                model_outputs_list.append(dataset['model_outputs'])
 
         concatenated_dataset['stay_ids'] = np.concatenate(stay_ids_list, axis=0)
         concatenated_dataset['index_ptr'] = np.concatenate(index_ptr_list, axis=0)
@@ -653,6 +658,7 @@ class ShardProcessor:
         concatenated_dataset['predictions'] = np.concatenate(predictions_list, axis=0)
         concatenated_dataset['entropy'] = np.concatenate(entropy_list, axis=0)
         concatenated_dataset['health_score'] = np.concatenate(health_score_list, axis=0)
+        concatenated_dataset['model_outputs'] = np.concatenate(model_outputs_list, axis=0)
 
         if save_dir is not None:
             save_path = Path(save_dir) / "concatenated_dynamic_deephit_dataset.h5"
@@ -673,7 +679,9 @@ class ShardProcessor:
                     f.create_dataset('entropy', data=concatenated_dataset['entropy'], dtype=np.float32)
                 if 'health_score' in concatenated_dataset:
                     f.create_dataset('health_score', data=concatenated_dataset['health_score'], dtype=np.float32)
-
+                # if 'model_outputs' in concatenated_dataset:
+                #     f.create_dataset('model_outputs', data=concatenated_dataset['model_outputs'], dtype=np.float32)
+            logger.info(f"Saved concatenated dynamic deephit dataset to {save_path}")
 
         return concatenated_dataset
 

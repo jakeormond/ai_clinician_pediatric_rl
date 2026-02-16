@@ -64,7 +64,7 @@ echo "Starting training..."
 python -u -m src.scripts.supervised.supervised_learning \
     --hospital mimic_iv \
     --experiment_type supervised_learning \
-    --model_type dynamic_deephit \
+    --model_type dynamic_deephit_transformer \
     --prediction_type discharge_mortality_tte \
     --mode single_split \
     --split_num 1 \

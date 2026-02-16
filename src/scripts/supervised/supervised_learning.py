@@ -215,13 +215,13 @@ def main():
             model_type = config_manager.model_type
             experiment_dir = config_manager.experiment_dir
 
-            dynamic_deephit_dataset = get_predictions(
-                config_manager, 
-                model_type, 
-                experiment_dir
-            ) # generates the predictions, need to modify to get entropy and health score
+            # dynamic_deephit_dataset = get_predictions(
+            #     config_manager, 
+            #     model_type, 
+            #     experiment_dir
+            # ) # generates the predictions, need to modify to get entropy and health score
 
-            dynamic_deephit_datasets.append(dynamic_deephit_dataset)
+            # dynamic_deephit_datasets.append(dynamic_deephit_dataset)
 
             # bootstrap_evaluation(
             #     dynamic_deephit_dataset,
@@ -229,7 +229,7 @@ def main():
             #     n_bootstrap_samples=100
             # ) # generates the bootstrap evaluation results for the predictions
 
-            # plot_random_predictions(config_manager)
+            plot_random_predictions(config_manager)
         
         # after generating predictions for all specified splits, we can aggregate the results
             save_dir = Path(config_manager.experiment_dir).parents[2]

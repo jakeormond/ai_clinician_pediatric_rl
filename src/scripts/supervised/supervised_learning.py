@@ -185,7 +185,7 @@ def main():
         """
         this is for generating predictions on the MIMIC IV dataset with a single train/val/test split, for a specific split number.
         """
-        from ...supervised_learning.predict import get_predictions, bootstrap_evaluation, plot_random_predictions
+        from ...supervised_learning.predict import get_predictions, get_all_predictions, bootstrap_evaluation, plot_random_predictions
 
         split_nums = args.split_num if isinstance(args.split_num, list) else [args.split_num]
         
@@ -215,11 +215,11 @@ def main():
             model_type = config_manager.model_type
             experiment_dir = config_manager.experiment_dir
 
-            # dynamic_deephit_dataset = get_predictions(
-            #     config_manager, 
-            #     model_type, 
-            #     experiment_dir
-            # ) # generates the predictions, need to modify to get entropy and health score
+            predictions = get_all_predictions(
+                config_manager, 
+                model_type, 
+                experiment_dir
+            ) # generates the predictions, need to modify to get entropy and health score
 
             # dynamic_deephit_datasets.append(dynamic_deephit_dataset)
 
@@ -232,9 +232,9 @@ def main():
             plot_random_predictions(config_manager)
         
         # after generating predictions for all specified splits, we can aggregate the results
-            save_dir = Path(config_manager.experiment_dir).parents[2]
+        # save_dir = Path(config_manager.experiment_dir).parents[2]
 
-        combined_dynamic_deephit_dataset = ShardProcessor.concatenate_dynamic_deephit_datasets(dynamic_deephit_datasets, save_dir = save_dir)
+        # combined_dynamic_deephit_dataset = ShardProcessor.concatenate_dynamic_deephit_datasets(dynamic_deephit_datasets, save_dir = save_dir)
                 
         return
 

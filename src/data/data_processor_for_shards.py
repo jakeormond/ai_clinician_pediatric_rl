@@ -79,6 +79,9 @@ class ShardProcessor:
 
                 self.feature_dim = f['feature_dim'][()]
 
+                self.dynamic_deephit_dataset['response_zero_ind'] = f['response_zero_ind'][()]
+                self.dynamic_deephit_dataset['carry_forward_ind'] = f['carry_forward_ind'][()]
+
                 if 'predictions' in f:
                     self.dynamic_deephit_dataset['predictions'] = f['predictions'][:].astype(np.float32)
 
@@ -164,7 +167,7 @@ class ShardProcessor:
 
 
             if i == 0:
-                self.dynamic_deephit_dataset['feature_names'] = [name.encode('utf-8') for name in feature_names]
+                self.dynamic_deephit_dataset['feature_names'] = feature_names
                 self.dynamic_deephit_dataset['stay_ids'] = stay_ids
                 self.dynamic_deephit_dataset['index_ptr'] = index_ptr
                 self.dynamic_deephit_dataset['trajectories'] = trajectories.astype(np.float32)
@@ -211,6 +214,35 @@ class ShardProcessor:
                     self.physiological_feature_ind.append(i)
                     self.physiological_feature_type.append(data_type)
 
+        # response_zero_ind and carry_forward_ind
+        self.dynamic_deephit_dataset['response_zero_ind'] = []
+        self.dynamic_deephit_dataset['carry_forward_ind'] = []
+        
+        for i, feature in enumerate(feature_names):
+            feature_row = self.features_to_use[self.features_to_use['feature'] == feature]    
+
+            if feature_row.empty:
+                continue
+
+            response_intervention = feature_row['response_intervention'].values[0]
+            feature_set = feature_row['feature_set'].values[0]
+            if response_intervention == 'intervention':
+                if feature_set in ['fluids_intake', 'medications', 'combined_hourly_iv']:
+                    self.dynamic_deephit_dataset['response_zero_ind'].append(i)
+                else:
+                    self.dynamic_deephit_dataset['carry_forward_ind'].append(i)
+            
+                if f"{feature}_mask" in feature_names:
+                    mask_ind = feature_names.index(f"{feature}_mask")
+                    self.dynamic_deephit_dataset['carry_forward_ind'].append(mask_ind)
+                
+                if f"{feature}_delta" in feature_names:
+                    delta_ind = feature_names.index(f"{feature}_delta")
+                    self.dynamic_deephit_dataset['carry_forward_ind'].append(delta_ind)
+
+
+
+        # save the file
         final_file_name = f"{self.split}_dynamic_deephit_dataset.h5"
         final_file_path = os.path.join(self.shard_dir, final_file_name)
 
@@ -241,17 +273,32 @@ class ShardProcessor:
             self.filter_cohort(config_manager)
 
     
-    def dynamic_deephit_dataset_to_h5(self, file_path):
+    def dynamic_deephit_dataset_to_h5(self, file_path, keys_to_exclude=None):
+        if keys_to_exclude is None:
+            keys_to_exclude = []
+        
         with h5py.File(file_path, 'w') as f:
-            f.create_dataset('feature_names', data=self.dynamic_deephit_dataset['feature_names'])
+            # any dataset should have at minimum feature_names, stay_ids, index_ptr, 
+            # f.create_dataset('feature_names', data=self.dynamic_deephit_dataset['feature_names'])
+            f.create_dataset('feature_names', data=np.array([name.encode('utf-8') for name in self.dynamic_deephit_dataset['feature_names']], dtype='S'))
             f.create_dataset('stay_ids', data=self.dynamic_deephit_dataset['stay_ids'], dtype=np.int32)
             f.create_dataset('index_ptr', data=self.dynamic_deephit_dataset['index_ptr'], dtype=np.int32)
-            f.create_dataset('trajectories', data=self.dynamic_deephit_dataset['trajectories'], dtype=np.float32, 
-                             chunks=(1, self.dynamic_deephit_dataset['trajectories'].shape[1]))
-            f.create_dataset('event', data=self.dynamic_deephit_dataset['event'], dtype=np.int32)
-            f.create_dataset('time_to_event_raw', data=self.dynamic_deephit_dataset['time_to_event_raw'], dtype=np.int32)
-            f.create_dataset('time_to_event', data=self.dynamic_deephit_dataset['time_to_event'], dtype=np.int32)
-
+            f.create_dataset('response_zero_ind', data=np.array(self.dynamic_deephit_dataset['response_zero_ind'], dtype=np.int32), dtype=np.int32)
+            f.create_dataset('carry_forward_ind', data=np.array(self.dynamic_deephit_dataset['carry_forward_ind'], dtype=np.int32), dtype=np.int32)
+            
+            if 'trajectories' in self.dynamic_deephit_dataset and 'trajectories' not in keys_to_exclude:
+                f.create_dataset('trajectories', data=self.dynamic_deephit_dataset['trajectories'], dtype=np.float32, 
+                                chunks=(1, self.dynamic_deephit_dataset['trajectories'].shape[1]))
+            if 'event' in self.dynamic_deephit_dataset and 'event' not in keys_to_exclude:            
+                f.create_dataset('event', data=self.dynamic_deephit_dataset['event'], dtype=np.int32)
+            
+            if 'time_to_event_raw' in self.dynamic_deephit_dataset and 'time_to_event_raw' not in keys_to_exclude:
+                f.create_dataset('time_to_event_raw', data=self.dynamic_deephit_dataset['time_to_event_raw'], dtype=np.int32)
+                
+            if 'time_to_event' in self.dynamic_deephit_dataset and 'time_to_event' not in keys_to_exclude:
+                f.create_dataset('time_to_event', data=self.dynamic_deephit_dataset['time_to_event'], dtype=np.int32)
+            
+            
             if hasattr(self, 'physiological_feature_ind'):
                 f.create_dataset('physiological_feature_ind', data=np.array(self.physiological_feature_ind, dtype=np.int32), dtype=np.int32)
             if hasattr(self, 'physiological_feature_type'):
@@ -592,11 +639,17 @@ class ShardProcessor:
             dynamic_deephit_dataset['feature_names'] = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]
             dynamic_deephit_dataset['stay_ids'] = f['stay_ids'][:]
             dynamic_deephit_dataset['index_ptr'] = f['index_ptr'][:]
-            dynamic_deephit_dataset['trajectories'] = f['trajectories'][:].astype(np.float32)
-            dynamic_deephit_dataset['event'] = f['event'][:].astype(np.int32)
-            dynamic_deephit_dataset['time_to_event_raw'] = f['time_to_event_raw'][:].astype(np.int32)
-            dynamic_deephit_dataset['time_to_event'] = f['time_to_event'][:].astype(np.int32)
+            dynamic_deephit_dataset['response_zero_ind'] = f['response_zero_ind'][:].astype(np.int32)
+            dynamic_deephit_dataset['carry_forward_ind'] = f['carry_forward_ind'][:].astype(np.int32)
 
+            if 'trajectories' in f:          
+                dynamic_deephit_dataset['trajectories'] = f['trajectories'][:].astype(np.float32)
+            if 'event' in f:
+                dynamic_deephit_dataset['event'] = f['event'][:].astype(np.int32)
+            if 'time_to_event_raw' in f:
+                dynamic_deephit_dataset['time_to_event_raw'] = f['time_to_event_raw'][:].astype(np.int32)
+            if 'time_to_event' in f:
+                dynamic_deephit_dataset['time_to_event'] = f['time_to_event'][:].astype(np.int32)
             if 'predictions' in f:
                 dynamic_deephit_dataset['predictions'] = f['predictions'][:].astype(np.float32)
             if 'entropy' in f:
@@ -608,6 +661,12 @@ class ShardProcessor:
     
     @ staticmethod
     def concatenate_dynamic_deephit_datasets(dataset_list, save_dir = None):
+        """
+        THIS SHOULD PROBABLY NOT BE USED - IT IS FOR CONCATENATING THE PREDICTIONS
+        FROM THE TEST SPLITS OF THE 5 FOLDS, BUT THERE IS NO REASON TO DO THIS FOR 
+        SUBSEQUENT MODEL TRAINING, ONLY FOR ANALYSIS OF THE PREDICTIONS THEMSELVES.        
+        """
+
         # check that all datasets have the same feature_names
         feature_names = dataset_list[0]['feature_names']
         for dataset in dataset_list:
@@ -616,6 +675,8 @@ class ShardProcessor:
 
         concatenated_dataset = {}
         concatenated_dataset['feature_names'] = feature_names
+        concatenated_dataset['response_zero_ind'] = dataset_list[0]['response_zero_ind']
+        concatenated_dataset['carry_forward_ind'] = dataset_list[0]['carry_forward_ind']
 
         stay_ids_list = []
         index_ptr_list = []

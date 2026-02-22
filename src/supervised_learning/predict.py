@@ -133,6 +133,9 @@ def inference_loop(
     index_ptr = processor.dynamic_deephit_dataset['index_ptr']
     window_length = config_manager.training_config['window_length']
 
+    response_zero_ind = processor.dynamic_deephit_dataset['response_zero_ind']
+    carry_forward_ind = processor.dynamic_deephit_dataset['carry_forward_ind']
+
     # create storage for predictions
     all_predictions = []   
     all_outputs = [] 
@@ -155,6 +158,10 @@ def inference_loop(
             # 3. Create windows (T, window_length, F)
             # unfold(dimension, size, step)
             windows = padded_traj.unfold(0, window_length, 1).transpose(1, 2)
+
+            # zero out or carry forward response features at the final timestep of each window, as appropriate for the RL setting
+            windows[:, -1, response_zero_ind] = 0.0
+            windows[:, -1, carry_forward_ind] = windows[:, -2, carry_forward_ind]
             
             # initialize loss mask (not used during inference, but required by model forward), zeros of shape (batch_size, window_length)
             # loss_mask = torch.ones((windows.shape[0], window_length), dtype=torch.float32, device=device)
@@ -223,13 +230,16 @@ def inference_loop(
     processor.dynamic_deephit_dataset['health_score'] = health_score.cpu().numpy()
     processor.dynamic_deephit_dataset['model_outputs'] = all_outputs
 
+    # we can exclude trajectories, event, time_to_event_raw, time_to_event from the dataset to save space, since these are already stored in the original dynamic_deephit_dataset and we have the stay_ids to link them
+    keys_to_exclude = ['trajectories', 'time_to_event_raw', 'time_to_event']
+
     # save all values in processor.dynamic_deephit_dataset to an h5 file
     if filename is not None:
         file_path = os.path.join(experiment_dir, filename + '.h5')
     else:
-        file_path = os.path.join(experiment_dir, 'test_set_predictions.h5')
+        file_path = os.path.join(experiment_dir, 'predictions.h5')
     
-    processor.dynamic_deephit_dataset_to_h5(file_path)
+    processor.dynamic_deephit_dataset_to_h5(file_path, keys_to_exclude=keys_to_exclude)
     dynamic_deephit_dataset = processor.dynamic_deephit_dataset
 
     return dynamic_deephit_dataset
@@ -404,8 +414,22 @@ def get_model_dir(config_manager, model_type, data_cohort, model_cohort):
     return experiment_dir, cohort_final_model_dir
 
 
-def get_predictions(config_manager, model_type, experiment_dir, stay_ids=None):
-    filename = 'test_set_predictions'
+def get_all_predictions(config_manager, model_type, experiment_dir):
+    """
+    generates predictions from that split's model for train, val and test sets. 
+    These are used for training the RL model.
+    """
+    splits = ['train', 'val', 'test']
+    predictions = {}
+    for split in splits:
+        print(f"Generating predictions for {split} set...")
+
+        predictions[split] = get_predictions(config_manager, model_type, experiment_dir, set=split)
+
+    return predictions
+
+def get_predictions(config_manager, model_type, experiment_dir, set='test', stay_ids=None):
+    filename = f'{set}_set_predictions'
     filepath = os.path.join(experiment_dir, filename + '.h5')
     if os.path.exists(filepath):
         # load existing predictions
@@ -415,7 +439,7 @@ def get_predictions(config_manager, model_type, experiment_dir, stay_ids=None):
         # create DataLoader for test dataset
         # Create test_processor; note it will throw an error if the normalized test shard is missing.
         # All possible windows will be computed
-        _, _, test_processor = create_processor_from_shards(config_manager, normalize=True)
+        processor = create_processor_from_shards(config_manager, normalize=True, set_to_return = set)
 
         # instantiate the model
         # load result.json from config_manager.experiment_dir to get hyperparameters
@@ -433,15 +457,17 @@ def get_predictions(config_manager, model_type, experiment_dir, stay_ids=None):
             n_time_bins, 
             num_risks=2, 
             model_type=model_type,
-            test_processor=test_processor,
+            test_processor=processor,
             experiment_dir=experiment_dir
             )
 
         # run inference on test set - this function also saves the predictions to file
+        filename = f'{set}_set_predictions'
         dynamic_deephit_dataset = inference_loop(
             dynamic_deephit_model, 
-            test_processor, 
+            processor, 
             config_manager,
+            filename=filename,
             model_type=model_type,
             experiment_dir=experiment_dir,
             device='cuda'

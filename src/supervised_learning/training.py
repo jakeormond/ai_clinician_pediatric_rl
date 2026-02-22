@@ -731,7 +731,9 @@ def save_results_cv(
     return all_scores
 
 
+################ NO LONGER USING ############################################
 def outer_training_loop(dataset, config_manager): 
+    # NO LONGER USING
     """Runs single outer fold - designed for HPC job array."""
     
     logger.info("Starting outer training loop...")

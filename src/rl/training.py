@@ -349,35 +349,36 @@ def restore_model_parameters(trainer, best_model_state, config_manager):
         trainer.actor.load_state_dict(best_model_state) # for td3-bc I imagine we need both models!!!!!! SO FIX!!!!!!
     
 
-def outer_training_loop(dataset, config_manager): 
-    """Runs single outer fold - designed for HPC job array."""
-    
-    logger.info("Starting outer training loop...")
+def single_split_training(config_manager): 
+    """ 
+    based on supervised training.py file - at some point we might want to merge these two files and have a flag for whether to do RL or supervised training, but for now keeping separate for clarity.
+    """
+    logger.info("Starting single split training...")
     logger.info("Discount set to: " + str(config_manager.training_config['discount']))
 
-    # Get CV configuration
-    n_outer_folds = config_manager.cv_config["n_outer_folds"]
-    n_inner_folds = config_manager.cv_config["n_inner_folds"]
-    target_fold = config_manager.cv_config['fold']  # This comes from job array index when running on HPC
-    
-    if target_fold is None:
-        raise ValueError("target_fold must be specified")
-    
-    logger.info(f"Processing outer fold {target_fold+1}/{n_outer_folds}")
-    
-    # Outer CV split
-    kf_outer = KFold(n_splits=n_outer_folds, shuffle=True, 
-                     random_state=config_manager.data_config["seed"])
+    # create processors
+    # NEED TO ADD CONFIGURATION OPTION TO USE THE FEATURE DATA OR THE TRANSFORMER OUTPUT FROM DYNAMIC DEEPHIT MODEL
+    train_processor, val_processor, test_processor = create_processor_from_shards(
+        config_manager, 
+        normalize=True
+        )
 
-    for outer_fold, (outer_train_id, outer_test_id) in enumerate(kf_outer.split(dataset.encounter_ids())):
-        if outer_fold != target_fold:
-            continue  # Skip other folds
-            
-        logger.info(f"=== OUTER FOLD {outer_fold} ===")
-        
-        # Create outer train/test splits
-        train_dataset = dataset.create_subset(dataset.encounter_ids()[outer_train_id])     
-        test_dataset = dataset.create_subset(dataset.encounter_ids()[outer_test_id])
+
+    # if config_manager.training_config['tuning'] and config_manager.n_search_iterations > 0:
+    if config_manager.search_variant == 'random_search':
+        logger.info(" Hyperparameter tuning mode enabled.")
+
+        # hyperparameter optimization
+        trainer, hyperparams, training_scores, val_scores, n_epochs, raw_grad_norms = optimize_hyperparameters(
+            train_processor, 
+            val_processor, 
+            config_manager
+        )
+
+    
+
+
+
 
         ###################   HYPERPARAMETER OPTIMIZATION #############################
         logger.info("Phase 1: Hyperparameter Optimization")

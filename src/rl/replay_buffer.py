@@ -76,6 +76,7 @@ class DynamicDeepHitDataset(Dataset):
         ]
     
 
+
 class DynamicDeepHitTransformerDataset(Dataset):
     """
     self.reshuffle_subsample() should be called at the start of each epoch to reshuffle and select new windows.
@@ -107,30 +108,33 @@ class DynamicDeepHitTransformerDataset(Dataset):
         self.features_to_use = pd.read_csv(config_manager.data_config['features_to_use_path'])
         
         # get indices of response features to zero out or carry forward at the final timestep (for RL setting)
-        self.response_zero_ind = []
-        self.carry_forward_ind = []        
+        self.response_zero_ind = data_processor.dynamic_deephit_dataset['response_zero_ind']
+        self.carry_forward_ind = data_processor.dynamic_deephit_dataset['carry_forward_ind']
+        
+        # self.response_zero_ind = []
+        # self.carry_forward_ind = []        
 
-        for i, feature in enumerate(self.feature_names):
-            feature_row = self.features_to_use[self.features_to_use['feature'] == feature]            
+        # for i, feature in enumerate(self.feature_names):
+        #     feature_row = self.features_to_use[self.features_to_use['feature'] == feature]            
             
-            if feature_row.empty:
-                continue
+        #     if feature_row.empty:
+        #         continue
 
-            response_intervention = feature_row['response_intervention'].values[0]
-            feature_set = feature_row['feature_set'].values[0]
-            if response_intervention == 'intervention':
-                if feature_set in ['fluids_intake', 'medications', 'combined_hourly_iv']:
-                    self.response_zero_ind.append(i)
-                else:
-                    self.carry_forward_ind.append(i)
+        #     response_intervention = feature_row['response_intervention'].values[0]
+        #     feature_set = feature_row['feature_set'].values[0]
+        #     if response_intervention == 'intervention':
+        #         if feature_set in ['fluids_intake', 'medications', 'combined_hourly_iv']:
+        #             self.response_zero_ind.append(i)
+        #         else:
+        #             self.carry_forward_ind.append(i)
             
-                if f"{feature}_mask" in self.feature_names:
-                    mask_ind = self.feature_names.index(f"{feature}_mask")
-                    self.carry_forward_ind.append(mask_ind)
+        #         if f"{feature}_mask" in self.feature_names:
+        #             mask_ind = self.feature_names.index(f"{feature}_mask")
+        #             self.carry_forward_ind.append(mask_ind)
                 
-                if f"{feature}_delta" in self.feature_names:
-                    delta_ind = self.feature_names.index(f"{feature}_delta")
-                    self.carry_forward_ind.append(delta_ind)
+        #         if f"{feature}_delta" in self.feature_names:
+        #             delta_ind = self.feature_names.index(f"{feature}_delta")
+        #             self.carry_forward_ind.append(delta_ind)
         
         self.reshuffle_subsample() 
 

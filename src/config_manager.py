@@ -176,8 +176,13 @@ class ConfigManager:
             return self.config_dir / "wandb" / "wandb.yaml"
             
         elif config_type == "data":
-            return self.config_dir / "datasets" / f"{self.hospital}_{self.experiment_type}.yaml"
-        
+            if self.experiment_type == "supervised_learning":
+                return self.config_dir / "datasets" / f"{self.hospital}_{self.experiment_type}.yaml"
+            elif self.experiment_type == "reinforcement_learning":
+                disease_variant = self.cohort[:self.cohort.index('_')]
+                
+                return self.config_dir / "datasets" / f"{self.hospital}_{disease_variant}_{self.experiment_type}.yaml"
+            
         elif config_type == "rl":
             return self.config_dir / "models" / f"{self.model_type}.yaml"
    

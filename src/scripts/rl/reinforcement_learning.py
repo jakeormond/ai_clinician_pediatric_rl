@@ -7,8 +7,6 @@ import time
 import logging
 
 
-import pyrallis
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -24,8 +22,8 @@ from ...utils.logging_utilities import wandb_init  # Add this import
 # from src.data.data_processor import DataProcessor
 # from src.rl.replay_buffer import ReplayBuffer
 
-from ...rl.training import outer_training_loop
-from ...analyse_input_features.analyse_health_score import analyse_health_score
+from ...rl.training import single_split_training
+# from ...analyse_input_features.analyse_health_score import analyse_health_score
 
 TensorBatch = List[torch.Tensor]
 
@@ -57,12 +55,15 @@ def parse_arguments():
                         choices=['any_percent_bc', 'td3_bc', 'basic_q', 'reward_analysis'], 
                         help='Model type to train (default: any_percent_bc)') 
 
-    parser.add_argument('--mode', type=str, default='single_fold',
-                        choices=['single_fold', 'aggregate', 'analysis'],
-                        help='Mode of training: single_fold or aggregate (default: single_fold)')
+    parser.add_argument('--mode', type=str, default='single_split',
+                        choices=['single_split', 'aggregate', 'analysis'],
+                        help='Mode of training: single_split or aggregate (default: single_split)')
+        
+    parser.add_argument('--split_num', type=int, nargs='+', default=None,
+                        help='Split number to train (not strictly required for single_split mode)')    
     
     # mode-specific arguments    
-    parser.add_argument('--fold', type=int,
+    parser.add_argument('--fold', type=int, default=None,
                        help='Fold number to train (required for single_fold mode)')
 
     parser.add_argument('--experiment_variant', 
@@ -90,6 +91,11 @@ def parse_arguments():
     parser.add_argument('--n_epochs', type=int, default = 10,                  
                     help='Number of epochs to train for - should be 1000, but for testing we set to 10')
     
+    parser.add_argument('--cohort', type=str, default=None,
+        choices=['all', 'sepsis_strict', 'sepsis_broad', 
+            'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad'],
+        help='Cohort to use for this experiment (overrides config file)')  
+
     parser.add_argument('--action_mode', 
                         type=str, 
                         default = "continuous_only",   

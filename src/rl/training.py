@@ -28,6 +28,7 @@ import torch.nn.functional as F
 # from .plotting import create_all_plots, create_aggregated_shap_plots
 from ..utils.logging_utilities import wandb_init
 from ..data.data_processor import DataProcessor
+from ..data.data_processor_for_shards import ShardProcessor
 # from .dataset import Dataset
 from .replay_buffer import RLDataset
 from .models.behavioural_cloning import keep_best_trajectories, keep_positive_trajectories
@@ -110,6 +111,30 @@ def select_best_trajectories(processor, config_manager):
         keep_best_trajectories(processor, config_manager)
     else:
         keep_positive_trajectories(processor)
+
+
+
+def create_processor_from_shards(config_manager, normalize=True, set_to_return='all'):
+    """
+    Copied from supervised_learning/training.py 
+    """
+    train_processor = ShardProcessor(config_manager, normalize=normalize, split='train')
+    val_processor = ShardProcessor(config_manager, split='val',
+                                  norm_params=train_processor.get_normalization_params())
+    test_processor = ShardProcessor(config_manager, split='test',
+                                   norm_params=train_processor.get_normalization_params())
+
+    if set_to_return == 'all':
+        return train_processor, val_processor, test_processor
+    elif set_to_return == 'train':
+        return train_processor
+    elif set_to_return == 'val':
+        return val_processor
+    elif set_to_return == 'test':
+        return test_processor
+    
+
+
 
 
 def create_buffer(processor, batch_size):
@@ -352,6 +377,10 @@ def restore_model_parameters(trainer, best_model_state, config_manager):
 def single_split_training(config_manager): 
     """ 
     based on supervised training.py file - at some point we might want to merge these two files and have a flag for whether to do RL or supervised training, but for now keeping separate for clarity.
+    
+    We need to select what input (state) data to use here - either the windowed data from the ShardProcessor,
+    or the transformer output from dynamic deephit. We can specify this in the config_manager and then create the appropriate processor here.
+    
     """
     logger.info("Starting single split training...")
     logger.info("Discount set to: " + str(config_manager.training_config['discount']))

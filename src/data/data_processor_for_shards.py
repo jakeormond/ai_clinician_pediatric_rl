@@ -10,6 +10,7 @@ import glob
 from pathlib import Path
 import pandas as pd
 import numpy as np
+import json
 import time
 import pyarrow
 from sklearn.model_selection import train_test_split
@@ -44,7 +45,27 @@ class ShardProcessor:
         if self.split == 'train' and config_manager.training_config['tuning']:
             self.split = 'tuning'
 
-        # find the shards for the given split
+        # load processed data if it exists, otherwise process raw shard files and save the processed data for future use
+        final_file_name = f"{self.split}_dynamic_deephit_dataset.h5"
+        final_file_path = os.path.join(self.shard_dir, final_file_name)
+        
+        # load if exists
+        if os.path.exists(final_file_path):
+            logger.info(f"Loading existing dynamic deephit dataset from {final_file_path}")
+            
+            # load the file directly into self.dynamic_deephit_dataset
+            self.dynamic_deephit_dataset = self.load_dynamic_deephit_dataset_from_h5(final_file_path)
+            
+            # get the prediction file name as well as we may need to load it if 
+            # this is RL
+            prediction_file_name = f"{self.split}_predictions.h5"
+            prediction_file_path = os.path.join(self.experiment_dir, prediction_file_name)
+
+            self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path)
+
+            return
+             
+        # find the shard dir for the given split
         if config_manager.split_num is None:
             shard_dir = os.path.join(config_manager.paths['data_dir'], 
                         config_manager.data_config['shard_dir'])
@@ -53,45 +74,13 @@ class ShardProcessor:
                         config_manager.data_config['shard_dir'], 
                         f"split_{config_manager.split_num}")
 
+        # switch to tuning dir if we're in tuning mode
         if not config_manager.training_config['tuning']:
             self.shard_dir = os.path.join(shard_dir, 'training_set')
         else:
             self.shard_dir = os.path.join(shard_dir, 'tuning_set')
         
-        final_file_name = f"{self.split}_dynamic_deephit_dataset.h5"
-        final_file_path = os.path.join(self.shard_dir, final_file_name)
-
-        # load if exists
-        if os.path.exists(final_file_path):
-            logger.info(f"Loading existing dynamic deephit dataset from {final_file_path}")
-            with h5py.File(final_file_path, 'r') as f:
-                self.dynamic_deephit_dataset = {}
-                self.dynamic_deephit_dataset['feature_names'] = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]
-                self.dynamic_deephit_dataset['stay_ids'] = f['stay_ids'][:]
-                self.dynamic_deephit_dataset['index_ptr'] = f['index_ptr'][:]
-                self.dynamic_deephit_dataset['trajectories'] = f['trajectories'][:].astype(np.float32)
-                self.dynamic_deephit_dataset['event'] = f['event'][:].astype(np.int32)
-                self.dynamic_deephit_dataset['time_to_event_raw'] = f['time_to_event_raw'][:].astype(np.int32)
-                self.dynamic_deephit_dataset['time_to_event'] = f['time_to_event'][:].astype(np.int32)
-
-                self.physiological_feature_ind = f['physiological_feature_ind'][:].astype(np.int32).tolist()
-                self.physiological_feature_type = [f['physiological_feature_type'][i].decode('utf-8') for i in range(len(f['physiological_feature_type']))]
-
-                self.feature_dim = f['feature_dim'][()]
-
-                self.dynamic_deephit_dataset['response_zero_ind'] = f['response_zero_ind'][()]
-                self.dynamic_deephit_dataset['carry_forward_ind'] = f['carry_forward_ind'][()]
-
-                if 'predictions' in f:
-                    self.dynamic_deephit_dataset['predictions'] = f['predictions'][:].astype(np.float32)
-
-                if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
-                    # filter the dataset to only include the specified cohort
-                    logger.info(f"Filtering dynamic deephit dataset to only include cohort: {config_manager._data_config['cohort']}")
-                    self.filter_cohort(config_manager)
-
-            return
-
+        # prepare for normalization
         self.norm_params = norm_params
         self.window_length = config_manager.training_config['window_length']
         self.time_bins = config_manager.time_bins
@@ -99,39 +88,26 @@ class ShardProcessor:
         self.max_time = self.time_bins[-1]
 
         # load features to use from config_manager
-        self.features_to_use = pd.read_csv(config_manager.data_config['features_to_use_path'])
-
-        
-        # if config_manager.action_mode == 'binary_only' or config_manager.action_mode == 'mixed':
-        #     create_binary_actions = True
-        # else:
-        #     create_binary_actions = False            
-
-        # if config_manager.action_mode == 'binary_only':
-        #     self.normalize_actions = False
-        #     self.transform_actions = False                 
+        self.features_to_use = pd.read_csv(config_manager.data_config['features_to_use_path'])       
 
         all_files = os.listdir(self.shard_dir)                
-        
-        # raw_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
-        #                         f.startswith(self.split) and f.endswith("_shard.h5")]
+
         raw_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
                                 f.startswith(self.split) and f.endswith(".h5")]
         if len(raw_shard_files) == 0:
             raise ValueError(f"No shard files found for split {self.split} in directory {self.shard_dir}")
+        elif len(raw_shard_files) > 1:
+            # I've simplified the code to work from only one file - check v1 and v2 to get an idea how to use multiple shards, but didn't implement robust scaling yet, which requires median and IQR, which is trickier for multiple shards
+            raise ValueError(f"Multiple shard files found for split {self.split} in directory {self.shard_dir}. Expected only one. Found: {raw_shard_files}")
 
-        # sort the files to ensure consistent order
-        self.raw_shard_files = sorted(raw_shard_files)
-
-        
-        ########### Normalized Shards - we remove long trajectories first ##############
-        normalized_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
-                        f.startswith(self.split) and f.endswith("_normalized.h5")]
-        # sort the files to ensure consistent order
-        self.normalized_shard_files = sorted(normalized_shard_files)
-
-        if len(self.normalized_shard_files) == 0: # i.e. the files have not been normalized yet
-            self.normalize(config_manager=config_manager)
+        # don't need a list, as there should only be one file, confirmed above
+        self.raw_shard_file = self.raw_shard_files[0]
+        # delete raw_shard_files to free up memory
+        del self.raw_shard_files
+            
+        ########### Normalized Shards ##############
+        self.normalize(config_manager=config_manager)
+            
             all_files = os.listdir(self.shard_dir)
 
             normalized_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
@@ -192,10 +168,10 @@ class ShardProcessor:
         # load 'feature_names' from the first h5 file
         with h5py.File(self.normalized_shard_files[0], 'r') as f:
             feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))] 
-            self.feature_dim = f['trajectories'].shape[1]
+            self.dynamic_deephit_dataset['feature_dim'] = f['trajectories'].shape[1]
 
-        self.physiological_feature_ind = [] # for dynamic deephit model, which tries to predict next physiological features
-        self.physiological_feature_type = []
+        self.dynamic_deephit_dataset['physiological_feature_ind'] = [] # for dynamic deephit model, which tries to predict next physiological features
+        self.dynamic_deephit_dataset['physiological_feature_type'] = []
 
         physiological_feature_sets = [
             'hemodynamics', 'labs', 'neurological', 'routine_vital_signs', 'respiratory'
@@ -211,8 +187,8 @@ class ShardProcessor:
                 data_type = feature_row['data_type'].values[0]
                 response_intervention = feature_row['response_intervention'].values[0]
                 if feature_set in physiological_feature_sets and response_intervention == 'response':
-                    self.physiological_feature_ind.append(i)
-                    self.physiological_feature_type.append(data_type)
+                    self.dynamic_deephit_dataset['physiological_feature_ind'].append(i)
+                    self.dynamic_deephit_dataset['physiological_feature_type'].append(data_type)
 
         # response_zero_ind and carry_forward_ind
         self.dynamic_deephit_dataset['response_zero_ind'] = []
@@ -298,13 +274,12 @@ class ShardProcessor:
             if 'time_to_event' in self.dynamic_deephit_dataset and 'time_to_event' not in keys_to_exclude:
                 f.create_dataset('time_to_event', data=self.dynamic_deephit_dataset['time_to_event'], dtype=np.int32)
             
-            
-            if hasattr(self, 'physiological_feature_ind'):
-                f.create_dataset('physiological_feature_ind', data=np.array(self.physiological_feature_ind, dtype=np.int32), dtype=np.int32)
-            if hasattr(self, 'physiological_feature_type'):
-                f.create_dataset('physiological_feature_type', data=np.array(self.physiological_feature_type, dtype='S20'), dtype='S20')
-            if hasattr(self, 'feature_dim'):
-                f.create_dataset('feature_dim', data=np.array(self.feature_dim, dtype=np.int32), dtype=np.int32)
+            if 'physiological_feature_ind' in self.dynamic_deephit_dataset and 'physiological_feature_ind' not in keys_to_exclude:
+                f.create_dataset('physiological_feature_ind', data=np.array(self.dynamic_deephit_dataset['physiological_feature_ind'], dtype=np.int32), dtype=np.int32)
+            if 'physiological_feature_type' in self.dynamic_deephit_dataset and 'physiological_feature_type' not in keys_to_exclude:
+                f.create_dataset('physiological_feature_type', data=np.array(self.dynamic_deephit_dataset['physiological_feature_type'], dtype='S20'), dtype='S20')
+            if 'feature_dim' in self.dynamic_deephit_dataset and 'feature_dim' not in keys_to_exclude:
+                f.create_dataset('feature_dim', data=np.array(self.dynamic_deephit_dataset['feature_dim'], dtype=np.int32), dtype=np.int32)
             
             if 'predictions' in self.dynamic_deephit_dataset:
                 f.create_dataset('predictions', data=self.dynamic_deephit_dataset['predictions'], dtype=np.float32)
@@ -462,89 +437,71 @@ class ShardProcessor:
         return trajectories, ['time'] + feature_names
 
     
+    def min_max(x, norm_dict):
+        min_val = norm_dict['min']
+        max_val = norm_dict['max']
+        if max_val - min_val == 0:
+            return np.zeros_like(x)
+        scaled_x = (x - min_val) / (max_val - min_val)
+        return np.clip(scaled_x, 0.0, 1.0)
+
+
+    def log_min_max(x, norm_dict):
+        log_x = np.log1p(x)
+        
+        log_min = norm_dict['log_min']
+        log_max = norm_dict['log_max']
+        max_min_diff = log_max - log_min
+        
+        if max_min_diff == 0:
+            return np.zeros_like(log_x)
+        
+        scaled_x = (log_x - log_min) / max_min_diff
+
+        # clip to [0, 1] to handle OOD in val/test
+        return np.clip(scaled_x, 0.0, 1.0)
+
+
+    def z_score(x, norm_dict):
+        mean = norm_dict['mean']
+        std = norm_dict['std']
+        if std == 0:
+            return np.zeros_like(x)
+
+        # clip to [5,-5] to handle extreme outliers
+        scaled_x = (x - mean) / std
+        return np.clip(scaled_x, -5.0, 5.0)
+
+    
+    def robust_scale(x, norm_dict):
+        median = norm_dict['median']
+        iqr = norm_dict['iqr']
+        if iqr == 0:
+            return np.zeros_like(x)
+
+        scaled_x = (x - median) / iqr
+        # clip to [-5, 5] to handle extreme outliers
+        return np.clip(scaled_x, -5.0, 5.0)
+
+
     def normalize(self, config_manager=config_manager):
-
+        # is norm_params already exists, it's because it was generated from the training or tuning set and we're now normalizing val or test
         if self.norm_params is not None:
-            # if normalization parameters are provided, use them to normalize the data
             self.obs_norm_dict = self.norm_params['obs_norm_dict']
-            self.action_minimum = self.norm_params['action_minimum']
-            self.action_maximum = self.norm_params['action_maximum']
-            self.action_transformers = self.norm_params['action_transformers']
 
+        # if not, we are normalizing the training or tuning set, so we need to compute the normalization parameters from the data
         else:
             self.obs_norm_dict = None
-            self.action_minimum = None
-            self.action_maximum = None
-            self.action_transformers = None
 
-            for i, shard_file in enumerate(self.raw_shard_files):
-                logger.info(f"Normalizing shard file: {shard_file}")
-                # load the shard file
-                with h5py.File(shard_file, 'r') as f:      
-                    # convert feature_names from bytes to strings
-                    feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]                
-                    stay_ids = f['stay_ids'][:]
-                    index_ptr = f['index_ptr'][:]
-                    trajectories = f['trajectories'][:]             
-                    
-                # drop trajectories longer than max_time
-                # remove long trajectories beyond max_time
-                trajectories, stay_ids, index_ptr = self.drop_long_trajectories(
-                    trajectories, stay_ids, index_ptr)
-                
-                if config_manager.data_config['add_time_col']:
-                    # add time column to trajectories
-                    trajectories, feature_names = self.add_time_column(trajectories, stay_ids, index_ptr, feature_names)
-                
-                # get the index of the death feature, and drop it from the trajectories
-                death_feature_index = feature_names.index('death')
-                # update feature_names
-                feature_names.pop(death_feature_index)
-                trajectories = np.delete(trajectories, death_feature_index, axis=1)
-                
-                if i == 0:
-                    n_features = len(feature_names)
-
-                    sums = np.zeros(n_features)
-                    sq_sums = np.zeros(n_features)
-                    counts = 0
-                    minima = np.full(n_features, np.inf)
-                    maxima = np.full(n_features, -np.inf)
-
-                # compute sums, squared sums, counts, minima, maxima for 1 feature at a time to avoid floating point catastophic cancellation
-                for j in range(n_features):
-                    feature_trajectories = trajectories[:, j]
-                    sums[j] += np.sum(feature_trajectories)
-                    sq_sums[j] += np.sum(feature_trajectories ** 2)
-                    minima[j] = np.minimum(minima[j], np.min(feature_trajectories))
-                    maxima[j] = np.maximum(maxima[j], np.max(feature_trajectories))
-                counts += trajectories.shape[0]
-
-            means = sums / counts
-            variances = (sq_sums / counts) - (means ** 2)
-            # elementwise clamp variances at 0 to avoid tiny negative values from numerical precision
-            stds = np.sqrt(np.maximum(variances, 0.0))  # avoid negative variance due to numerical issues
-
-            self.obs_norm_dict = {}
-            for i, feature in enumerate(feature_names):
-                self.obs_norm_dict[feature] = {
-                    'min': minima[i],
-                    'max': maxima[i],
-                    'mean': means[i],
-                    'std': stds[i]
-                }
-
-        # now normalize each shard file and save to new file
-        for i, shard_file in enumerate(self.raw_shard_files):
-            logger.info(f"Normalizing shard file: {shard_file}")
+            logger.info(f"Computing values for normalizing shard file: {self.raw_shard_file}")
             # load the shard file
-            with h5py.File(shard_file, 'r') as f:      
+            with h5py.File(self.raw_shard_file, 'r') as f:      
                 # convert feature_names from bytes to strings
                 feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]                
                 stay_ids = f['stay_ids'][:]
                 index_ptr = f['index_ptr'][:]
-                trajectories = f['trajectories'][:]
-
+                trajectories = f['trajectories'][:]             
+                
             # drop trajectories longer than max_time
             # remove long trajectories beyond max_time
             trajectories, stay_ids, index_ptr = self.drop_long_trajectories(
@@ -554,69 +511,121 @@ class ShardProcessor:
                 # add time column to trajectories
                 trajectories, feature_names = self.add_time_column(trajectories, stay_ids, index_ptr, feature_names)
             
-
             # get the index of the death feature, and drop it from the trajectories
             death_feature_index = feature_names.index('death')
-            
-            # extract death feature values before removing
-            death_values = trajectories[:, death_feature_index]
-            
             # update feature_names
             feature_names.pop(death_feature_index)
-            n_features = len(feature_names)
             trajectories = np.delete(trajectories, death_feature_index, axis=1)
-
-            # normalize the trajectories
-            for j, feature in enumerate(feature_names):
-                if feature == 'time':
-                    data_type = 'continuous'
-                    feature_set = 'time'
-                else:
-                    if feature in self.features_to_use['feature'].values:
-                        feature_row = self.features_to_use[self.features_to_use['feature'] == feature]
-                        data_type = feature_row['data_type'].values[0]
-                        feature_set = feature_row['feature_set'].values[0]
-                    else: 
-                        # must either be mask or delta
-                        feature_set = 'blank' # we just need a placeholder
-
-                        if "mask" in feature:
-                            data_type = 'binary' # if it's a mask, it's binary, no need to normalize
-                        elif "delta" in feature: 
-                            data_type = 'delta' # if it's delta, gemini said min-max it
-                            
-
-                if data_type == 'ordinal' or data_type == 'delta' or feature_set == 'medications' or \
-                    feature_set == 'combined_hourly_iv':
-                    # min-max normalize the feature
-                    max_min_diff = self.obs_norm_dict[feature]['max'] - self.obs_norm_dict[feature]['min']
-                    trajectories[:, j] = (trajectories[:, j] - self.obs_norm_dict[feature]['min']) / max_min_diff  
-                
-                elif data_type == 'continuous':
-                    # z-score normalize the feature
-                    trajectories[:, j] = (trajectories[:, j] - self.obs_norm_dict[feature]['mean']) / self.obs_norm_dict[feature]['std']
-                
-                # for binary features, do nothing
-                # throw error if any nans, infs, or valeus greater than 1e6
-                if np.isnan(trajectories[:, j]).any():
-                    raise ValueError(f"NaNs found in normalized feature {feature} in shard {shard_file}")
-                if np.isinf(trajectories[:, j]).any():
-                    raise ValueError(f"Infs found in normalized feature {feature} in shard {shard_file}")
-                if np.abs(trajectories[:, j]).max() > 1e6:
-                    raise ValueError(f"Extreme values found in normalized feature {feature} in shard {shard_file}")
-                
             
-            normalized_shard_file = shard_file.replace(".h5", "_normalized.h5")
+            # compute sums, squared sums, counts, minima, maxima for 1 feature at a time to avoid floating point catastophic cancellation
+            for j, feature in enumerate(feature_names):
+                self.obs_norm_dict[feature] = {}
 
-            with h5py.File(normalized_shard_file, 'w') as f:
-                f.create_dataset('feature_names', data=[name.encode('utf-8') for name in feature_names])
-                f.create_dataset('stay_ids', data=stay_ids, dtype=np.int32)
-                f.create_dataset('index_ptr', data=index_ptr, dtype=np.int32)
-                f.create_dataset('trajectories', data=trajectories.astype(np.float32), dtype=np.float32, 
-                                 chunks=(1, trajectories.shape[1]))
-                f.create_dataset('event', data=death_values.astype(np.int32), dtype=np.int32)
+                feature_trajectories = trajectories[:, j]
+                
+                self.obs_norm_dict[feature]['min'] = np.min(feature_trajectories)
+                self.obs_norm_dict[feature]['max'] = np.max(feature_trajectories)
+                self.obs_norm_dict[feature]['mean'] = np.mean(feature_trajectories)
+                self.obs_norm_dict[feature]['std'] = np.std(feature_trajectories)
+                self.obs_norm_dict[feature]['median'] = np.median(feature_trajectories)
+                self.obs_norm_dict[feature]['iqr'] = np.percentile(feature_trajectories, 75) - np.percentile(feature_trajectories, 25)
+                self.obs_norm_dict[feature]['log_min'] = np.min(np.log1p(feature_trajectories))
+                self.obs_norm_dict[feature]['log_max'] = np.max(np.log1p(feature_trajectories))
 
-            logger.info(f"Saved normalized shard file: {normalized_shard_file}")   
+            # save the normalization parameters to a json file for future use when normalizing val and test sets
+            norm_params_file = os.path.join(self.shard_dir, f"{self.split}_norm_params.json")
+            with open(norm_params_file, 'w') as f:
+                json.dump({'obs_norm_dict': self.obs_norm_dict}, f)
+            logger.info(f"Saved normalization parameters to {norm_params_file}")
+        
+        
+        
+        # now normalize the features with either the pre-computed normalization parameters from the training/tuning set, or the ones we just computed if this is the training/tuning set    
+        logger.info(f"Normalizing shard file: {self.raw_shard_file}")
+        # load the shard file
+        with h5py.File(self.raw_shard_file, 'r') as f:      
+            # convert feature_names from bytes to strings
+            feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]                
+            stay_ids = f['stay_ids'][:]
+            index_ptr = f['index_ptr'][:]
+            trajectories = f['trajectories'][:]
+
+        # drop trajectories longer than max_time
+        # remove long trajectories beyond max_time
+        trajectories, stay_ids, index_ptr = self.drop_long_trajectories(
+            trajectories, stay_ids, index_ptr)
+        
+        if config_manager.data_config['add_time_col']:
+            # add time column to trajectories
+            trajectories, feature_names = self.add_time_column(trajectories, stay_ids, index_ptr, feature_names)        
+
+        # get the index of the death feature
+        death_feature_index = feature_names.index('death')
+        
+        # extract death feature values before removing
+        death_values = trajectories[:, death_feature_index]
+        
+        # drop death and update feature_names
+        feature_names.pop(death_feature_index)
+        trajectories = np.delete(trajectories, death_feature_index, axis=1)
+
+        # normalize the trajectories
+        # Note: the normalizatio_type column of features_to_use.csv specifies the type of normalization
+        # to apply to each feature, except for time, which we have just created, and the delta and mask features,
+        # which are normalized in a consistent way
+        for j, feature in enumerate(feature_names):   
+            # TIME - log transform then min-max normalize using log_min and log_max
+            if feature == 'time':
+                # we will log transform then min max it - note we need to add a window time feature when passing windows into the model.
+                trajectories[:, j] = self.log_min_max(trajectories[:, j], self.obs_norm_dict[feature])  
+            
+            else:
+                if feature in self.features_to_use['feature'].values:
+                    feature_row = self.features_to_use[self.features_to_use['feature'] == feature]
+                    normalization_type = feature_row['normalization_type'].values[0]
+                    
+                else: 
+                    if "mask" in feature:
+                        normalization_type = 'none' # if it's a mask, it's binary, no need to normalize
+                    elif "delta" in feature: 
+                        normalization_type = 'min_max' # if it's delta, gemini said min-max it
+                    else:
+                        raise ValueError(f"Feature {feature} not found in features_to_use.csv, and it's not a mask or delta feature. Please check your features_to_use.csv file.")
+
+                if normalization_type == 'none':
+                    continue
+                elif normalization_type == 'min_max':
+                    trajectories[:, j] = self.min_max(trajectories[:, j], self.obs_norm_dict[feature])  
+                elif normalization_type == 'log_min_max':
+                    trajectories[:, j] = self.log_min_max(trajectories[:, j], self.obs_norm_dict[feature])
+                elif normalization_type == 'z_score':
+                    trajectories[:, j] = self.z_score(trajectories[:, j], self.obs_norm_dict[feature])
+                elif normalization_type == 'robust_scaling':
+                    trajectories[:, j] = self.robust_scale(trajectories[:, j], self.obs_norm_dict[feature])
+                else:
+                    raise ValueError(f"Invalid normalization type {normalization_type} for feature {feature}. Please check your features_to_use.csv file.")
+               
+            # for binary features, do nothing
+            # throw error if any nans, infs, or valeus greater than 1e6
+            if np.isnan(trajectories[:, j]).any():
+                raise ValueError(f"NaNs found in normalized feature {feature} in shard {self.raw_shard_file}")
+            if np.isinf(trajectories[:, j]).any():
+                raise ValueError(f"Infs found in normalized feature {feature} in shard {self.raw_shard_file}")
+            if np.abs(trajectories[:, j]).max() > 1e6:
+                raise ValueError(f"Extreme values found in normalized feature {feature} in shard {self.raw_shard_file}")
+            
+        
+        # normalized_shard_file = self.raw_shard_file.replace(".h5", "_normalized.h5")
+
+        # with h5py.File(normalized_shard_file, 'w') as f:
+        #     f.create_dataset('feature_names', data=[name.encode('utf-8') for name in feature_names])
+        #     f.create_dataset('stay_ids', data=stay_ids, dtype=np.int32)
+        #     f.create_dataset('index_ptr', data=index_ptr, dtype=np.int32)
+        #     f.create_dataset('trajectories', data=trajectories.astype(np.float32), dtype=np.float32, 
+        #                         chunks=(1, trajectories.shape[1]))
+        #     f.create_dataset('event', data=death_values.astype(np.int32), dtype=np.int32)
+
+        # logger.info(f"Saved normalized shard file: {normalized_shard_file}")   
 
     def get_normalization_params(self):
 
@@ -633,119 +642,77 @@ class ShardProcessor:
     
 
     @ staticmethod
+    def create_dynamic_deephit_dataset(
+        feature_names,
+        stay_ids,
+        index_ptr,
+        trajectories,
+        event,
+        time_to_event_raw,
+        time_to_event,
+        physiological_feature_ind,
+        physiological_feature_type,
+        feature_dim,
+        response_zero_ind,
+        carry_forward_ind
+        ):
+        dynamic_deephit_dataset = {}
+        dynamic_deephit_dataset['feature_names'] = feature_names
+        dynamic_deephit_dataset['stay_ids'] = stay_ids
+        dynamic_deephit_dataset['index_ptr'] = index_ptr    
+        dynamic_deephit_dataset['trajectories'] = trajectories.astype(np.float32)
+        dynamic_deephit_dataset['event'] = event.astype(np.int32)
+        dynamic_deephit_dataset['time_to_event_raw'] = time_to_event_raw.astype(np.int32)
+        dynamic_deephit_dataset['time_to_event'] = time_to_event.astype(np.int32)
+        dynamic_deephit_dataset['physiological_feature_ind'] = physiological_feature_ind
+        dynamic_deephit_dataset['physiological_feature_type'] = physiological_feature_type
+        dynamic_deephit_dataset['feature_dim'] = feature_dim
+        dynamic_deephit_dataset['response_zero_ind'] = response_zero_ind
+        dynamic_deephit_dataset['carry_forward_ind'] = carry_forward_ind
+        return dynamic_deephit_dataset
+
+
+
+    @ staticmethod
     def load_dynamic_deephit_dataset_from_h5(file_path):
         with h5py.File(file_path, 'r') as f:
             dynamic_deephit_dataset = {}
-            dynamic_deephit_dataset['feature_names'] = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]
-            dynamic_deephit_dataset['stay_ids'] = f['stay_ids'][:]
-            dynamic_deephit_dataset['index_ptr'] = f['index_ptr'][:]
-            dynamic_deephit_dataset['response_zero_ind'] = f['response_zero_ind'][:].astype(np.int32)
-            dynamic_deephit_dataset['carry_forward_ind'] = f['carry_forward_ind'][:].astype(np.int32)
 
-            if 'trajectories' in f:          
-                dynamic_deephit_dataset['trajectories'] = f['trajectories'][:].astype(np.float32)
-            if 'event' in f:
-                dynamic_deephit_dataset['event'] = f['event'][:].astype(np.int32)
-            if 'time_to_event_raw' in f:
-                dynamic_deephit_dataset['time_to_event_raw'] = f['time_to_event_raw'][:].astype(np.int32)
-            if 'time_to_event' in f:
-                dynamic_deephit_dataset['time_to_event'] = f['time_to_event'][:].astype(np.int32)
-            if 'predictions' in f:
-                dynamic_deephit_dataset['predictions'] = f['predictions'][:].astype(np.float32)
-            if 'entropy' in f:
-                dynamic_deephit_dataset['entropy'] = f['entropy'][:].astype(np.float32)
-            if 'health_score' in f:
-                dynamic_deephit_dataset['health_score'] = f['health_score'][:].astype(np.float32)
+            dynamic_deephit_dataset['stay_ids'] = f['stay_ids'][:]
+            dynamic_deephit_dataset['trajectories'] = f['trajectories'][:].astype(np.float32)
+            dynamic_deephit_dataset['index_ptr'] = f['index_ptr'][:]
+                        
+            dynamic_deephit_dataset['feature_names'] = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]
+            dynamic_deephit_dataset['physiological_feature_ind'] = f['physiological_feature_ind'][:].astype(np.int32)
+            dynamic_deephit_dataset['physiological_feature_type'] = [f['physiological_feature_type'][i].decode('utf-8') for i in range(len(f['physiological_feature_type']))]
+            dynamic_deephit_dataset['feature_dim'] = f['feature_dim'][()]
+            dynamic_deephit_dataset['response_zero_ind'] = f['response_zero_ind'][:].astype(np.int32)
+            dynamic_deephit_dataset['carry_forward_ind'] = f['carry_forward_ind'][:].astype(np.int32)    
+            
+            dynamic_deephit_dataset['event'] = f['event'][:].astype(np.int32)
+            dynamic_deephit_dataset['time_to_event_raw'] = f['time_to_event_raw'][:].astype(np.int32)
+            dynamic_deephit_dataset['time_to_event'] = f['time_to_event'][:].astype(np.int32)
 
         return dynamic_deephit_dataset
     
     @ staticmethod
-    def concatenate_dynamic_deephit_datasets(dataset_list, save_dir = None):
-        """
-        THIS SHOULD PROBABLY NOT BE USED - IT IS FOR CONCATENATING THE PREDICTIONS
-        FROM THE TEST SPLITS OF THE 5 FOLDS, BUT THERE IS NO REASON TO DO THIS FOR 
-        SUBSEQUENT MODEL TRAINING, ONLY FOR ANALYSIS OF THE PREDICTIONS THEMSELVES.        
-        """
+    def load_dynamic_deephit_predictions_from_h5(file_path):
+        dynamic_deephit_predictions = {}
+        with h5py.File(file_path, 'r') as f:
+            dynamic_deephit_predictions['predictions'] = f['predictions'][:].astype(np.float32)
+            dynamic_deephit_predictions['stay_ids'] = f['stay_ids'][:]
+            dynamic_deephit_predictions['index_ptr'] = f['index_ptr'][:]
+            dynamic_deephit_predictions['model_outputs'] = f['model_outputs'][:].astype(np.float32)
+            dynamic_deephit_predictions['health_score'] = f['health_score'][:].astype(np.float32)
+            dynamic_deephit_predictions['carry_forward_ind'] = f['carry_forward_ind'][:].astype(np.int32)
+            dynamic_deephit_predictions['response_zero_ind'] = f['response_zero_ind'][:].astype(np.int32)
 
-        # check that all datasets have the same feature_names
-        feature_names = dataset_list[0]['feature_names']
-        for dataset in dataset_list:
-            if not np.array_equal(dataset['feature_names'], feature_names):
-                raise ValueError("All datasets must have the same feature_names to concatenate")
 
-        concatenated_dataset = {}
-        concatenated_dataset['feature_names'] = feature_names
-        concatenated_dataset['response_zero_ind'] = dataset_list[0]['response_zero_ind']
-        concatenated_dataset['carry_forward_ind'] = dataset_list[0]['carry_forward_ind']
-
-        stay_ids_list = []
-        index_ptr_list = []
-        trajectories_list = []
-        event_list = []
-        time_to_event_raw_list = []
-        time_to_event_list = []
-        predictions_list = []
-        entropy_list = []
-        health_score_list = []
-        model_outputs_list = []
-
-        for i, dataset in enumerate(dataset_list):
-            stay_ids_list.append(dataset['stay_ids'])
-            
-            if i == 0:
-                index_ptr_list.append(dataset['index_ptr'])
-            else:
-                dataset['index_ptr'] = dataset['index_ptr'] + index_ptr_list[-1][-1]  # shift index_ptr by the last value of the previous dataset's index_ptr
-                index_ptr_list[i-1] = index_ptr_list[i-1][:-1]  # remove the last value of the previous dataset's index_ptr to avoid duplication
-                index_ptr_list.append(dataset['index_ptr'])
-
-            trajectories_list.append(dataset['trajectories'])
-            event_list.append(dataset['event'])
-            time_to_event_raw_list.append(dataset['time_to_event_raw'])
-            time_to_event_list.append(dataset['time_to_event'])
         
-            predictions_list.append(dataset['predictions'])
-            entropy_list.append(dataset['entropy'])
-            health_score_list.append(dataset['health_score'])
-            if 'model_outputs' in dataset:
-                model_outputs_list.append(dataset['model_outputs'])
-
-        concatenated_dataset['stay_ids'] = np.concatenate(stay_ids_list, axis=0)
-        concatenated_dataset['index_ptr'] = np.concatenate(index_ptr_list, axis=0)
-        concatenated_dataset['trajectories'] = np.concatenate(trajectories_list, axis=0)
-        concatenated_dataset['event'] = np.concatenate(event_list, axis=0)
-        concatenated_dataset['time_to_event_raw'] = np.concatenate(time_to_event_raw_list, axis=0)
-        concatenated_dataset['time_to_event'] = np.concatenate(time_to_event_list, axis=0)
-        concatenated_dataset['predictions'] = np.concatenate(predictions_list, axis=0)
-        concatenated_dataset['entropy'] = np.concatenate(entropy_list, axis=0)
-        concatenated_dataset['health_score'] = np.concatenate(health_score_list, axis=0)
-        concatenated_dataset['model_outputs'] = np.concatenate(model_outputs_list, axis=0)
-
-        if save_dir is not None:
-            save_path = Path(save_dir) / "concatenated_dynamic_deephit_dataset.h5"
-            
-            with h5py.File(save_path, 'w') as f:
-                f.create_dataset('feature_names', data=concatenated_dataset['feature_names'])
-                f.create_dataset('stay_ids', data=concatenated_dataset['stay_ids'], dtype=np.int32)
-                f.create_dataset('index_ptr', data=concatenated_dataset['index_ptr'], dtype=np.int32)
-                f.create_dataset('trajectories', data=concatenated_dataset['trajectories'], dtype=np.float32, 
-                                 chunks=(1, concatenated_dataset['trajectories'].shape[1]))
-                f.create_dataset('event', data=concatenated_dataset['event'], dtype=np.int32)
-                f.create_dataset('time_to_event_raw', data=concatenated_dataset['time_to_event_raw'], dtype=np.int32)
-                f.create_dataset('time_to_event', data=concatenated_dataset['time_to_event'], dtype=np.int32)
-
-                if 'predictions' in concatenated_dataset:
-                    f.create_dataset('predictions', data=concatenated_dataset['predictions'], dtype=np.float32)
-                if 'entropy' in concatenated_dataset:
-                    f.create_dataset('entropy', data=concatenated_dataset['entropy'], dtype=np.float32)
-                if 'health_score' in concatenated_dataset:
-                    f.create_dataset('health_score', data=concatenated_dataset['health_score'], dtype=np.float32)
-                # if 'model_outputs' in concatenated_dataset:
-                #     f.create_dataset('model_outputs', data=concatenated_dataset['model_outputs'], dtype=np.float32)
-            logger.info(f"Saved concatenated dynamic deephit dataset to {save_path}")
-
-        return concatenated_dataset
-
+        return dynamic_deephit_predictions
+    
+   
+   
 
         
 def main():

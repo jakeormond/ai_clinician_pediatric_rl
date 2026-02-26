@@ -5,6 +5,8 @@
     "version": "0.2.0",
     "configurations": [
 
+
+
         {
             "name": "save_dataframe",
             "type": "debugpy",
@@ -439,6 +441,28 @@
                 "--model_type", "reward_analysis", 
                 "--mode", "analysis", 
                 "--search_variant", "random_search",
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
+            "name": "basic_q_mimic",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.rl.reinforcement_learning",
+            "args": [
+                "--hospital", "mimic_iv", 
+                "--experiment_type", "reinforcement_learning",
+                "--model_type", "basic_q", 
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--search_variant", "random_search",
+                "--n_search_iterations", "1",
+                "--n_epochs", "200",
+                "--cohort", "sepsis_broad",
+                "--action_mode", "continuous_only"            
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

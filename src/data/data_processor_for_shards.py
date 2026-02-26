@@ -106,78 +106,36 @@ class ShardProcessor:
         del self.raw_shard_files
             
         ########### Normalized Shards ##############
-        self.normalize(config_manager=config_manager)
+        self.normalize(config_manager=config_manager) # this creates self.dynamic_deephit_dataset
             
-            all_files = os.listdir(self.shard_dir)
+        # create the time_to_event array
+        time_to_event = np.zeros_like(self.dynamic_deephit_dataset['trajectories'][:,0], dtype=np.int32)
+        for j in range(len(self.dynamic_deephit_dataset['stay_ids'])):
+            start_idx = self.dynamic_deephit_dataset['index_ptr'][j]
+            end_idx = self.dynamic_deephit_dataset['index_ptr'][j+1]
+            length = end_idx - start_idx
+            tte = np.arange(length, 0, -1)
+            time_to_event[start_idx:end_idx] = tte
 
-            normalized_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
-                                f.startswith(self.split) and f.endswith("_normalized.h5")]
-            
-            # sort the files to ensure consistent order
-            self.normalized_shard_files = sorted(normalized_shard_files)        
-        
-        # create dynamic deephit dataset
-        self.dynamic_deephit_dataset = {}
-        for i, shard_file in enumerate(self.normalized_shard_files):
-            logger.info(f"Loading normalized shard file into memory for tuning: {shard_file}")
-            # load the shard file
-            with h5py.File(shard_file, 'r') as f:      
-                # convert feature_names from bytes to strings
-                feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]                
-                stay_ids = f['stay_ids'][:]
-                index_ptr = f['index_ptr'][:]
-                trajectories = f['trajectories'][:]      
-                event = f['event'][:]    
-
-            final_indices = index_ptr[1:] - 1    
-            final_events = event[final_indices].astype(int)
-
-            # create the time_to_event array
-            time_to_event = np.zeros_like(trajectories[:,0], dtype=np.int32)
-            for j in range(len(stay_ids)):
-                start_idx = index_ptr[j]
-                end_idx = index_ptr[j+1]
-                length = end_idx - start_idx
-                tte = np.arange(length, 0, -1)
-                time_to_event[start_idx:end_idx] = tte
-
-
-            if i == 0:
-                self.dynamic_deephit_dataset['feature_names'] = feature_names
-                self.dynamic_deephit_dataset['stay_ids'] = stay_ids
-                self.dynamic_deephit_dataset['index_ptr'] = index_ptr
-                self.dynamic_deephit_dataset['trajectories'] = trajectories.astype(np.float32)
-                self.dynamic_deephit_dataset['event'] = final_events.astype(np.int32)
-                self.dynamic_deephit_dataset['time_to_event_raw'] = time_to_event.astype(np.int32)
-            else:
-                # raise not implemented error, I'm not handling index_ptr concatenation here
-                raise NotImplementedError("Merging multiple shard files into dynamic_deephit_dataset not implemented yet.")
-                # self.dynamic_deephit_dataset['stay_ids'] = np.concatenate(
-                #     (self.dynamic_deephit_dataset['stay_ids'], stay_ids), axis=0)
-                # self.dynamic_deephit_dataset['index_ptr'] = np.concatenate(
-                #     (self.dynamic_deephit_dataset['index_ptr'], 
-                #         index_ptr[1:] + self.dynamic_deephit_dataset['index_ptr'][-1]), axis=0)
-                # self.dynamic_deephit_dataset['trajectories'] = np.concatenate(
-                #     (self.dynamic_deephit_dataset['trajectories'], trajectories.astype(np.float32)), axis=0)
+        self.dynamic_deephit_dataset['time_to_event_raw'] = time_to_event.astype(np.int32)
 
         # bin time_to_events
         tte_bin = np.digitize(self.dynamic_deephit_dataset['time_to_event_raw'], self.time_bins, right=True) - 1                
         self.dynamic_deephit_dataset['time_to_event'] = tte_bin
 
         # get physiological feature indices for dynamic deephit model, and feature_dim
-        # load 'feature_names' from the first h5 file
-        with h5py.File(self.normalized_shard_files[0], 'r') as f:
-            feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))] 
-            self.dynamic_deephit_dataset['feature_dim'] = f['trajectories'].shape[1]
+        self.dynamic_deephit_dataset['feature_dim'] = self.dynamic_deephit_dataset['trajectories'].shape[1]
 
         self.dynamic_deephit_dataset['physiological_feature_ind'] = [] # for dynamic deephit model, which tries to predict next physiological features
         self.dynamic_deephit_dataset['physiological_feature_type'] = []
-
+        self.dynamic_deephit_dataset['response_zero_ind'] = [] # for final timestep features that should be zeroed out because they are responses to interventions at that timestep, and we don't want to feed the model the true response values at the final timestep, as that would leak information about the target
+        self.dynamic_deephit_dataset['carry_forward_ind'] = [] # for rinal timestep features that should be carry-forwarded because they are responses to interventions at that timestep, and we want to carry forward the last observed value instead of using the true response value at the final timestep, to avoid leaking information about the target, but also to provide a more realistic scenario for the model to learn from, as in real life, we wouldn't have access to the true response values at the final timestep during inference, but we would have access to the last observed values that we can carry forward.
+        
         physiological_feature_sets = [
             'hemodynamics', 'labs', 'neurological', 'routine_vital_signs', 'respiratory'
             ]
                 
-        for i, feature in enumerate(feature_names):
+        for i, feature in enumerate(self.dynamic_deephit_dataset['feature_names']):
             if feature == 'time':
                 continue
             
@@ -186,38 +144,26 @@ class ShardProcessor:
                 feature_set = feature_row['feature_set'].values[0]
                 data_type = feature_row['data_type'].values[0]
                 response_intervention = feature_row['response_intervention'].values[0]
+                
                 if feature_set in physiological_feature_sets and response_intervention == 'response':
                     self.dynamic_deephit_dataset['physiological_feature_ind'].append(i)
                     self.dynamic_deephit_dataset['physiological_feature_type'].append(data_type)
 
-        # response_zero_ind and carry_forward_ind
-        self.dynamic_deephit_dataset['response_zero_ind'] = []
-        self.dynamic_deephit_dataset['carry_forward_ind'] = []
-        
-        for i, feature in enumerate(feature_names):
-            feature_row = self.features_to_use[self.features_to_use['feature'] == feature]    
-
-            if feature_row.empty:
-                continue
-
-            response_intervention = feature_row['response_intervention'].values[0]
-            feature_set = feature_row['feature_set'].values[0]
-            if response_intervention == 'intervention':
-                if feature_set in ['fluids_intake', 'medications', 'combined_hourly_iv']:
-                    self.dynamic_deephit_dataset['response_zero_ind'].append(i)
-                else:
-                    self.dynamic_deephit_dataset['carry_forward_ind'].append(i)
-            
-                if f"{feature}_mask" in feature_names:
-                    mask_ind = feature_names.index(f"{feature}_mask")
-                    self.dynamic_deephit_dataset['carry_forward_ind'].append(mask_ind)
+                elif response_intervention == 'intervention':
+                    if feature_set in ['fluids_intake', 'medications', 'combined_hourly_iv']:
+                        self.dynamic_deephit_dataset['response_zero_ind'].append(i)
+                    else:
+                        self.dynamic_deephit_dataset['carry_forward_ind'].append(i)
                 
-                if f"{feature}_delta" in feature_names:
-                    delta_ind = feature_names.index(f"{feature}_delta")
-                    self.dynamic_deephit_dataset['carry_forward_ind'].append(delta_ind)
+                    if f"{feature}_mask" in self.dynamic_deephit_dataset['feature_names']:
+                        mask_ind = self.dynamic_deephit_dataset['feature_names'].index(f"{feature}_mask")
+                        self.dynamic_deephit_dataset['carry_forward_ind'].append(mask_ind)
+                    
+                    if f"{feature}_delta" in self.dynamic_deephit_dataset['feature_names']:
+                        delta_ind = self.dynamic_deephit_dataset['feature_names'].index(f"{feature}_delta")
+                        self.dynamic_deephit_dataset['carry_forward_ind'].append(delta_ind)
 
-
-
+        
         # save the file
         final_file_name = f"{self.split}_dynamic_deephit_dataset.h5"
         final_file_path = os.path.join(self.shard_dir, final_file_name)
@@ -226,23 +172,6 @@ class ShardProcessor:
         self.feature_dim = self.dynamic_deephit_dataset['trajectories'].shape[1]
         self.dynamic_deephit_dataset_to_h5(final_file_path)
         
-        # with h5py.File(final_file_path, 'w') as f:
-        #     f.create_dataset('feature_names', data=self.dynamic_deephit_dataset['feature_names'])
-        #     f.create_dataset('stay_ids', data=self.dynamic_deephit_dataset['stay_ids'], dtype=np.int32)
-        #     f.create_dataset('index_ptr', data=self.dynamic_deephit_dataset['index_ptr'], dtype=np.int32)
-        #     f.create_dataset('trajectories', data=self.dynamic_deephit_dataset['trajectories'], dtype=np.float32, 
-        #                      chunks=(1, self.dynamic_deephit_dataset['trajectories'].shape[1]))
-        #     f.create_dataset('event', data=self.dynamic_deephit_dataset['event'], dtype=np.int32)
-        #     f.create_dataset('time_to_event_raw', data=self.dynamic_deephit_dataset['time_to_event_raw'], dtype=np.int32)
-        #     f.create_dataset('time_to_event', data=self.dynamic_deephit_dataset['time_to_event'], dtype=np.int32)
-
-        #     f.create_dataset('physiological_feature_ind', data=np.array(self.physiological_feature_ind, dtype=np.int32), dtype=np.int32)
-        #     f.create_dataset('physiological_feature_type', data=np.array(self.physiological_feature_type, dtype='S20'), dtype='S20')
-
-        #     f.create_dataset('feature_dim', data=np.array(self.feature_dim, dtype=np.int32), dtype=np.int32)
-
-        # logger.info(f"Saved dynamic deephit dataset to {final_file_path}")
-
         if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
             # filter the dataset to only include the specified cohort
             logger.info(f"Filtering dynamic deephit dataset to only include cohort: {config_manager._data_config['cohort']}")
@@ -352,40 +281,6 @@ class ShardProcessor:
         logger.info(f"Number of stays in cohort {cohort}: {len(cohort_stay_ids)}")
         logger.info(f"Filtering dynamic_deephit_dataset to only include these stay_ids.")
 
-        # # filter the dynamic_deephit_dataset
-        # stay_ids = self.dynamic_deephit_dataset['stay_ids']
-        # logger.info(f"Original number of stays in dynamic_deephit_dataset: {len(stay_ids)}")
-        # logger.info(f"Original number of timesteps in dynamic_deephit_dataset: {self.dynamic_deephit_dataset['trajectories'].shape[0]}")
-
-        # # Create boolean mask for stays to keep
-        # mask = np.isin(stay_ids, list(cohort_stay_ids))
-        # indices_to_keep = np.where(mask)[0]
-        # logger.info(f"Number of stays after filtering to cohort {cohort}: {len(indices_to_keep)}")
-
-        # # Build trajectory mask
-        # traj_mask = np.zeros(self.dynamic_deephit_dataset['trajectories'].shape[0], dtype=bool)
-        # for idx in indices_to_keep:
-        #     start_idx = self.dynamic_deephit_dataset['index_ptr'][idx]
-        #     end_idx = self.dynamic_deephit_dataset['index_ptr'][idx + 1]
-        #     traj_mask[start_idx:end_idx] = True
-
-        # # Apply masks to all arrays at once
-        # self.dynamic_deephit_dataset['stay_ids'] = self.dynamic_deephit_dataset['stay_ids'][mask]
-        # self.dynamic_deephit_dataset['event'] = self.dynamic_deephit_dataset['event'][mask]
-        # self.dynamic_deephit_dataset['trajectories'] = self.dynamic_deephit_dataset['trajectories'][traj_mask]
-        # self.dynamic_deephit_dataset['time_to_event_raw'] = self.dynamic_deephit_dataset['time_to_event_raw'][traj_mask]
-        # self.dynamic_deephit_dataset['time_to_event'] = self.dynamic_deephit_dataset['time_to_event'][traj_mask]
-        
-        # # Rebuild index_ptr
-        # new_index_ptr = np.zeros(len(indices_to_keep) + 1, dtype=np.int32)
-        # for i, idx in enumerate(indices_to_keep):
-        #     start_idx = self.dynamic_deephit_dataset['index_ptr'][idx]
-        #     end_idx = self.dynamic_deephit_dataset['index_ptr'][idx + 1]
-        #     new_index_ptr[i + 1] = new_index_ptr[i] + (end_idx - start_idx)
-        
-        # self.dynamic_deephit_dataset['index_ptr'] = new_index_ptr
-        # logger.info(f"Number of timesteps after filtering to cohort {cohort}: {self.dynamic_deephit_dataset['trajectories'].shape[0]}")
-
         self.filter_by_stay_ids(cohort_stay_ids, config_manager)    
     
     
@@ -423,6 +318,7 @@ class ShardProcessor:
         
         return trajectories, stay_ids, index_ptr
 
+    
     def add_time_column(self, trajectories, stay_ids, index_ptr, feature_names):
         n_samples = trajectories.shape[0]
         time_col = np.zeros((n_samples, 1))
@@ -613,20 +509,21 @@ class ShardProcessor:
                 raise ValueError(f"Infs found in normalized feature {feature} in shard {self.raw_shard_file}")
             if np.abs(trajectories[:, j]).max() > 1e6:
                 raise ValueError(f"Extreme values found in normalized feature {feature} in shard {self.raw_shard_file}")
-            
+           
+        self.dynamic_deephit_dataset = {}
+        self.dynamic_deephit_dataset['feature_names'] = feature_names
+        self.dynamic_deephit_dataset['stay_ids'] = stay_ids
+        self.dynamic_deephit_dataset['index_ptr'] = index_ptr
+        self.dynamic_deephit_dataset['trajectories'] = trajectories.astype(np.float32)
         
-        # normalized_shard_file = self.raw_shard_file.replace(".h5", "_normalized.h5")
+        final_indices = index_ptr[1:] - 1    
+        final_events = death_values[final_indices].astype(int)
+                
+        self.dynamic_deephit_dataset['event'] = final_events.astype(np.int32)
 
-        # with h5py.File(normalized_shard_file, 'w') as f:
-        #     f.create_dataset('feature_names', data=[name.encode('utf-8') for name in feature_names])
-        #     f.create_dataset('stay_ids', data=stay_ids, dtype=np.int32)
-        #     f.create_dataset('index_ptr', data=index_ptr, dtype=np.int32)
-        #     f.create_dataset('trajectories', data=trajectories.astype(np.float32), dtype=np.float32, 
-        #                         chunks=(1, trajectories.shape[1]))
-        #     f.create_dataset('event', data=death_values.astype(np.int32), dtype=np.int32)
+        logger.info(f"Finished normalizing shard file: {self.raw_shard_file}")
 
-        # logger.info(f"Saved normalized shard file: {normalized_shard_file}")   
-
+    
     def get_normalization_params(self):
 
         # check if self has the "obs_norm_dict" attribute
@@ -640,38 +537,6 @@ class ShardProcessor:
             "action_transformers": self.action_transformers
         }   
     
-
-    @ staticmethod
-    def create_dynamic_deephit_dataset(
-        feature_names,
-        stay_ids,
-        index_ptr,
-        trajectories,
-        event,
-        time_to_event_raw,
-        time_to_event,
-        physiological_feature_ind,
-        physiological_feature_type,
-        feature_dim,
-        response_zero_ind,
-        carry_forward_ind
-        ):
-        dynamic_deephit_dataset = {}
-        dynamic_deephit_dataset['feature_names'] = feature_names
-        dynamic_deephit_dataset['stay_ids'] = stay_ids
-        dynamic_deephit_dataset['index_ptr'] = index_ptr    
-        dynamic_deephit_dataset['trajectories'] = trajectories.astype(np.float32)
-        dynamic_deephit_dataset['event'] = event.astype(np.int32)
-        dynamic_deephit_dataset['time_to_event_raw'] = time_to_event_raw.astype(np.int32)
-        dynamic_deephit_dataset['time_to_event'] = time_to_event.astype(np.int32)
-        dynamic_deephit_dataset['physiological_feature_ind'] = physiological_feature_ind
-        dynamic_deephit_dataset['physiological_feature_type'] = physiological_feature_type
-        dynamic_deephit_dataset['feature_dim'] = feature_dim
-        dynamic_deephit_dataset['response_zero_ind'] = response_zero_ind
-        dynamic_deephit_dataset['carry_forward_ind'] = carry_forward_ind
-        return dynamic_deephit_dataset
-
-
 
     @ staticmethod
     def load_dynamic_deephit_dataset_from_h5(file_path):

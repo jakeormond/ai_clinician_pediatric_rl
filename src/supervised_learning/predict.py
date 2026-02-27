@@ -181,7 +181,7 @@ def inference_loop(
                     pad_len = window_length - (t + 1)
                     
                     # Set the padded portion to 0.0 (or the start of the stay)
-                    local_time[t, :pad_len] = 0.0
+                    local_time[t, :pad_len] = local_time[t, pad_len]
 
                 # 3c. Normalize
                 local_time_norm = local_time / (window_length - 1)

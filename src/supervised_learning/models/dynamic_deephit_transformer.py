@@ -653,7 +653,7 @@ def get_trainer(
         feature_dropout_p=hyperparams['feature_dropout_p'],
         ff_factor=hyperparams['ff_factor'],
         max_seq_len=config_manager.training_config['window_length'],
-        predict_covariates=train_processor.dynamic_deephit_dataset['physiological_feature_ind'].tolist() if train_processor.dynamic_deephit_dataset['physiological_feature_ind'] is not None else [],       
+        predict_covariates=train_processor.dynamic_deephit_dataset['physiological_feature_ind']
     ).to(config_manager.training_config['device'])
 
     # # Collect L1 parameters: classification head weights only

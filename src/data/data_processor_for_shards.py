@@ -559,7 +559,7 @@ class ShardProcessor:
                         
             dynamic_deephit_dataset['feature_names'] = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]
             dynamic_deephit_dataset['physiological_feature_ind'] = f['physiological_feature_ind'][:].astype(np.int32).tolist()
-            dynamic_deephit_dataset['physiological_feature_type'] = [f['physiological_feature_type'][i].decode('utf-8') for i in range(len(f['physiological_feature_type']))].tolist()
+            dynamic_deephit_dataset['physiological_feature_type'] = [f['physiological_feature_type'][i].decode('utf-8') for i in range(len(f['physiological_feature_type']))]
             dynamic_deephit_dataset['feature_dim'] = f['feature_dim'][()]
             dynamic_deephit_dataset['response_zero_ind'] = f['response_zero_ind'][:].astype(np.int32).tolist()
             dynamic_deephit_dataset['carry_forward_ind'] = f['carry_forward_ind'][:].astype(np.int32).tolist()

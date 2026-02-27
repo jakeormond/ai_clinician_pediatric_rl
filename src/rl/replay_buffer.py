@@ -108,34 +108,9 @@ class DynamicDeepHitTransformerDataset(Dataset):
         self.features_to_use = pd.read_csv(config_manager.data_config['features_to_use_path'])
         
         # get indices of response features to zero out or carry forward at the final timestep (for RL setting)
-        self.response_zero_ind = data_processor.dynamic_deephit_dataset['response_zero_ind']
-        self.carry_forward_ind = data_processor.dynamic_deephit_dataset['carry_forward_ind']
-        
-        # self.response_zero_ind = []
-        # self.carry_forward_ind = []        
-
-        # for i, feature in enumerate(self.feature_names):
-        #     feature_row = self.features_to_use[self.features_to_use['feature'] == feature]            
-            
-        #     if feature_row.empty:
-        #         continue
-
-        #     response_intervention = feature_row['response_intervention'].values[0]
-        #     feature_set = feature_row['feature_set'].values[0]
-        #     if response_intervention == 'intervention':
-        #         if feature_set in ['fluids_intake', 'medications', 'combined_hourly_iv']:
-        #             self.response_zero_ind.append(i)
-        #         else:
-        #             self.carry_forward_ind.append(i)
-            
-        #         if f"{feature}_mask" in self.feature_names:
-        #             mask_ind = self.feature_names.index(f"{feature}_mask")
-        #             self.carry_forward_ind.append(mask_ind)
-                
-        #         if f"{feature}_delta" in self.feature_names:
-        #             delta_ind = self.feature_names.index(f"{feature}_delta")
-        #             self.carry_forward_ind.append(delta_ind)
-        
+        self.response_zero_ind = data_processor.dynamic_deephit_dataset['response_zero_ind'].tolist()
+        self.carry_forward_ind = data_processor.dynamic_deephit_dataset['carry_forward_ind'].tolist()
+               
         self.reshuffle_subsample() 
 
 
@@ -193,7 +168,17 @@ class DynamicDeepHitTransformerDataset(Dataset):
         if self.carry_forward_ind:
             trajectories[-1, self.carry_forward_ind] = trajectories[-2, self.carry_forward_ind]
 
+        # add local window time feature (time since start of window) as an additional input feature
+        local_time = torch.arange(self.window_length, dtype=torch.float32).unsqueeze(1)  # (window_length, 1)
+        # if padding was added, repeat the local time for the first timestep in the padded region
+        if start_to_end_len < self.window_length:
+            local_time[:pad] = local_time[pad]  # repeat the local time for the first timestep in the padded region
 
+        # min max the local time
+        local_time = local_time / (self.window_length - 1)  # scale to [0, 1]
+
+        trajectories = torch.cat([trajectories, local_time], dim=1)  # (window_length, num_features + 1)
+    
         return {
             "features": trajectories,
             "time_to_event": time_to_event,

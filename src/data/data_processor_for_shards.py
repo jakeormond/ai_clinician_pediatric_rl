@@ -44,27 +44,7 @@ class ShardProcessor:
 
         if self.split == 'train' and config_manager.training_config['tuning']:
             self.split = 'tuning'
-
-        # load processed data if it exists, otherwise process raw shard files and save the processed data for future use
-        final_file_name = f"{self.split}_dynamic_deephit_dataset.h5"
-        final_file_path = os.path.join(self.shard_dir, final_file_name)
         
-        # load if exists
-        if os.path.exists(final_file_path):
-            logger.info(f"Loading existing dynamic deephit dataset from {final_file_path}")
-            
-            # load the file directly into self.dynamic_deephit_dataset
-            self.dynamic_deephit_dataset = self.load_dynamic_deephit_dataset_from_h5(final_file_path)
-            
-            # get the prediction file name as well as we may need to load it if 
-            # this is RL
-            prediction_file_name = f"{self.split}_predictions.h5"
-            prediction_file_path = os.path.join(self.experiment_dir, prediction_file_name)
-
-            self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path)
-
-            return
-             
         # find the shard dir for the given split
         if config_manager.split_num is None:
             shard_dir = os.path.join(config_manager.paths['data_dir'], 
@@ -79,6 +59,38 @@ class ShardProcessor:
             self.shard_dir = os.path.join(shard_dir, 'training_set')
         else:
             self.shard_dir = os.path.join(shard_dir, 'tuning_set')
+        
+        
+        # load processed data if it exists, otherwise process raw shard files and save the processed data for future use
+        final_file_name = f"{self.split}_dynamic_deephit_dataset.h5"
+        final_file_path = os.path.join(self.shard_dir, final_file_name)
+        
+        # load if exists
+        if os.path.exists(final_file_path):
+            logger.info(f"Loading existing dynamic deephit dataset from {final_file_path}")
+            
+            # load the file directly into self.dynamic_deephit_dataset
+            self.dynamic_deephit_dataset = self.load_dynamic_deephit_dataset_from_h5(final_file_path)
+            
+            # get the prediction file name as well as we may need to load it if 
+            # this is RL
+            # prediction_file_name = f"{self.split}_predictions.h5"
+            # prediction_file_path = os.path.join(self.experiment_dir, prediction_file_name)
+
+            # self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path)
+
+            # load the normalization parameters if they exist from the json file
+            norm_params_file = os.path.join(self.shard_dir, "train_norm_params.json")
+            if os.path.exists(norm_params_file):
+                with open(norm_params_file, 'r') as f:
+                    norm_params = json.load(f)
+                self.obs_norm_dict = norm_params['obs_norm_dict']
+                logger.info(f"Loaded normalization parameters from {norm_params_file}")
+            else:
+                raise ValueError(f"No normalization parameters file found at {norm_params_file}. This may cause issues if you are normalizing the validation or test set, as it should be normalized with the parameters from the training set. Please check that your training set was normalized and that the normalization parameters were saved correctly.")
+
+            return
+           
         
         # prepare for normalization
         self.norm_params = norm_params
@@ -101,9 +113,7 @@ class ShardProcessor:
             raise ValueError(f"Multiple shard files found for split {self.split} in directory {self.shard_dir}. Expected only one. Found: {raw_shard_files}")
 
         # don't need a list, as there should only be one file, confirmed above
-        self.raw_shard_file = self.raw_shard_files[0]
-        # delete raw_shard_files to free up memory
-        del self.raw_shard_files
+        self.raw_shard_file = raw_shard_files[0]
             
         ########### Normalized Shards ##############
         self.normalize(config_manager=config_manager) # this creates self.dynamic_deephit_dataset
@@ -150,7 +160,7 @@ class ShardProcessor:
                     self.dynamic_deephit_dataset['physiological_feature_type'].append(data_type)
 
                 elif response_intervention == 'intervention':
-                    if feature_set in ['fluids_intake', 'medications', 'combined_hourly_iv']:
+                    if feature_set in ['fluids_intake', 'medications']:
                         self.dynamic_deephit_dataset['response_zero_ind'].append(i)
                     else:
                         self.dynamic_deephit_dataset['carry_forward_ind'].append(i)
@@ -333,7 +343,7 @@ class ShardProcessor:
         return trajectories, ['time'] + feature_names
 
     
-    def min_max(x, norm_dict):
+    def min_max(self, x, norm_dict):
         min_val = norm_dict['min']
         max_val = norm_dict['max']
         if max_val - min_val == 0:
@@ -342,7 +352,7 @@ class ShardProcessor:
         return np.clip(scaled_x, 0.0, 1.0)
 
 
-    def log_min_max(x, norm_dict):
+    def log_min_max(self, x, norm_dict):
         log_x = np.log1p(x)
         
         log_min = norm_dict['log_min']
@@ -358,7 +368,7 @@ class ShardProcessor:
         return np.clip(scaled_x, 0.0, 1.0)
 
 
-    def z_score(x, norm_dict):
+    def z_score(self, x, norm_dict):
         mean = norm_dict['mean']
         std = norm_dict['std']
         if std == 0:
@@ -369,7 +379,7 @@ class ShardProcessor:
         return np.clip(scaled_x, -5.0, 5.0)
 
     
-    def robust_scale(x, norm_dict):
+    def robust_scale(self, x, norm_dict):
         median = norm_dict['median']
         iqr = norm_dict['iqr']
         if iqr == 0:
@@ -387,7 +397,7 @@ class ShardProcessor:
 
         # if not, we are normalizing the training or tuning set, so we need to compute the normalization parameters from the data
         else:
-            self.obs_norm_dict = None
+            self.obs_norm_dict = {}
 
             logger.info(f"Computing values for normalizing shard file: {self.raw_shard_file}")
             # load the shard file
@@ -531,10 +541,7 @@ class ShardProcessor:
             return None
 
         return {
-            "obs_norm_dict": self.obs_norm_dict,
-            "action_minimum": self.action_minimum,
-            "action_maximum": self.action_maximum,
-            "action_transformers": self.action_transformers
+            "obs_norm_dict": self.obs_norm_dict
         }   
     
 

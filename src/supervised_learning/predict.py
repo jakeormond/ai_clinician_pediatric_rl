@@ -96,7 +96,7 @@ def instantiate_model(
 
     else: # currently only the separate transformer-based Dynamic-DeepHit is supported
         dynamic_deephit_model = TransformerDeepHitMulti(
-            feature_dim=feature_dim,   # input feature dimension
+            feature_dim=feature_dim + 1,   # input feature dimension - add 1 for the local time feature we add in the replay buffer
             d_model=hyperparams['d_model'],               # e.g., 128 or 256
             nhead=hyperparams['nhead'],                   # e.g., 4 or 8
             num_encoder_layers=hyperparams['n_layers'],   # e.g., 3 or 6
@@ -167,6 +167,28 @@ def inference_loop(
             # loss_mask = torch.ones((windows.shape[0], window_length), dtype=torch.float32, device=device)
             loss_mask = torch.zeros((windows.shape[0], window_length), dtype=torch.bool, device=device)
 
+            if model_type == 'transformer':
+                # 3a. Create a (T, window_length) grid of the local sequence [0, 1, ... 71]
+                local_time = torch.arange(window_length, dtype=torch.float32, device=device).repeat(T, 1)
+
+                # 3b. Adjust for early windows (where T < window_length)
+                # We want the padding at the start to hold the '0' value 
+                # until the actual patient data begins.
+                n_padded_windows = min(window_length - 1, T)
+                for t in range(n_padded_windows):
+                    # Calculate how much of this specific window is just padding
+                    # e.g., if t=0 (Hour 1), pad_len is 71.
+                    pad_len = window_length - (t + 1)
+                    
+                    # Set the padded portion to 0.0 (or the start of the stay)
+                    local_time[t, :pad_len] = 0.0
+
+                # 3c. Normalize
+                local_time_norm = local_time / (window_length - 1)
+
+                # 3d. Concatenate
+                windows = torch.cat([windows, local_time_norm.unsqueeze(-1)], dim=-1)
+                       
             n_padded_windows = min([window_length - 1, T])
             for t in range(n_padded_windows):
                 loss_mask[t, :(window_length - (t + 1))] = 0

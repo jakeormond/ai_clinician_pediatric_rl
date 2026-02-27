@@ -635,16 +635,15 @@ def get_trainer(
         feature_dim, 
         hyperparams, 
         train_processor, 
-        training_dataset
+        training_dataset,
+        num_risks = 2,
         ):
 
     learning_rate = float(hyperparams['learning_rate'])
     n_time_bins = len(config_manager.time_bins) - 1
 
-    num_risks = 2 # hardcoded for death vs discharge
-
     dynamic_deephit_model = TransformerDeepHitMulti(
-        feature_dim=feature_dim,
+        feature_dim=feature_dim+1, # +1 for the local time feature we add in the replay buffer
         d_model=hyperparams['d_model'],               # e.g., 128 or 256
         nhead=hyperparams['nhead'],                   # e.g., 4 or 8
         num_encoder_layers=hyperparams['n_layers'],   # e.g., 3 or 6
@@ -654,7 +653,7 @@ def get_trainer(
         feature_dropout_p=hyperparams['feature_dropout_p'],
         ff_factor=hyperparams['ff_factor'],
         max_seq_len=config_manager.training_config['window_length'],
-        predict_covariates=train_processor.physiological_feature_ind,       
+        predict_covariates=train_processor.dynamic_deephit_dataset['physiological_feature_ind'].tolist() if train_processor.dynamic_deephit_dataset['physiological_feature_ind'] is not None else [],       
     ).to(config_manager.training_config['device'])
 
     # # Collect L1 parameters: classification head weights only
@@ -709,7 +708,7 @@ def get_trainer(
             scheduler=scheduler,
             g_sigma_scheduler=g_sigma_scheduler,
             verbose=True, 
-            physiological_feature_type = train_processor.physiological_feature_type,
+            physiological_feature_type = train_processor.dynamic_deephit_dataset['physiological_feature_type'],
             # l1_params=l1_params,          # ← ADD THIS
             l1_lambda=hyperparams['l1_lambda'],   
             final_timestep_only = config_manager.final_timestep_only        

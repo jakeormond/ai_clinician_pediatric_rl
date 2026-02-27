@@ -212,7 +212,7 @@ def create_buffer(processor, batch_size, config_manager, shuffle=True):
 def create_trainer(train_processor, training_dataset, hyperparams, config_manager):
 
     # feature_dim = train_processor.dynamic_deephit_dataset["features"].shape[2]
-    feature_dim = train_processor.feature_dim
+    feature_dim = train_processor.dynamic_deephit_dataset['feature_dim']
     num_risks = 2 # hardcode for now
 
     model_type = config_manager.model_type
@@ -223,7 +223,8 @@ def create_trainer(train_processor, training_dataset, hyperparams, config_manage
         feature_dim,
         hyperparams,
         train_processor,
-        training_dataset
+        training_dataset,
+        num_risks=num_risks
     )
 
 

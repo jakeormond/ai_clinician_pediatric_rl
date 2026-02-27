@@ -80,7 +80,10 @@ class ShardProcessor:
             # self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path)
 
             # load the normalization parameters if they exist from the json file
-            norm_params_file = os.path.join(self.shard_dir, "train_norm_params.json")
+            if config_manager.training_config['tuning']:
+                norm_params_file = os.path.join(self.shard_dir, "tuning_norm_params.json")
+            else:
+                norm_params_file = os.path.join(self.shard_dir, "train_norm_params.json")
             if os.path.exists(norm_params_file):
                 with open(norm_params_file, 'r') as f:
                     norm_params = json.load(f)
@@ -558,8 +561,8 @@ class ShardProcessor:
             dynamic_deephit_dataset['physiological_feature_ind'] = f['physiological_feature_ind'][:].astype(np.int32)
             dynamic_deephit_dataset['physiological_feature_type'] = [f['physiological_feature_type'][i].decode('utf-8') for i in range(len(f['physiological_feature_type']))]
             dynamic_deephit_dataset['feature_dim'] = f['feature_dim'][()]
-            dynamic_deephit_dataset['response_zero_ind'] = f['response_zero_ind'][:].astype(np.int32)
-            dynamic_deephit_dataset['carry_forward_ind'] = f['carry_forward_ind'][:].astype(np.int32)    
+            dynamic_deephit_dataset['response_zero_ind'] = f['response_zero_ind'][:].astype(np.int32).tolist()
+            dynamic_deephit_dataset['carry_forward_ind'] = f['carry_forward_ind'][:].astype(np.int32).tolist()
             
             dynamic_deephit_dataset['event'] = f['event'][:].astype(np.int32)
             dynamic_deephit_dataset['time_to_event_raw'] = f['time_to_event_raw'][:].astype(np.int32)

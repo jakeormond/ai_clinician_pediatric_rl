@@ -108,8 +108,8 @@ class DynamicDeepHitTransformerDataset(Dataset):
         self.features_to_use = pd.read_csv(config_manager.data_config['features_to_use_path'])
         
         # get indices of response features to zero out or carry forward at the final timestep (for RL setting)
-        self.response_zero_ind = data_processor.dynamic_deephit_dataset['response_zero_ind'].tolist()
-        self.carry_forward_ind = data_processor.dynamic_deephit_dataset['carry_forward_ind'].tolist()
+        self.response_zero_ind = data_processor.dynamic_deephit_dataset['response_zero_ind']
+        self.carry_forward_ind = data_processor.dynamic_deephit_dataset['carry_forward_ind']
                
         self.reshuffle_subsample() 
 

@@ -111,6 +111,8 @@ def parse_arguments():
     if args.start_time is None:
         args.start_time = time.strftime("%Y%m%d_%H%M%S")
 
+    if len(args.split_num) == 1: args.split_num = args.split_num[0]
+
     return args 
 
 
@@ -176,6 +178,13 @@ def main():
         if wandb.run is not None:
             wandb.finish()
     
+
+    elif args.mode == "single_split":
+        config_manager.set_training_config()
+        single_split_training(config_manager)
+
+
+
     elif args.mode == "analysis":
         dataset = Dataset(config_manager.data_config)
         logger.info(f"Dataset loaded with {len(dataset.dataframe)} rows and {len(dataset.dataframe.columns)} columns")

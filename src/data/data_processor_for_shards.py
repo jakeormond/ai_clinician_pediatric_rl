@@ -72,13 +72,23 @@ class ShardProcessor:
             # load the file directly into self.dynamic_deephit_dataset
             self.dynamic_deephit_dataset = self.load_dynamic_deephit_dataset_from_h5(final_file_path)
             
-            # get the prediction file name as well as we may need to load it if 
-            # this is RL
-            # prediction_file_name = f"{self.split}_predictions.h5"
-            # prediction_file_path = os.path.join(self.experiment_dir, prediction_file_name)
+            # if we are running RL, load reward
+            if config_manager.data_config['model_type'] == 'reinforcement_learning' and config_manager.data_config['use_reward']:
+                # get the parent directory for the supervised model which generates the health score
+                supervised_model_dir = os.path.dirname(config_manager.paths['supervised_final_model_dir'])
+                supervised_model_dir = os.path.join(supervised_model_dir, "five_splits", 
+                                                       f"split_{config_manager.split_num}", "final_model")
+                # get the folder inside
+                final_model_dir = os.listdir(supervised_model_dir)[0]
 
-            # self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path)
+                prediction_file_path = os.path.join(supervised_model_dir, final_model_dir, f"{self.split}_set_predictions.h5")
 
+                self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path)
+
+                # process the reward
+                self.process_reward(config_manager)          
+            
+            
             # load the normalization parameters if they exist from the json file
             if config_manager.training_config['tuning']:
                 norm_params_file = os.path.join(self.shard_dir, "tuning_norm_params.json")
@@ -190,6 +200,25 @@ class ShardProcessor:
             logger.info(f"Filtering dynamic deephit dataset to only include cohort: {config_manager._data_config['cohort']}")
             self.filter_cohort(config_manager)
 
+    
+    def process_reward(self, config_manager):
+        reward_type = config_manager.data_config['reward_type']
+        if reward_type == 'health_score':
+            health_score = self.dynamic_deephit_predictions['health_score']
+            index_ptr = self.dynamic_deephit_dataset['index_ptr']
+
+            # calculate hourly change; first hour should be 0
+            hourly_health_change = np.zeros_like(health_score)
+            for j in range(len(index_ptr) - 1):
+                start_idx = index_ptr[j]
+                end_idx = index_ptr[j + 1]
+                hourly_health_change[start_idx:end_idx] = np.diff(health_score[start_idx:end_idx], prepend=health_score[start_idx])
+
+            self.dynamic_deephit_dataset['reward'] = hourly_health_change.astype(np.float32)                                         
+        
+        else:
+            raise ValueError(f"Invalid reward type: {reward_type}. Supported reward types are: 'health_score' and 'time_to_event'.")
+    
     
     def dynamic_deephit_dataset_to_h5(self, file_path, keys_to_exclude=None):
         if keys_to_exclude is None:
@@ -579,6 +608,7 @@ class ShardProcessor:
             dynamic_deephit_predictions['index_ptr'] = f['index_ptr'][:]
             dynamic_deephit_predictions['model_outputs'] = f['model_outputs'][:].astype(np.float32)
             dynamic_deephit_predictions['health_score'] = f['health_score'][:].astype(np.float32)
+            dynamic_deephit_predictions['entropy'] = f['entropy'][:].astype(np.float32)
             dynamic_deephit_predictions['carry_forward_ind'] = f['carry_forward_ind'][:].astype(np.int32)
             dynamic_deephit_predictions['response_zero_ind'] = f['response_zero_ind'][:].astype(np.int32)
 

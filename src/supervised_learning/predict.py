@@ -79,7 +79,7 @@ def instantiate_model(
         experiment_dir=None
     ):
     
-    feature_dim = test_processor.feature_dim
+    feature_dim = test_processor.dynamic_deephit_dataset['feature_dim'] 
     if model_type == "GRU": # GRU-based Dynamic-DeepHit
         dynamic_deephit_model = DynamicDeepHitMulti(
             test_processor.feature_dim,
@@ -105,7 +105,7 @@ def instantiate_model(
             dropout=hyperparams['dropout'],
             ff_factor=hyperparams['ff_factor'],
             max_seq_len=config_manager.training_config['window_length'],
-            predict_covariates=test_processor.physiological_feature_ind,       
+            predict_covariates=test_processor.dynamic_deephit_dataset['physiological_feature_ind'],       
         ).to(config_manager.training_config['device'])
     
     # load trained model weights from final_model.pt
@@ -167,7 +167,7 @@ def inference_loop(
             # loss_mask = torch.ones((windows.shape[0], window_length), dtype=torch.float32, device=device)
             loss_mask = torch.zeros((windows.shape[0], window_length), dtype=torch.bool, device=device)
 
-            if model_type == 'transformer':
+            if model_type == 'dynamic_deephit_transformer':
                 # 3a. Create a (T, window_length) grid of the local sequence [0, 1, ... 71]
                 local_time = torch.arange(window_length, dtype=torch.float32, device=device).repeat(T, 1)
 
@@ -456,7 +456,7 @@ def get_predictions(config_manager, model_type, experiment_dir, set='test', stay
     if os.path.exists(filepath):
         # load existing predictions
         print(f"Loading existing predictions from {filepath}")
-        dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(filepath)
+        dynamic_deephit_predictions = ShardProcessor.load_dynamic_deephit_predictions_from_h5(filepath)
     else:
         # create DataLoader for test dataset
         # Create test_processor; note it will throw an error if the normalized test shard is missing.
@@ -485,7 +485,7 @@ def get_predictions(config_manager, model_type, experiment_dir, set='test', stay
 
         # run inference on test set - this function also saves the predictions to file
         filename = f'{set}_set_predictions'
-        dynamic_deephit_dataset = inference_loop(
+        dynamic_deephit_predictions = inference_loop(
             dynamic_deephit_model, 
             processor, 
             config_manager,
@@ -497,10 +497,9 @@ def get_predictions(config_manager, model_type, experiment_dir, set='test', stay
         
     if stay_ids is not None:
         # filter event to only stays in the current cohort
-        dynamic_deephit_dataset = filter_cohort(dynamic_deephit_dataset, stay_ids)   
+        dynamic_deephit_predictions = filter_cohort(dynamic_deephit_predictions, stay_ids)   
 
-    return dynamic_deephit_dataset 
-
+    return dynamic_deephit_predictions 
 
 def bootstrap_evaluation(
         dynamic_deephit_dataset,
@@ -1499,8 +1498,26 @@ def plot_random_predictions(
     filepath = os.path.join(config_manager.experiment_dir, filename + '.h5')
     # load existing predictions
     print(f"Loading existing predictions from {filepath}")
-    dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(filepath)
+    dynamic_deephit_predictions = ShardProcessor.load_dynamic_deephit_predictions_from_h5(filepath)
+    
+    # loading the dataset to get trajectories
+    dataset_filepath = os.path.join(config_manager.get_data_dir, config_manager.data_config['shard_dir'], 
+                f"split_{config_manager.split_num}", "training_set", "test_dynamic_deephit_dataset.h5")    
+    dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(dataset_filepath)
+    
+    # confirm that the predictions and dataset are aligned by index_ptr
+    if not np.array_equal(dynamic_deephit_predictions['index_ptr'], dynamic_deephit_dataset['index_ptr']):
+        raise ValueError("Index pointers in predictions and dataset do not match. Cannot plot predictions.")
+    else:
+        print("Index pointers in predictions and dataset match. Proceeding with plotting.")
 
+    # check that trajectories and predictions have same number of rows
+    if dynamic_deephit_predictions['predictions'].shape[0] != dynamic_deephit_dataset['trajectories'].shape[0]:
+        raise ValueError("Number of prediction rows does not match number of trajectory rows. Cannot plot predictions.")
+    else:
+        print("Number of prediction rows matches number of trajectory rows. Proceeding with plotting.")
+    
+    
     # plot predictions for a random sample of 10 patients
     stay_ids = dynamic_deephit_dataset['stay_ids']
     events = dynamic_deephit_dataset['event']
@@ -1523,11 +1540,11 @@ def plot_random_predictions(
         start_idx = dynamic_deephit_dataset['index_ptr'][idx]
         end_idx = dynamic_deephit_dataset['index_ptr'][idx + 1]
 
-        predictions = dynamic_deephit_dataset['predictions'][start_idx:end_idx]
+        predictions = dynamic_deephit_predictions['predictions'][start_idx:end_idx]
         probabilities = calculate_probabilities(predictions)
 
-        entropy = dynamic_deephit_dataset['entropy'][start_idx:end_idx]
-        health_score = dynamic_deephit_dataset['health_score'][start_idx:end_idx]
+        entropy = dynamic_deephit_predictions['entropy'][start_idx:end_idx]
+        health_score = dynamic_deephit_predictions['health_score'][start_idx:end_idx]
 
         patient_data = {
             'stay_id': stay_id,

@@ -196,6 +196,9 @@ def main():
             config_manager = ConfigManager(args)
             # set training config
             config_manager.set_training_config()
+
+            # manually set tuning to false (it may or may not be set false already)
+            config_manager.training_config['tuning'] = False
             
             # set max encounter length as 2 months
             max_encounter_length = 24 * 60  # hours

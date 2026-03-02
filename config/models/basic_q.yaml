@@ -3,7 +3,7 @@
     "group": "reinforcement_learning"
     name: "basic_q"
 
-    tuning: False
+    tuning: True
 
     window_length: 72 # 72 hours, same as dynamic deephit - we want to use same state representation, but we can simply use
     # transformer ouput from dynamic deephit - set by use_raw_states

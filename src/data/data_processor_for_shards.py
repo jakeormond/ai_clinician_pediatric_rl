@@ -81,14 +81,22 @@ class ShardProcessor:
                 # get the folder inside
                 final_model_dir = os.listdir(supervised_model_dir)[0]
 
-                prediction_file_path = os.path.join(supervised_model_dir, final_model_dir, f"{self.split}_set_predictions.h5")
+                pred_split = self.split
+                if self.split == 'tuning':
+                    pred_split = 'train' # the tuning set predictions are generated from the model trained on the training set, so we need to load the train_set_predictions.h5 file
+                prediction_file_path = os.path.join(supervised_model_dir, final_model_dir, f"{pred_split}_set_predictions.h5")
 
                 self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
-                                                                        keys_to_exclude=['stay_ids', 'index_ptr', 'predictions', 'entropy'])
+                                                                        keys_to_exclude=['predictions', 'entropy'])
+                if self.split == 'tuning': # we need to filter the predictions to only include the stays in the tuning set, which are a subset of the training set
+                    tuning_stay_ids = self.dynamic_deephit_dataset['stay_ids']
+                    self.filter_by_stay_ids(tuning_stay_ids, dataset_name='dynamic_deephit_predictions')
 
                 # process the reward
-                self.process_reward(config_manager)          
-            
+                self.process_reward(config_manager)
+
+                return
+
             
             # load the normalization parameters if they exist from the json file
             if config_manager.training_config['tuning']:
@@ -215,7 +223,7 @@ class ShardProcessor:
                 end_idx = index_ptr[j + 1]
                 hourly_health_change[start_idx:end_idx] = np.diff(health_score[start_idx:end_idx], append=health_score[end_idx-1])
 
-            self.dynamic_deephit_dataset['reward'] = hourly_health_change.astype(np.float32)                                         
+            self.dynamic_deephit_predictions['reward'] = hourly_health_change.astype(np.float32)                                         
         
         else:
             raise ValueError(f"Invalid reward type: {reward_type}. Supported reward types are: 'health_score' and 'time_to_event'.")
@@ -266,12 +274,21 @@ class ShardProcessor:
         logger.info(f"Saved dynamic deephit dataset to {file_path}")
 
 
-    def filter_by_stay_ids(self, stay_ids_to_keep, config_manager):
+    
+    
+    
+    def filter_by_stay_ids(self, stay_ids_to_keep, dataset_name='dynamic_deephit_dataset'):
         # filter the dynamic_deephit_dataset
-        stay_ids = self.dynamic_deephit_dataset['stay_ids']
-        logger.info(f"Original number of stays in dynamic_deephit_dataset: {len(stay_ids)}")
-        logger.info(f"Original number of timesteps in dynamic_deephit_dataset: {self.dynamic_deephit_dataset['trajectories'].shape[0]}")
+        if dataset_name == 'dynamic_deephit_dataset':
+            dataset = self.dynamic_deephit_dataset
+        elif dataset_name == 'dynamic_deephit_predictions':
+            dataset = self.dynamic_deephit_predictions
+        else:
+            raise ValueError(f"Invalid dataset name: {dataset_name}. Supported dataset names are: 'dynamic_deephit_dataset' and 'dynamic_deephit_predictions'.")
 
+        stay_ids = dataset['stay_ids']
+        logger.info(f"Original number of stays in {dataset_name}: {len(stay_ids)}")
+        
         # Create boolean mask for stays to keep
         mask = np.isin(stay_ids, list(stay_ids_to_keep))
         indices_to_keep = np.where(mask)[0]
@@ -279,34 +296,56 @@ class ShardProcessor:
         # logger.info(f"Number of stays after filtering to cohort {cohort}: {len(indices_to_keep)}")
         logger.info(f"Number of stays after filtering by stay ids: {len(indices_to_keep)}")
 
-
         # Build trajectory mask
-        traj_mask = np.zeros(self.dynamic_deephit_dataset['trajectories'].shape[0], dtype=bool)
+        if 'trajectories' in dataset:
+            traj_mask = np.zeros(dataset['trajectories'].shape[0], dtype=bool)
+        elif 'model_outputs' in dataset:
+            traj_mask = np.zeros(dataset['model_outputs'].shape[0], dtype=bool)
+        logger.info(f"Original number of timesteps in {dataset_name}: {traj_mask.shape[0]}")
+
         for idx in indices_to_keep:
-            start_idx = self.dynamic_deephit_dataset['index_ptr'][idx]
-            end_idx = self.dynamic_deephit_dataset['index_ptr'][idx + 1]
+            start_idx = dataset['index_ptr'][idx]
+            end_idx = dataset['index_ptr'][idx + 1]
             traj_mask[start_idx:end_idx] = True
 
         # Apply masks to all arrays at once
-        self.dynamic_deephit_dataset['stay_ids'] = self.dynamic_deephit_dataset['stay_ids'][mask]
-        self.dynamic_deephit_dataset['event'] = self.dynamic_deephit_dataset['event'][mask]
-        self.dynamic_deephit_dataset['trajectories'] = self.dynamic_deephit_dataset['trajectories'][traj_mask]
-        self.dynamic_deephit_dataset['time_to_event_raw'] = self.dynamic_deephit_dataset['time_to_event_raw'][traj_mask]
-        self.dynamic_deephit_dataset['time_to_event'] = self.dynamic_deephit_dataset['time_to_event'][traj_mask]
+        dataset['stay_ids'] = dataset['stay_ids'][mask]
+        if 'event' in dataset:
+            dataset['event'] = dataset['event'][mask]
+        if 'trajectories' in dataset:
+            dataset['trajectories'] = dataset['trajectories'][traj_mask]
+        if 'time_to_event_raw' in dataset:
+            dataset['time_to_event_raw'] = dataset['time_to_event_raw'][traj_mask]
+        if 'time_to_event' in dataset:
+            dataset['time_to_event'] = dataset['time_to_event'][traj_mask]
+        if 'model_outputs' in dataset:
+            dataset['model_outputs'] = dataset['model_outputs'][traj_mask]
+        if 'health_score' in dataset:
+            dataset['health_score'] = dataset['health_score'][traj_mask]
         
         # Rebuild index_ptr
         new_index_ptr = np.zeros(len(indices_to_keep) + 1, dtype=np.int32)
         for i, idx in enumerate(indices_to_keep):
-            start_idx = self.dynamic_deephit_dataset['index_ptr'][idx]
-            end_idx = self.dynamic_deephit_dataset['index_ptr'][idx + 1]
+            start_idx = dataset['index_ptr'][idx]
+            end_idx = dataset['index_ptr'][idx + 1]
             new_index_ptr[i + 1] = new_index_ptr[i] + (end_idx - start_idx)
         
-        self.dynamic_deephit_dataset['index_ptr'] = new_index_ptr
-        # logger.info(f"Number of timesteps after filtering to cohort {cohort}: {self.dynamic_deephit_dataset['trajectories'].shape[0]}")
-        logger.info(f"Number of timesteps after filtering by stay ids: {self.dynamic_deephit_dataset['trajectories'].shape[0]}")
+        dataset['index_ptr'] = new_index_ptr
+        # logger.info(f"Number of timesteps after filtering to cohort {cohort}: {dataset['trajectories'].shape[0]}")
+        if 'trajectories' in dataset:
+            logger.info(f"Number of timesteps after filtering by stay ids: {dataset['trajectories'].shape[0]}")
+        elif 'model_outputs' in dataset:
+            logger.info(f"Number of timesteps after filtering by stay ids: {dataset['model_outputs'].shape[0]}")
+
+        # Explicitly update the instance attribute
+        if dataset_name == 'dynamic_deephit_dataset':
+            self.dynamic_deephit_dataset = dataset
+        elif dataset_name == 'dynamic_deephit_predictions':
+            self.dynamic_deephit_predictions = dataset
+
+        return
 
 
-    
     def filter_cohort(self, config_manager):
         """
         Filters the dynamic_deephit_dataset to only include the specified cohort.

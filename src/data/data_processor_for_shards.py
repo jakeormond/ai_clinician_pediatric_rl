@@ -83,7 +83,8 @@ class ShardProcessor:
 
                 prediction_file_path = os.path.join(supervised_model_dir, final_model_dir, f"{self.split}_set_predictions.h5")
 
-                self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path)
+                self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
+                                                                        keys_to_exclude=['stay_ids', 'index_ptr', 'predictions', 'entropy'])
 
                 # process the reward
                 self.process_reward(config_manager)          
@@ -212,7 +213,7 @@ class ShardProcessor:
             for j in range(len(index_ptr) - 1):
                 start_idx = index_ptr[j]
                 end_idx = index_ptr[j + 1]
-                hourly_health_change[start_idx:end_idx] = np.diff(health_score[start_idx:end_idx], prepend=health_score[start_idx])
+                hourly_health_change[start_idx:end_idx] = np.diff(health_score[start_idx:end_idx], append=health_score[end_idx-1])
 
             self.dynamic_deephit_dataset['reward'] = hourly_health_change.astype(np.float32)                                         
         
@@ -578,9 +579,18 @@ class ShardProcessor:
     
 
     @ staticmethod
-    def load_dynamic_deephit_dataset_from_h5(file_path):
+    def load_dynamic_deephit_dataset_from_h5(file_path, keys_to_load=None, keys_to_exclude=None):
+        dynamic_deephit_dataset = {}
+
+        if keys_to_load is None:
+            keys_to_load = ['stay_ids', 'trajectories', 'index_ptr', 'feature_names', 'physiological_feature_ind', 
+                            'physiological_feature_type', 'feature_dim', 'response_zero_ind', 'carry_forward_ind',
+                            'event', 'time_to_event_raw', 'time_to_event']
+        if keys_to_exclude is not None:
+            keys_to_load = [key for key in keys_to_load if key not in keys_to_exclude]
+
         with h5py.File(file_path, 'r') as f:
-            dynamic_deephit_dataset = {}
+            
 
             dynamic_deephit_dataset['stay_ids'] = f['stay_ids'][:]
             dynamic_deephit_dataset['trajectories'] = f['trajectories'][:].astype(np.float32)
@@ -600,17 +610,31 @@ class ShardProcessor:
         return dynamic_deephit_dataset
     
     @ staticmethod
-    def load_dynamic_deephit_predictions_from_h5(file_path):
+    def load_dynamic_deephit_predictions_from_h5(file_path, keys_to_load=None, keys_to_exclude=None):
         dynamic_deephit_predictions = {}
+
+        if keys_to_load is None:
+            keys_to_load = ['predictions', 'stay_ids', 'index_ptr', 'model_outputs', 'health_score', 'entropy', 'carry_forward_ind', 'response_zero_ind']
+        if keys_to_exclude is not None:
+            keys_to_load = [key for key in keys_to_load if key not in keys_to_exclude]
+
         with h5py.File(file_path, 'r') as f:
-            dynamic_deephit_predictions['predictions'] = f['predictions'][:].astype(np.float32)
-            dynamic_deephit_predictions['stay_ids'] = f['stay_ids'][:]
-            dynamic_deephit_predictions['index_ptr'] = f['index_ptr'][:]
-            dynamic_deephit_predictions['model_outputs'] = f['model_outputs'][:].astype(np.float32)
-            dynamic_deephit_predictions['health_score'] = f['health_score'][:].astype(np.float32)
-            dynamic_deephit_predictions['entropy'] = f['entropy'][:].astype(np.float32)
-            dynamic_deephit_predictions['carry_forward_ind'] = f['carry_forward_ind'][:].astype(np.int32)
-            dynamic_deephit_predictions['response_zero_ind'] = f['response_zero_ind'][:].astype(np.int32)
+            if 'predictions' in keys_to_load:
+                dynamic_deephit_predictions['predictions'] = f['predictions'][:].astype(np.float32)
+            if 'stay_ids' in keys_to_load:
+                dynamic_deephit_predictions['stay_ids'] = f['stay_ids'][:]
+            if 'index_ptr' in keys_to_load:
+                dynamic_deephit_predictions['index_ptr'] = f['index_ptr'][:]
+            if 'model_outputs' in keys_to_load:
+                dynamic_deephit_predictions['model_outputs'] = f['model_outputs'][:].astype(np.float32)
+            if 'health_score' in keys_to_load:    
+                dynamic_deephit_predictions['health_score'] = f['health_score'][:].astype(np.float32)
+            if 'entropy' in keys_to_load:  
+                dynamic_deephit_predictions['entropy'] = f['entropy'][:].astype(np.float32)
+            if 'carry_forward_ind' in keys_to_load:   
+                dynamic_deephit_predictions['carry_forward_ind'] = f['carry_forward_ind'][:].astype(np.int32)
+            if 'response_zero_ind' in keys_to_load:    
+                dynamic_deephit_predictions['response_zero_ind'] = f['response_zero_ind'][:].astype(np.int32)
 
 
         

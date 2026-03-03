@@ -229,6 +229,57 @@ class ShardProcessor:
             raise ValueError(f"Invalid reward type: {reward_type}. Supported reward types are: 'health_score' and 'time_to_event'.")
     
     
+
+
+    def create_rl_dataset(self, states="model_outputs"):
+        self.rl_dataset = {}
+        
+        action_ind = self.dynamic_deephit_dataset['response_zero_ind'] + self.dynamic_deephit_dataset['carry_forward_ind']
+        action_ind.sort()  # these are the indices of the response features that are either zeroed out or carried forward at the final timestep, so they correspond to the action space
+
+        action_names = np.array(self.dynamic_deephit_dataset['feature_names'])[action_ind]
+
+        # find all actions with 'delta' or 'mask' in the name and remove them from the action space (since these are not actual treatments but rather engineered features for the model)
+        remove_mask = np.array([('delta' in name) or ('mask' in name) for name in action_names])
+
+        action_ind = np.array(action_ind)[~remove_mask]
+        self.action_names = action_names[~remove_mask]
+
+        # get trajectory starts and ends
+        all_ind = np.arange(len(self.dynamic_deephit_dataset['trajectories']))
+        trajectory_start_inds = self.dynamic_deephit_dataset['index_ptr']
+        trajectory_end_inds = self.dynamic_deephit_dataset['index_ptr'][1:] - 1
+
+        state_ind = np.setdiff1d(all_ind, trajectory_end_inds)  # we will exclude the end of trajectory timesteps since these have no next state and action labels are ambiguous (since they could be either the action taken at that timestep or the action taken at the previous timestep)
+        next_state_ind = np.setdiff1d(all_ind, trajectory_start_inds)  # we will exclude the start of trajectory timesteps from the next states for the same reason as above
+
+        # get states
+        if states == "model_outputs":
+            self.rl_dataset['states'] = torch.tensor(self.dynamic_deephit_predictions["model_outputs"][state_ind, :], dtype=torch.float32)
+            self.rl_dataset['next_states'] = torch.tensor(self.dynamic_deephit_predictions["model_outputs"][next_state_ind, :], dtype=torch.float32)
+        else:
+            raise NotImplementedError(f"Only states='model_outputs' is currently implemented, but got states={states}")
+
+        actions = torch.tensor(self.dynamic_deephit_dataset["trajectories"][:, action_ind], dtype=torch.float32)
+        self.rl_dataset['actions'] = actions[state_ind, :]
+
+        self.rl_dataset['rewards'] = torch.tensor(self.dynamic_deephit_predictions["reward"][state_ind], dtype=torch.float32)
+      
+        self.rl_dataset['next_actions'] = actions[next_state_ind, :]
+        
+        dones = torch.tensor(np.zeros_like(self.dynamic_deephit_predictions["reward"]), dtype=torch.float32)
+        dones[trajectory_end_inds] = 1.0  # mark end of trajectories
+        self.rl_dataset['dones'] = dones[next_state_ind]  # only keep dones for the next states, since the current states will never be terminal in our setting (since we exclude end of trajectory timesteps)
+        
+        mortality = self.dynamic_deephit_dataset['event']
+        mortality_full = np.zeros_like(self.dynamic_deephit_predictions["reward"], dtype=np.float32)
+        mortality_full[trajectory_end_inds] = mortality  # set the mortality value at the start of each trajectory to the mortality value for that trajectory
+        mortality_full = mortality_full[next_state_ind]  # only keep mortality for the next states, since the current states will never be terminal in our setting (since we exclude end of trajectory timesteps)
+        self.rl_dataset['mortality'] = torch.tensor(mortality_full, dtype=torch.float32)
+
+
+
+
     def dynamic_deephit_dataset_to_h5(self, file_path, keys_to_exclude=None):
         if keys_to_exclude is None:
             keys_to_exclude = []

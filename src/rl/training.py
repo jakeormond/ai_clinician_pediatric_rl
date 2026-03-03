@@ -32,6 +32,7 @@ from ..data.data_processor_for_shards import ShardProcessor
 # from .dataset import Dataset
 from .replay_buffer import RLDataset
 from .models.behavioural_cloning import keep_best_trajectories, keep_positive_trajectories
+from ..supervised_learning.training import get_hyperparameter_space, select_hyperparameters_randomly
 from .models.td3_bc import TD3_BC
 from ..utils.utilities import set_seed
 from .plotting import plot_losses, plot_Q_by_mortality
@@ -75,17 +76,6 @@ def average_dicts(list_of_dicts):
     # Compute averages
     averages = {k: sum(v_list) / len(v_list) for k, v_list in values.items()}
     return averages
-
-
-def select_hyperparameters_randomly(hyperparameter_space, config_manager):
-    """Selects hyperparameters randomly from the given space."""
-    selected_params = {}
-    for param, values in hyperparameter_space.items():
-        if isinstance(values, list):
-            selected_params[param] = random.choice(values)
-        else:  # assume it's a scipy.stats distribution
-            selected_params[param] = round(values.rvs(), 6)  # round for readability
-    return selected_params
 
 
 def create_processors(dataset, train_id, val_id, config_manager):
@@ -134,11 +124,9 @@ def create_processor_from_shards(config_manager, normalize=True, set_to_return='
         return test_processor
     
 
-
-
-
 def create_buffer(processor, batch_size):
-    dataset = RLDataset(processor.rl_dataset)
+    processor.create_rl_dataset(states="model_outputs") # states argument is not currently used, but we can add options for different state representations in the future
+    dataset = RLDataset(processor, states="model_outputs") # model_outputs refer to dynamic_deephit transformer outputs; other options not currently implemented
     buffer = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     return buffer
 
@@ -404,11 +392,6 @@ def single_split_training(config_manager):
             config_manager
         )
 
-    
-
-
-
-
         ###################   HYPERPARAMETER OPTIMIZATION #############################
         logger.info("Phase 1: Hyperparameter Optimization")
         best_hyperparameters, training_scores, val_scores, n_epochs = optimize_hyperparameters(
@@ -486,13 +469,42 @@ def single_split_training(config_manager):
         return test_scores
     
 
-def optimize_hyperparameters(train_dataset, config_manager,
-                                        n_inner_folds=None, 
-                                            norm_params=None, 
-                                                outer_fold=None):
+def optimize_hyperparameters(train_processor, val_processor, config_manager):
     """Inner CV loop for hyperparameter optimization."""
     
-    loss_metric = config_manager.training_config['loss_metric'] # e.g. actor loss, critic loss etc, depends on algorithm
+    # create hyperparameter space
+    hyperparameter_space = get_hyperparameter_space(config_manager)
+
+    # initialize best_val_score
+    loss_metric = config_manager.training_config['loss_metric'] 
+    
+    ##################### loop through hyperparameter combinations #####################
+    logger.info(f"Starting hyperparameter optimization with {config_manager.n_search_iterations} iterations...")
+    
+    for i in range(config_manager.n_search_iterations):
+        ################# select hyperparameters randomly #################
+        current_params = select_hyperparameters_randomly(
+            hyperparameter_space, config_manager
+        )       
+        logger.info(f"Testing hyperparameters {i+1}/{config_manager.n_search_iterations}: {current_params}")
+
+        ################# Train with current hyperparameters #################       
+        training_scores, val_scores, n_epochs, trainer, raw_grad_norms = train_with_hyperparameters(
+            train_processor, 
+            val_processor, 
+            config_manager, 
+            current_params,
+            final_model=False
+        )
+
+
+
+
+
+
+
+
+
 
     ################################ create hyperparameter space ################################
     # the hyperparameter space to search consists of the parameters that are lists 

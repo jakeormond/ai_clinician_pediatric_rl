@@ -20,17 +20,51 @@ ai_clinician_dir = "/home/jake/Documents/AI_Clinician/"
 
 
 class RLDataset(Dataset):
-    def __init__(self, rl_dataset: Dict[str, np.ndarray]):
-        self.states = torch.tensor(rl_dataset["observations"], dtype=torch.float32)
-        self.actions = torch.tensor(rl_dataset["actions"], dtype=torch.float32)
-        self.rewards = torch.tensor(rl_dataset["rewards"], dtype=torch.float32)
-        self.next_states = torch.tensor(rl_dataset["next_observations"], dtype=torch.float32)
-        # if next actions are included, add them here
-        if "next_actions" in rl_dataset:
-            self.next_actions = torch.tensor(rl_dataset["next_actions"], dtype=torch.float32)
-        self.dones = torch.tensor(rl_dataset["terminated"], dtype=torch.float32)
-        self.mortality = torch.tensor(rl_dataset["mortality"], dtype=torch.float32)
+    def __init__(self, processor: Dict[str, np.ndarray], states="model_outputs"):
 
+
+        action_ind = processor.dynamic_deephit_dataset['response_zero_ind'] + processor.dynamic_deephit_dataset['carry_forward_ind']
+        action_ind.sort()  # these are the indices of the response features that are either zeroed out or carried forward at the final timestep, so they correspond to the action space
+
+        action_names = np.array(processor.dynamic_deephit_dataset['feature_names'])[action_ind]
+
+        # find all actions with 'delta' or 'mask' in the name and remove them from the action space (since these are not actual treatments but rather engineered features for the model)
+        remove_mask = np.array([('delta' in name) or ('mask' in name) for name in action_names])
+
+        action_ind = np.array(action_ind)[~remove_mask]
+        self.action_names = action_names[~remove_mask]
+
+        # get trajectory starts and ends
+        all_ind = np.arange(len(processor.dynamic_deephit_dataset['trajectories']))
+        trajectory_start_inds = processor.dynamic_deephit_dataset['index_ptr']
+        trajectory_end_inds = processor.dynamic_deephit_dataset['index_ptr'][1:] - 1
+
+        state_ind = np.setdiff1d(all_ind, trajectory_end_inds)  # we will exclude the end of trajectory timesteps since these have no next state and action labels are ambiguous (since they could be either the action taken at that timestep or the action taken at the previous timestep)
+        next_state_ind = np.setdiff1d(all_ind, trajectory_start_inds)  # we will exclude the start of trajectory timesteps from the next states for the same reason as above
+
+        # get states
+        if states == "model_outputs":
+            self.states = torch.tensor(processor.dynamic_deephit_predictions["model_outputs"][state_ind, :], dtype=torch.float32)
+            self.next_states = torch.tensor(processor.dynamic_deephit_predictions["model_outputs"][next_state_ind, :], dtype=torch.float32)
+        else:
+            raise NotImplementedError(f"Only states='model_outputs' is currently implemented, but got states={states}")
+
+        actions = torch.tensor(processor.dynamic_deephit_dataset["trajectories"][:, action_ind], dtype=torch.float32)
+        self.actions = actions[state_ind, :]
+
+        self.rewards = torch.tensor(processor.dynamic_deephit_predictions["reward"][state_ind], dtype=torch.float32)
+      
+        self.next_actions = actions[next_state_ind, :]
+        
+        dones = torch.tensor(np.zeros_like(processor.dynamic_deephit_predictions["reward"]), dtype=torch.float32)
+        dones[trajectory_end_inds] = 1.0  # mark end of trajectories
+        self.dones = dones[next_state_ind]  # only keep dones for the next states, since the current states will never be terminal in our setting (since we exclude end of trajectory timesteps)
+        
+        mortality = processor.dynamic_deephit_dataset['event']
+        mortality_full = np.zeros_like(processor.dynamic_deephit_predictions["reward"], dtype=np.float32)
+        mortality_full[trajectory_end_inds] = mortality  # set the mortality value at the start of each trajectory to the mortality value for that trajectory
+        mortality_full = mortality_full[next_state_ind]  # only keep mortality for the next states, since the current states will never be terminal in our setting (since we exclude end of trajectory timesteps)
+        self.mortality = torch.tensor(mortality_full, dtype=torch.float32)
 
     def __len__(self) -> int:
         return len(self.states)

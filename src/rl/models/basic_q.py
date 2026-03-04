@@ -83,7 +83,7 @@ class Q_Learner(object):
         with torch.no_grad():            
             # Compute the target Q value
             target_Q1, target_Q2 = self.critic_target(next_state, next_action)
-            target_Q = torch.min(target_Q1, target_Q2)
+            target_Q = (target_Q1 + target_Q2) / 2.0
             target_Q = reward + not_done * self.discount * target_Q			
 
         return target_Q
@@ -118,9 +118,14 @@ class Q_Learner(object):
 
         # sample the replay buffer
         state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
-        not_done = 1 - done
 
         # compute the target Q value
+        treat_survival_as_truncated = True
+        if treat_survival_as_truncated:
+             # make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
+            done = done * mortality
+        
+        not_done = 1 - done
         target_Q = self.target_q(reward, not_done, next_state, next_action)
 
         # Get current Q estimates

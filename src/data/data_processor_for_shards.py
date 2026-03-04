@@ -247,7 +247,7 @@ class ShardProcessor:
 
         # get trajectory starts and ends
         all_ind = np.arange(len(self.dynamic_deephit_dataset['trajectories']))
-        trajectory_start_inds = self.dynamic_deephit_dataset['index_ptr']
+        trajectory_start_inds = self.dynamic_deephit_dataset['index_ptr'][:-1]
         trajectory_end_inds = self.dynamic_deephit_dataset['index_ptr'][1:] - 1
 
         state_ind = np.setdiff1d(all_ind, trajectory_end_inds)  # we will exclude the end of trajectory timesteps since these have no next state and action labels are ambiguous (since they could be either the action taken at that timestep or the action taken at the previous timestep)
@@ -273,10 +273,23 @@ class ShardProcessor:
         
         mortality = self.dynamic_deephit_dataset['event']
         mortality_full = np.zeros_like(self.dynamic_deephit_predictions["reward"], dtype=np.float32)
+        # make full mortality trajectoires == 1
+        mortality_start_inds = trajectory_start_inds[mortality == 1]
+        mortality_end_inds = trajectory_end_inds[mortality == 1]
+
+        for start, end in zip(mortality_start_inds, mortality_end_inds):
+            mortality_full[start:end+1] = 1.0
+
         mortality_full[trajectory_end_inds] = mortality  # set the mortality value at the start of each trajectory to the mortality value for that trajectory
         mortality_full = mortality_full[next_state_ind]  # only keep mortality for the next states, since the current states will never be terminal in our setting (since we exclude end of trajectory timesteps)
         self.rl_dataset['mortality'] = torch.tensor(mortality_full, dtype=torch.float32)
 
+
+    def get_start_states(self):
+        dones = self.rl_dataset['dones'].numpy()
+        final_ind = np.where(dones == 1)[0]
+        start_ind = np.concatenate([[0], final_ind[:-1] + 1])  # start indices are just after each final index, except for the first one which is 0
+        return self.rl_dataset['states'][start_ind]
 
 
 

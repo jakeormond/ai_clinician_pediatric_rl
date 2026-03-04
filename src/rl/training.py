@@ -126,16 +126,16 @@ def create_processor_from_shards(config_manager, normalize=True, set_to_return='
 
 def create_buffer(processor, batch_size):
     processor.create_rl_dataset(states="model_outputs") # states argument is not currently used, but we can add options for different state representations in the future
-    dataset = RLDataset(processor, states="model_outputs") # model_outputs refer to dynamic_deephit transformer outputs; other options not currently implemented
+    dataset = RLDataset(processor) # model_outputs refer to dynamic_deephit transformer outputs; other options not currently implemented
     buffer = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     return buffer
 
 
 def create_trainer(train_processor, hyperparams, config_manager):
 
-    state_dim = train_processor.rl_dataset["observations"].shape[1]
+    state_dim = train_processor.rl_dataset["states"].shape[1]
     action_dim = train_processor.rl_dataset["actions"].shape[1]
-    max_action = np.max(np.abs(train_processor.rl_dataset["actions"]))
+    max_action = np.max(np.abs(train_processor.rl_dataset["actions"].cpu().numpy()))
 
     model_type = config_manager.model_type
     module = importlib.import_module(MODEL_MODULES[model_type])
@@ -637,6 +637,8 @@ def train_with_hyperparameters(
     
     ############################### Training loop #################################
     for epoch in range(n_epochs):
+        # print epoch
+        logger.info(f"Epoch {epoch+1}/{n_epochs}")  
         epoch_training_losses = defaultdict(list)
 
         for batch_idx, batch in enumerate(training_buffer):

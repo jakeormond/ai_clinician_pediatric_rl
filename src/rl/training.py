@@ -167,6 +167,7 @@ def append_epoch_losses(
     """Calculates average losses for the epoch and appends to training_losses."""    
     
     # calculate q value stats if available
+    q_stats = None
     if "mean_Q" in epoch_training_losses:
         with torch.no_grad():
             q_stats, epoch_training_losses = calculate_q_stats(epoch_training_losses)
@@ -177,9 +178,9 @@ def append_epoch_losses(
         training_losses[key].append(value)     
 
     # add q stats if available
-    if 'q_stats' in locals():
-        training_losses.update(q_stats)
-
+    if q_stats is not None:
+        for key, value in q_stats.items():
+            training_losses[key].append(value)
 
 def estimate_v0(trainer, starting_states, batch_size, losses_dict):
     # we store the estimates in losses_dict

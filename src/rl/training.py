@@ -393,12 +393,6 @@ def single_split_training(config_manager):
             config_manager
         )
 
-        ###################   HYPERPARAMETER OPTIMIZATION #############################
-        logger.info("Phase 1: Hyperparameter Optimization")
-        best_hyperparameters, training_scores, val_scores, n_epochs = optimize_hyperparameters(
-            train_dataset, config_manager, n_inner_folds=n_inner_folds, 
-            outer_fold=outer_fold
-        )
         logger.info(f"Best hyperparameters: {best_hyperparameters}")
 
         # get the max number of epochs used in inner folds
@@ -497,14 +491,6 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
             current_params,
             final_model=False
         )
-
-
-
-
-
-
-
-
 
 
     ################################ create hyperparameter space ################################

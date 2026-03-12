@@ -52,7 +52,17 @@ class Critic(nn.Module):
 		q1 = self.l3(q1)
 		return q1
 	
-    
+
+def get_grad_norm(model):
+    total_norm = 0
+    for p in model.parameters():
+        if p.grad is not None:
+            param_norm = p.grad.detach().data.norm(2)
+            total_norm += param_norm.item() ** 2
+    total_norm = total_norm ** 0.5
+    return total_norm
+
+
 class Q_Learner(object):
     def __init__(
         self,
@@ -61,6 +71,7 @@ class Q_Learner(object):
         discount: float = 0.99,
         device: str = "CUDA" if torch.cuda.is_available() else "CPU",
         tau: float = 0.005,
+        grad_clip: float = 1.0,
     ):
         
         self.total_it = 0
@@ -75,6 +86,8 @@ class Q_Learner(object):
         self.discount = discount
 
         self.tau = tau
+
+        self.grad_clip = grad_clip
 		
         # copy the critic network to create the target critic
         self.critic_target = copy.deepcopy(self.critic)
@@ -143,13 +156,24 @@ class Q_Learner(object):
         # Optimize the critic
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        
+        # capture gradient norms
+        raw_grad_norm = get_grad_norm(self.critic)
+
+        # Gradient clipping if specified
+        if self.grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(
+                self.critic.parameters(), 
+                self.grad_clip
+            )
+        
         self.critic_optimizer.step()
 
         with torch.no_grad():
             for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-        return log_dict
+        return log_dict, raw_grad_norm
     
 
     def evaluate(self, batch: TensorBatch) -> Dict[str, float]:
@@ -203,6 +227,7 @@ def get_trainer(config_manager, state_dim, action_dim, _, hyperparams):
             discount=config_manager.training_config['discount'],
             device=config_manager.training_config['device'],
             tau=config_manager.training_config['tau'],	
+            grad_clip = hyperparams['grad_clip']
         )
 
     return trainer

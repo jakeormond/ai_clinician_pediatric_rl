@@ -32,10 +32,11 @@ from ..data.data_processor_for_shards import ShardProcessor
 # from .dataset import Dataset
 from .replay_buffer import RLDataset
 from .models.behavioural_cloning import keep_best_trajectories, keep_positive_trajectories
-from ..supervised_learning.training import get_hyperparameter_space, select_hyperparameters_randomly
+from ..supervised_learning.training import get_hyperparameter_space, select_hyperparameters_randomly, get_fixed_hyperparameters, to_json_safe
 from .models.td3_bc import TD3_BC
 from ..utils.utilities import set_seed
-from .plotting import plot_losses, plot_Q_by_mortality
+from .plotting import plot_losses, plot_Q_by_mortality, plot_gradient_norms
+
 
 import logging
 logger = logging.getLogger(__name__)
@@ -124,10 +125,10 @@ def create_processor_from_shards(config_manager, normalize=True, set_to_return='
         return test_processor
     
 
-def create_buffer(processor, batch_size):
+def create_buffer(processor, batch_size, shuffle=True):
     processor.create_rl_dataset(states="model_outputs") # states argument is not currently used, but we can add options for different state representations in the future
     dataset = RLDataset(processor) # model_outputs refer to dynamic_deephit transformer outputs; other options not currently implemented
-    buffer = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    buffer = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     return buffer
 
 
@@ -243,6 +244,48 @@ def calculate_q_stats(losses_dict):
     return q_stats, losses_dict
 
 
+def save_results(
+        training_scores,
+        val_scores,
+        test_scores, 
+        hyperparameters,
+        n_epochs,
+        config_manager
+    ):
+
+    # save the configuration_manager
+    with open(config_manager.experiment_dir / "config_manager.pkl", "wb") as f:
+        pickle.dump(config_manager, f)  
+
+    # create a dictionary to save the scores
+    all_scores = {
+        "training_scores": training_scores,
+        "val_scores": val_scores,
+        "test_scores": test_scores,
+        "hyperparameters": hyperparameters,
+        "n_epochs": n_epochs
+    }
+    with open(config_manager.experiment_dir / "all_scores.pkl", "wb") as f:
+        pickle.dump(all_scores, f)
+
+    # Save results for this outer fold
+    results_path = Path(config_manager.experiment_dir) / f"results.json"
+
+    with open(results_path, 'w') as f:
+        json.dump(to_json_safe({
+            'best_hyperparameters': hyperparameters,
+            'time_bins': config_manager.time_bins,
+            'final_metrics': test_scores,
+            'config': config_manager.training_config
+        }), f, indent=2)
+    
+    logger.info(f"✓ Training complete. Results saved to {results_path}")
+
+    return all_scores
+
+
+
+
 def evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_losses):
     
     epoch_val_losses = defaultdict(list)
@@ -336,6 +379,14 @@ def evaluate_final_model(trainer, test_buffer, test_processor, config_manager):
     return test_losses, results_df
 
 
+def plot_results(training_losses, val_losses, test_losses, config_manager):
+    
+    plot_losses(training_losses, val_losses, test_losses, config_manager)
+
+    if config_manager.model_type == "basic_q":
+        plot_Q_by_mortality(val_losses, test_losses, config_manager)
+
+
 
 def check_improvement(best_val_loss, current_val_loss, early_stopping):
     improvement = best_val_loss - current_val_loss
@@ -393,76 +444,61 @@ def single_split_training(config_manager):
             config_manager
         )
 
-        logger.info(f"Best hyperparameters: {best_hyperparameters}")
+        logger.info(f"Best hyperparameters: {hyperparams}")
 
-        # get the max number of epochs used in inner folds
-        n_epochs = max(n_epochs) # for final training
+    else:
+        logger.info(" Fixed hyperparameter training mode enabled.")
 
-        #################### RETRAIN FINAL MODEL #############################
-        logger.info("Phase 2: Final Model Training & Evaluation")
-        
-        # create train and test processors with shared normalization
-        train_processor, test_processor, norm_params = create_processors(
-                dataset, outer_train_id, outer_test_id, config_manager
-            )        
+        # get fixed hyperparameters
+        hyperparams = get_fixed_hyperparameters(config_manager)
 
-        # Keep only best trajectories if a fraction to keep is specified
-        if config_manager.model_type == "any_percent_bc":
-            logger.info(f"    Selecting best trajectories (frac={config_manager.frac})")
-            select_best_trajectories(train_processor, config_manager)
-            select_best_trajectories(test_processor, config_manager)
-                        
-        final_training_scores, test_scores, n_epochs = train_with_hyperparameters(
-                                                                train_processor, 
-                                                                test_processor, 
-                                                                config_manager, 
-                                                                best_hyperparameters,
-                                                                n_epochs=n_epochs,
-                                                                final_model=True
-                                                            )
-        
-        # PLOT THE TRAINING AND VALIDATION LOSSES
-        plot_losses(training_scores, val_scores, test_scores, outer_fold, config_manager)
+        # train final model
+        training_scores, val_scores, n_epochs, trainer, raw_grad_norms = train_with_hyperparameters( # we can probably remove the final model flag when we refactor train_with_hyperparameters to not do early stopping during final training, since we won't be doing early stopping during final training
+            train_processor, 
+            val_processor, 
+            config_manager, 
+            hyperparams,
+            n_epochs=config_manager.n_epochs,
+            final_model=False
+        )
 
-        # if "survival_Q" in test_scores, plot it
-        if "survival_Q" in test_scores:
-            plot_Q_by_mortality(val_scores, test_scores, outer_fold, config_manager)
+    val_buffer = create_buffer(val_processor, config_manager.training_config['batch_size'], shuffle=False)
+    final_val_losses, _ = evaluate_final_model( # this evaluates on the entire test set (during training we only use a subset for speed)
+        trainer, 
+        val_buffer, 
+        val_processor,
+        config_manager
+    )
 
-        
-        # save the configuration_manager
-        with open(config_manager.fold_dir / "config_manager.pkl", "wb") as f:
-            pickle.dump(config_manager, f)  
+    logger.info(f"Final val metrics: {final_val_losses}")
 
-        # create a dictionary to save the scores
-        all_scores = {
-            "inner_training_scores": training_scores,
-            "inner_val_scores": val_scores,
-            "final_training_scores": final_training_scores,
-            "test_scores": test_scores,
-            "best_hyperparameters": best_hyperparameters,
-            "n_epochs": n_epochs
-        }
-        with open(config_manager.fold_dir / "all_scores.pkl", "wb") as f:
-            pickle.dump(all_scores, f)
+    # Save final model if this is the final training
+    model_path = Path(config_manager.experiment_dir /  "final_model.pt")
+    if config_manager.model_type in ['basic_q']:
+        torch.save(trainer.critic.state_dict(), model_path)
+    else:
+        torch.save(trainer.model.state_dict(), model_path)
+    logger.info(f" Final model saved to {model_path}")
 
-        # save the normalization parameters as a pkl file
-        with open(config_manager.fold_dir / "norm_params.pkl", "wb") as f:
-            pickle.dump(norm_params, f)        
+    # plot losses
+    plot_results(training_scores, val_scores, final_val_losses, config_manager)
+
+    # plot gradient norms if available
+    if raw_grad_norms is not None:
+        plot_gradient_norms(raw_grad_norms, config_manager)
+
+    # save results
+    all_scores = save_results(
+        training_scores,
+        val_scores,
+        final_val_losses,
+        hyperparams,
+        n_epochs,
+        config_manager
+    )
+
+    return all_scores    
             
-        # Save results for this outer fold
-        results_path = Path(config_manager.experiment_dir) / f"fold_{outer_fold}_results.json"
-        with open(results_path, 'w') as f:
-            json.dump({
-                'outer_fold': outer_fold,
-                'best_hyperparameters': best_hyperparameters,
-                'final_metrics': test_scores,
-                'config': config_manager.training_config
-            }, f, indent=2)
-        
-        logger.info(f"✓ Outer fold {outer_fold} complete. Results saved to {results_path}")
-        
-        return test_scores
-    
 
 def optimize_hyperparameters(train_processor, val_processor, config_manager):
     """Inner CV loop for hyperparameter optimization."""
@@ -472,6 +508,16 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
 
     # initialize best_val_score
     loss_metric = config_manager.training_config['loss_metric'] 
+    if loss_metric in ['critic_loss']:
+        best_val_loss = float('inf')
+    else:        
+        raise NotImplementedError("Currently only implemented for critic_loss, which is the default loss_metric for basic_q. For other metrics, we need to decide how to calculate an overall validation score across epochs and implement that logic here.")
+    
+    # Keep only best trajectories if a fraction to keep is specified
+    if config_manager.model_type == "any_percent_bc":
+        logger.info(f"    Selecting best trajectories (frac={config_manager.frac})")
+        select_best_trajectories(train_processor, config_manager)
+        select_best_trajectories(val_processor, config_manager)    
     
     ##################### loop through hyperparameter combinations #####################
     logger.info(f"Starting hyperparameter optimization with {config_manager.n_search_iterations} iterations...")
@@ -491,93 +537,39 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
             current_params,
             final_model=False
         )
-
-
-    ################################ create hyperparameter space ################################
-    # the hyperparameter space to search consists of the parameters that are lists 
-    # in config_manager.training_config
-    hyperparameter_space = {k: v for k, v in 
-            config_manager.training_config.items() if isinstance(v, list)}
-    if not hyperparameter_space:
-        raise ValueError("No hyperparameters to optimize. Ensure that config_manager.training_config contains lists of values to search over.")
-    
-    # and also continuous distributions specified as strings
-    for k, v in config_manager.training_config.items():
-        if isinstance(v, str) and '(' in v and ')' in v:
-            hyperparameter_space[k] = parse_distribution(v)
-
-    ############################ initialize best_val_score #############################
-    # used to select best hyperparameters
-    best_val_loss = float('inf') 
-    
-    ##################### loop through hyperparameter combinations #####################
-    logger.info(f"Starting hyperparameter optimization with {config_manager.n_search_iterations} iterations...")
-    for i in range(config_manager.n_search_iterations):
-        ################# select hyperparameters randomly #################
-        current_params = select_hyperparameters_randomly(
-            hyperparameter_space, config_manager
-        )       
-        logger.info(f"Testing hyperparameters {i+1}/{config_manager.n_search_iterations}: {current_params}")
-        
-        # create storage for validation, training scores, and n_epochs
-        n_inner_folds_to_run = config_manager.cv_config.get('n_inner_to_run', n_inner_folds)
-        inner_training_scores = [None] * n_inner_folds_to_run
-        inner_val_scores = [None] * n_inner_folds_to_run
-        inner_n_epochs = [None] * n_inner_folds_to_run        
-
-        ################# Inner CV evaluation for testing hyperparameters #################       
-        kf_inner = KFold(n_splits=n_inner_folds, shuffle=True, 
-                         random_state=config_manager.data_config["seed"])        
-        
-        for inner_fold, (inner_train_id, inner_val_id) in enumerate(kf_inner.split(train_dataset.encounter_ids())):
-            if inner_fold >= config_manager.cv_config.get('n_inner_to_run', n_inner_folds):
-                logger.info(f"  Skipping inner fold {inner_fold+1} as per n_inner_to_run setting.")
-                continue  # Skip extra inner folds if specified
-            
-            logger.info(f"  Inner fold {inner_fold+1}/{n_inner_folds}")
-            
-            # create train and val processors with shared normalization
-            inner_train_processor, inner_val_processor, _ = create_processors(
-                train_dataset, inner_train_id, inner_val_id, config_manager
-            )
-            
-            # Keep only best trajectories if a fraction to keep is specified
-            if config_manager.model_type == "any_percent_bc":
-                logger.info(f"    Selecting best trajectories (frac={config_manager.frac})")
-                select_best_trajectories(inner_train_processor, config_manager)
-                select_best_trajectories(inner_val_processor, config_manager)
-           
-            ######################### Train with current hyperparameters ########################
-            inner_training_scores[inner_fold], inner_val_scores[inner_fold], inner_n_epochs[inner_fold] = \
-                train_with_hyperparameters(
-                    inner_train_processor, 
-                    inner_val_processor, 
-                    config_manager, 
-                    current_params
-                )                        
-            
-            current_val_loss = min(inner_val_scores[inner_fold][loss_metric])
-            logger.info(f"  Inner fold {inner_fold+1} val loss: {current_val_loss:.4f}")
         
         ###################### Evaluate and update best hyperparameters ########################
-        overall_val_loss = np.mean([min(score[loss_metric]) for score in inner_val_scores])
-        logger.info(f" Overall mean validation {loss_metric}: {overall_val_loss:.4f}")
-        if overall_val_loss < best_val_loss:
-            improvement = best_val_loss - overall_val_loss
+        if loss_metric in ['critic_loss']:
+            # critic_loss, lower is better
+            current_val_loss = min(val_scores[loss_metric])
+            improvement = best_val_loss - current_val_loss
+
+        else:
+            # for loss, lower is better
+            # current_val_loss = min(val_scores[loss_metric])
+            # improvement = best_val_loss - current_val_loss
+            raise NotImplementedError("Currently only implemented for critic_loss, which is the default loss_metric for basic_q. For other metrics, we need to decide how to calculate an overall validation score across epochs and implement that logic here.")
+
+        logger.info(f"Search iteration {i+1} validation {loss_metric}: {current_val_loss:.4f}")
+        
+        if improvement > 0.:
             logger.info(f" New best hyperparameters found! (improvement: {improvement:.4f})\n")
-            best_val_loss = overall_val_loss
+            logger.info(f"Best hyperparameters after {i+1} iterations: {current_params}")
+            best_trainer = trainer
+            best_val_loss = current_val_loss
             best_hyperparams = current_params.copy()
-            training_scores_best = inner_training_scores
-            val_scores_best = inner_val_scores
-            n_epochs_best = inner_n_epochs
+            training_scores_best = training_scores
+            val_scores_best = val_scores
+            raw_grad_norms_best = raw_grad_norms
+            n_epochs_best = n_epochs
         else:
             logger.info(f"No improvement (current best: {best_val_loss:.4f})\n")
-        
+
     ############################ Summarize hyperparameter optimization results #############################
     logger.info(f"Best hyperparameters after {config_manager.n_search_iterations} iterations: {best_hyperparams}")
     logger.info(f"\n                 Hyperparameter optimization complete!")
 
-    return best_hyperparams, training_scores_best, val_scores_best, n_epochs_best
+    return best_trainer, best_hyperparams, training_scores_best, val_scores_best, n_epochs_best, raw_grad_norms_best
 
 
 def train_with_hyperparameters(
@@ -618,23 +610,44 @@ def train_with_hyperparameters(
     
     # Use defaultdict to automatically create new keys
     training_losses = defaultdict(list) 
+    raw_grad_norms = defaultdict(list)
     
-    if not final_model:
-        val_losses = defaultdict(list)
+    # if not final_model:
+    #    val_losses = defaultdict(list)
+    val_losses = defaultdict(list)
+    # evaluate before any training for epoch 0
+    evaluate_during_training(trainer, -1, val_test_buffer, batch_size, val_losses)   
+    current_val_loss = val_losses[loss_metric][-1]  
+    logger.info(f"Epoch {-1}: Val {loss_metric}={current_val_loss:.4f}")
     
     ############################### Training loop #################################
+    testing = getattr(config_manager, 'testing', False)
+    if testing:
+        logger.info(" Testing mode enabled: will limit training to 10 epochs and 100 batches per epoch.")
+        n_epochs = min(n_epochs, 5)
+    
+    torch.cuda.empty_cache()
+
     for epoch in range(n_epochs):
         # print epoch
         logger.info(f"Epoch {epoch+1}/{n_epochs}")  
         epoch_training_losses = defaultdict(list)
+        epoch_raw_grad_norms = defaultdict(list)
 
         for batch_idx, batch in enumerate(training_buffer):
-            batch_losses = trainer.train(batch)
+            batch_losses, raw_grad_norms = trainer.train(batch)
 
             # Automatically append all metrics - creates new keys if needed
             for key, value in batch_losses.items():
                 epoch_training_losses[key].append(value)
+            
+            epoch_raw_grad_norms['raw_grad_norm'].append(raw_grad_norms)
 
+            # check if we are simply testing the training loop, in which case we break after 100 batches
+            if batch_idx >= 10 and testing:
+                logger.info(" Testing mode: breaking after 10 batches.")
+                break
+                
         # Calculate average loss for this epoch and append to training_losses
         append_epoch_losses(epoch_training_losses, training_losses)
 
@@ -681,7 +694,7 @@ def train_with_hyperparameters(
             restore_model_parameters(trainer, best_model_state, config_manager)
             logger.info(f"    Restored best model (val_loss={best_val_loss:.4f})")
 
-        return training_losses, val_losses, n_epochs
+        return training_losses, val_losses, n_epochs, trainer, raw_grad_norms
 
     ########################## evaluate on test set after training if final model ##########################
     # note that results df will be None if no targets/predictions were collected during evaluation (i.e.Q learning)
@@ -709,5 +722,5 @@ def train_with_hyperparameters(
         results_df.to_parquet(results_path)
         logger.info(f" Test predictions saved to {results_path}\n")       
 
-    return training_losses, test_losses, n_epochs
+    return training_losses, val_losses, test_losses, raw_grad_norms
 

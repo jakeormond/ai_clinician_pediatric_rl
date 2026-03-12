@@ -320,7 +320,7 @@ def plot_Q_by_mortality(val_scores, test_scores, outer_fold, config_manager, dat
     plt.ylabel('Q value')
     plt.xticks(np.arange(1, epochs[-1] + 1, step=5))
     plt.xlim(0.5, np.max(epochs))
-    plt.title(f'Fold {outer_fold+1} - Q values by Mortality over Epochs')
+    plt.title('Q values by Mortality over Epochs')
     plt.grid(True)
     plt.legend(
         loc='upper left',
@@ -332,7 +332,7 @@ def plot_Q_by_mortality(val_scores, test_scores, outer_fold, config_manager, dat
     )
 
     # Save the plot
-    plots_path = Path(config_manager.fold_dir) / f"fold_{outer_fold}_{data}_Q_by_mortality_plot.png"
+    plots_path = Path(config_manager.experiment_dir) / f"{data}_Q_by_mortality_plot.png"
     plt.savefig(plots_path)
     plt.close()
 
@@ -387,11 +387,11 @@ def plot_Q_survival_non_survival_snr(val_scores, test_scores, outer_fold, config
 
     plt.xlabel('Epochs')
     plt.ylabel('SNR')
-    plt.title(f'Fold {outer_fold + 1} - SNR over Epochs')
+    plt.title('SNR over Epochs')
     plt.legend()
     plt.grid()
 
     # Save the plot
-    plots_path = Path(config_manager.fold_dir) / f"fold_{outer_fold}_{data}_snr_plot.png"
+    plots_path = Path(config_manager.experiment_dir) / f"{data}_snr_plot.png"
     plt.savefig(plots_path)
     plt.close()

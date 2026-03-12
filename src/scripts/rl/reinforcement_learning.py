@@ -58,6 +58,11 @@ def parse_arguments():
     parser.add_argument('--mode', type=str, default='single_split',
                         choices=['single_split', 'aggregate', 'analysis'],
                         help='Mode of training: single_split or aggregate (default: single_split)')
+    
+
+    parser.add_argument('--testing', action='store_true',                 
+                help='if true, we pare down the data for quick testing')
+
         
     parser.add_argument('--split_num', type=int, nargs='+', default=None,
                         help='Split number to train (not strictly required for single_split mode)')    
@@ -81,10 +86,7 @@ def parse_arguments():
     
     parser.add_argument('--start_time', type=str, default = None,                  
                     help='Start time for this experiment run')
-    
-    parser.add_argument('--testing', action='store_true',                 
-                    help='if true, we pare down the data for quick testing')
-    
+      
     parser.add_argument('--verbose', action='store_true',                 
                     help='if true, print details of all the features and normalization steps')
     

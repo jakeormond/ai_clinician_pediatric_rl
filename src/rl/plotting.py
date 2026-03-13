@@ -8,6 +8,12 @@ from pathlib import Path
 
 def plot_losses(training_scores, val_scores, test_scores, config_manager):
     loss_keys = list(training_scores.keys())
+    # drop mean_Q and std_Q if present
+    if 'mean_Q' in loss_keys:
+        loss_keys.remove('mean_Q')
+    if 'std_Q' in loss_keys:
+        loss_keys.remove('std_Q')
+
     n_subplots = len(loss_keys)
     plt.figure(figsize=(15, 5 * n_subplots))
     for i, key in enumerate(loss_keys):        
@@ -52,9 +58,9 @@ def plot_losses(training_scores, val_scores, test_scores, config_manager):
 
 def plot_gradient_norms(raw_grad_norms, config_manager):
     plt.figure(figsize=(10, 6))
-    epochs_range = np.arange(1, len(raw_grad_norms['raw_grad_norm']) + 1)
+    epochs_range = np.arange(1, len(raw_grad_norms) + 1)
 
-    plt.plot(epochs_range, raw_grad_norms['raw_grad_norm'], color=plt.cm.viridis(0.9), linewidth=2, label='Gradient Norm')
+    plt.plot(epochs_range, raw_grad_norms, color=plt.cm.viridis(0.9), linewidth=2, label='Gradient Norm')
 
     plt.xlabel('Epochs')
     plt.ylabel('Gradient Norm')
@@ -252,89 +258,160 @@ def plot_losses_cv(training_scores, val_scores, test_scores, outer_fold, config_
     plt.close()
 
     
-def plot_Q_by_mortality(val_scores, test_scores, outer_fold, config_manager, data='val'):
+def plot_Q_by_mortality(val_scores, test_scores, config_manager, data='val'):
+    """
+    Single-run version (no CV folds).
+    Expects val_scores keys:
+      - 'epoch'
+      - 'mean_survival_Q', 'std_survival_Q'
+      - 'mean_non_survival_Q', 'std_non_survival_Q'
+    """
+    plt.figure(figsize=(10, 5))
 
-    n_folds = len(val_scores)
+    epochs = np.asarray(val_scores['epoch']) + 1  # 1-based display
 
-    # create a figure with n_subplots subplots
-    plt.figure(figsize=(15, 5))
+    survival_mean = np.asarray(val_scores['mean_survival_Q'], dtype=float)
+    survival_std = np.asarray(val_scores['std_survival_Q'], dtype=float)
 
-    # determine the maximum length of epochs across all folds, as well as the value of the final
-    # epoch for the longest fold
-    max_epoch = max(val_scores[fold]['epoch'][-1] for fold in range(n_folds))
+    non_survival_mean = np.asarray(val_scores['mean_non_survival_Q'], dtype=float)
+    non_survival_std = np.asarray(val_scores['std_non_survival_Q'], dtype=float)
 
-    # create a vector from 0 to max_epoch
-    epochs = np.arange(0, max_epoch + 1)
+    # Plot validation curves + std bands
+    plt.fill_between(
+        epochs,
+        survival_mean - survival_std,
+        survival_mean + survival_std,
+        color=plt.cm.Blues(0.6),
+        alpha=0.25,
+        edgecolor=None
+    )
+    plt.plot(epochs, survival_mean, color=plt.cm.Blues(0.9), linewidth=2, label='Val survival_Q')
 
-    survival_Q_array = np.full((n_folds, len(epochs)), np.nan)
-    non_survival_Q_array = np.full((n_folds, len(epochs)), np.nan)
+    plt.fill_between(
+        epochs,
+        non_survival_mean - non_survival_std,
+        non_survival_mean + non_survival_std,
+        color=plt.cm.Oranges(0.6),
+        alpha=0.25,
+        edgecolor=None
+    )
+    plt.plot(epochs, non_survival_mean, color=plt.cm.Oranges(0.9), linewidth=2, label='Val non_survival_Q')
 
-    survival_Q_std_array = np.full((n_folds, len(epochs)), np.nan)
-    non_survival_Q_std_array = np.full((n_folds, len(epochs)), np.nan)
+    # Optional test horizontal lines
+    if test_scores is not None:
+        plt.axhline(y=test_scores['mean_survival_Q'], color='blue', linestyle='--', linewidth=2, label='Test survival_Q')
+        plt.axhline(y=test_scores['mean_survival_Q'] - test_scores['std_survival_Q'], color='blue', linestyle='--', linewidth=1)
+        plt.axhline(y=test_scores['mean_survival_Q'] + test_scores['std_survival_Q'], color='blue', linestyle='--', linewidth=1)
 
-    for fold in range(n_folds):
-        epochs_fold = val_scores[fold]['epoch']           
-        survival_Q = val_scores[fold]['mean_survival_Q']
-        non_survival_Q = val_scores[fold]['mean_non_survival_Q']
-
-        survival_Q_array[fold, epochs_fold] = survival_Q
-        non_survival_Q_array[fold, epochs_fold] = non_survival_Q 
-
-        survival_Q_std = val_scores[fold]['std_survival_Q']
-        non_survival_Q_std = val_scores[fold]['std_non_survival_Q']
-
-        survival_Q_std_array[fold, epochs_fold] = survival_Q_std
-        non_survival_Q_std_array[fold, epochs_fold] = non_survival_Q_std
-
-    epochs = [epoch+1 for epoch in epochs]
-
-    mask = ~np.all(np.isnan(survival_Q_array), axis=0)
-    survival_Q_array = survival_Q_array[:, mask]
-    non_survival_Q_array = non_survival_Q_array[:, mask]
-    epochs = np.array(epochs)[mask]
-
-    survival_Q_std_array = survival_Q_std_array[:, mask]
-    non_survival_Q_std_array = non_survival_Q_std_array[:, mask]
-
-    mean_survival_Q = np.nanmean(survival_Q_array, axis=0)
-    mean_survival_Q_std = np.nanmean(survival_Q_std_array, axis=0)
-
-    mean_non_survival_Q = np.nanmean(non_survival_Q_array, axis=0)
-    mean_non_survival_Q_std = np.nanmean(non_survival_Q_std_array, axis=0)
-
-    plt.fill_between(epochs, mean_survival_Q - mean_non_survival_Q_std, mean_survival_Q + mean_survival_Q_std, color=plt.cm.Blues(0.6), alpha=0.25, edgecolor=None)
-    plt.plot(epochs, mean_survival_Q, color=plt.cm.Blues(0.9), linewidth=2, label='Val survival_Q - Mean')
-
-    plt.fill_between(epochs, mean_non_survival_Q - mean_non_survival_Q_std, mean_non_survival_Q + mean_non_survival_Q_std, color=plt.cm.Oranges(0.6), alpha=0.25, edgecolor=None)
-    plt.plot(epochs, mean_non_survival_Q, color=plt.cm.Oranges(0.9), linewidth=2, label='Val non_survival_Q - Mean')
-
-    plt.axhline(y=test_scores['mean_survival_Q'], color='blue', linestyle='--', linewidth=2, label='Test survival_Q')
-    plt.axhline(y=test_scores['mean_survival_Q'] - test_scores['std_survival_Q'], color='blue', linestyle='--', linewidth=1)
-    plt.axhline(y=test_scores['mean_survival_Q'] + test_scores['std_survival_Q'], color='blue', linestyle='--', linewidth=1)
-
-    plt.axhline(y=test_scores['mean_non_survival_Q'], color='orange', linestyle='--', linewidth=2, label='Test non_survival_Q')
-    plt.axhline(y=test_scores['mean_non_survival_Q'] - test_scores['std_non_survival_Q'], color='orange', linestyle='--', linewidth=1)
-    plt.axhline(y=test_scores['mean_non_survival_Q'] + test_scores['std_non_survival_Q'], color='orange', linestyle='--', linewidth=1)
+        plt.axhline(y=test_scores['mean_non_survival_Q'], color='orange', linestyle='--', linewidth=2, label='Test non_survival_Q')
+        plt.axhline(y=test_scores['mean_non_survival_Q'] - test_scores['std_non_survival_Q'], color='orange', linestyle='--', linewidth=1)
+        plt.axhline(y=test_scores['mean_non_survival_Q'] + test_scores['std_non_survival_Q'], color='orange', linestyle='--', linewidth=1)
 
     plt.xlabel('Epochs')
     plt.ylabel('Q value')
-    plt.xticks(np.arange(1, epochs[-1] + 1, step=5))
-    plt.xlim(0.5, np.max(epochs))
+    if len(epochs) > 0:
+        plt.xticks(np.arange(1, int(epochs[-1]) + 1, step=5))
+        plt.xlim(0.5, np.max(epochs))
     plt.title('Q values by Mortality over Epochs')
     plt.grid(True)
     plt.legend(
         loc='upper left',
-        facecolor='white',  # solid white background
+        facecolor='white',
         framealpha=1,
         edgecolor='lightgray',
         bbox_to_anchor=(0.02, 0.98),
         fontsize=10,
     )
 
-    # Save the plot
-    plots_path = Path(config_manager.experiment_dir) / f"{data}_Q_by_mortality_plot.png"
-    plt.savefig(plots_path)
+    plot_path = Path(config_manager.experiment_dir) / f"{data}_Q_by_mortality_plot.png"
+    plt.savefig(plot_path)
     plt.close()
+    
+    
+    
+    
+    
+    
+    
+    # # create a figure with n_subplots subplots
+    # plt.figure(figsize=(15, 5))
+
+    # # determine the maximum length of epochs across all folds, as well as the value of the final
+    # # epoch for the longest fold
+    # max_epoch = max(val_scores[fold]['epoch'][-1] for fold in range(n_folds))
+
+    # # create a vector from 0 to max_epoch
+    # epochs = np.arange(0, max_epoch + 1)
+
+    # survival_Q_array = np.full((n_folds, len(epochs)), np.nan)
+    # non_survival_Q_array = np.full((n_folds, len(epochs)), np.nan)
+
+    # survival_Q_std_array = np.full((n_folds, len(epochs)), np.nan)
+    # non_survival_Q_std_array = np.full((n_folds, len(epochs)), np.nan)
+
+    # for fold in range(n_folds):
+    #     epochs_fold = val_scores[fold]['epoch']           
+    #     survival_Q = val_scores[fold]['mean_survival_Q']
+    #     non_survival_Q = val_scores[fold]['mean_non_survival_Q']
+
+    #     survival_Q_array[fold, epochs_fold] = survival_Q
+    #     non_survival_Q_array[fold, epochs_fold] = non_survival_Q 
+
+    #     survival_Q_std = val_scores[fold]['std_survival_Q']
+    #     non_survival_Q_std = val_scores[fold]['std_non_survival_Q']
+
+    #     survival_Q_std_array[fold, epochs_fold] = survival_Q_std
+    #     non_survival_Q_std_array[fold, epochs_fold] = non_survival_Q_std
+
+    # epochs = [epoch+1 for epoch in epochs]
+
+    # mask = ~np.all(np.isnan(survival_Q_array), axis=0)
+    # survival_Q_array = survival_Q_array[:, mask]
+    # non_survival_Q_array = non_survival_Q_array[:, mask]
+    # epochs = np.array(epochs)[mask]
+
+    # survival_Q_std_array = survival_Q_std_array[:, mask]
+    # non_survival_Q_std_array = non_survival_Q_std_array[:, mask]
+
+    # mean_survival_Q = np.nanmean(survival_Q_array, axis=0)
+    # mean_survival_Q_std = np.nanmean(survival_Q_std_array, axis=0)
+
+    # mean_non_survival_Q = np.nanmean(non_survival_Q_array, axis=0)
+    # mean_non_survival_Q_std = np.nanmean(non_survival_Q_std_array, axis=0)
+
+    # plt.fill_between(epochs, mean_survival_Q - mean_non_survival_Q_std, mean_survival_Q + mean_survival_Q_std, color=plt.cm.Blues(0.6), alpha=0.25, edgecolor=None)
+    # plt.plot(epochs, mean_survival_Q, color=plt.cm.Blues(0.9), linewidth=2, label='Val survival_Q - Mean')
+
+    # plt.fill_between(epochs, mean_non_survival_Q - mean_non_survival_Q_std, mean_non_survival_Q + mean_non_survival_Q_std, color=plt.cm.Oranges(0.6), alpha=0.25, edgecolor=None)
+    # plt.plot(epochs, mean_non_survival_Q, color=plt.cm.Oranges(0.9), linewidth=2, label='Val non_survival_Q - Mean')
+
+    # plt.axhline(y=test_scores['mean_survival_Q'], color='blue', linestyle='--', linewidth=2, label='Test survival_Q')
+    # plt.axhline(y=test_scores['mean_survival_Q'] - test_scores['std_survival_Q'], color='blue', linestyle='--', linewidth=1)
+    # plt.axhline(y=test_scores['mean_survival_Q'] + test_scores['std_survival_Q'], color='blue', linestyle='--', linewidth=1)
+
+    # plt.axhline(y=test_scores['mean_non_survival_Q'], color='orange', linestyle='--', linewidth=2, label='Test non_survival_Q')
+    # plt.axhline(y=test_scores['mean_non_survival_Q'] - test_scores['std_non_survival_Q'], color='orange', linestyle='--', linewidth=1)
+    # plt.axhline(y=test_scores['mean_non_survival_Q'] + test_scores['std_non_survival_Q'], color='orange', linestyle='--', linewidth=1)
+
+    # plt.xlabel('Epochs')
+    # plt.ylabel('Q value')
+    # plt.xticks(np.arange(1, epochs[-1] + 1, step=5))
+    # plt.xlim(0.5, np.max(epochs))
+    # plt.title('Q values by Mortality over Epochs')
+    # plt.grid(True)
+    # plt.legend(
+    #     loc='upper left',
+    #     facecolor='white',  # solid white background
+    #     framealpha=1,
+    #     edgecolor='lightgray',
+    #     bbox_to_anchor=(0.02, 0.98),
+    #     fontsize=10,
+    # )
+
+    # # Save the plot
+    # plots_path = Path(config_manager.experiment_dir) / f"{data}_Q_by_mortality_plot.png"
+    # plt.savefig(plots_path)
+    # plt.close()
 
 
 def plot_Q_survival_non_survival_snr(val_scores, test_scores, outer_fold, config_manager, data='val'):

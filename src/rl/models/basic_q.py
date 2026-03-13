@@ -110,19 +110,52 @@ class Q_Learner(object):
             mean_Q = current_Q.mean().item()
             variance_Q = current_Q.var().item()
             batch_n = current_Q.shape[0]
-            
-            # calculate the survival_Q and non_survival_Q as the mean of current_Q where mortality is 0 and 1 respectively            
-            survival_Q = current_Q[mortality == 0].mean().item() if (mortality == 0).any() else float('nan')
-            survival_variance_Q = current_Q[mortality == 0].var().item() if (mortality == 0).any() else float('nan')
-            survival_n = (mortality == 0).sum().item()
-            non_survival_Q = current_Q[mortality == 1].mean().item() if (mortality == 1).any() else float('nan')
-            non_survival_variance_Q = current_Q[mortality == 1].var().item() if (mortality == 1).any() else float('nan')
-            non_survival_n = (mortality == 1).sum().item()
 
-            log_dict.update({"batch_n": batch_n, "mean_Q": mean_Q, "variance_Q": variance_Q, 
-                             "survival_n": survival_n, "survival_Q": survival_Q, "survival_variance_Q": survival_variance_Q,
-                             "non_survival_n": non_survival_n, "non_survival_Q": non_survival_Q, "non_survival_variance_Q": non_survival_variance_Q})
+            # masks and counts
+            survival_mask = (mortality == 0)
+            non_survival_mask = (mortality == 1)
+
+            survival_n = survival_mask.sum().item()
+            non_survival_n = non_survival_mask.sum().item()
             
+            # # calculate the survival_Q and non_survival_Q as the mean of current_Q where mortality is 0 and 1 respectively            
+            # survival_Q = current_Q[mortality == 0].mean().item() if (mortality == 0).any() else float('nan')
+            # survival_variance_Q = current_Q[mortality == 0].var().item() if (mortality == 0).any() else float('nan')           
+            # survival_n = (mortality == 0).sum().item()
+            # non_survival_Q = current_Q[mortality == 1].mean().item() if (mortality == 1).any() else float('nan')
+            # non_survival_variance_Q = current_Q[mortality == 1].var().item() if (mortality == 1).any() else float('nan')
+            # non_survival_n = (mortality == 1).sum().item()
+            
+            # only compute subgroup mean/variance together when n > 2
+            if survival_n > 2:
+                survival_vals = current_Q[survival_mask]
+                survival_Q = survival_vals.mean().item()
+                survival_variance_Q = survival_vals.var().item()
+            else:
+                survival_Q = float('nan')
+                survival_variance_Q = float('nan')
+                survival_n = 0
+
+            if non_survival_n > 2:
+                non_survival_vals = current_Q[non_survival_mask]
+                non_survival_Q = non_survival_vals.mean().item()
+                non_survival_variance_Q = non_survival_vals.var().item()
+            else:
+                non_survival_Q = float('nan')
+                non_survival_variance_Q = float('nan')
+                non_survival_n = 0
+
+            log_dict.update({
+                "batch_n": batch_n,
+                "mean_Q": mean_Q,
+                "variance_Q": variance_Q,
+                "survival_n": survival_n,
+                "survival_Q": survival_Q,
+                "survival_variance_Q": survival_variance_Q,
+                "non_survival_n": non_survival_n,
+                "non_survival_Q": non_survival_Q,
+                "non_survival_variance_Q": non_survival_variance_Q
+            })
             return log_dict
 
 

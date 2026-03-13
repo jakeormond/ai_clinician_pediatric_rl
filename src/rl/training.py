@@ -203,17 +203,29 @@ def calculate_q_stats(losses_dict):
     overall_variance_Q = np.sum(counts_all * (variance_Qs + np.array(mean_Qs - overall_mean_Q)**2)) / np.sum(counts_all)
     overall_std_Q = np.sqrt(overall_variance_Q)
 
+    # survival Qs
     mean_survival_Qs = losses_dict["survival_Q"]
     variance_survival_Qs = losses_dict["survival_variance_Q"]
     counts_survival = losses_dict["survival_n"]
+
+    # drop nan values from mean_survival_Qs and variance_survival_Qs and zeros from counts_survival
+    mean_survival_Qs = [q for q in mean_survival_Qs if not np.isnan(q)]
+    variance_survival_Qs = [v for v in variance_survival_Qs if not np.isnan(v)]
+    counts_survival = [c for c in counts_survival if c > 1]
 
     overall_mean_survival_Q = np.sum(np.array(mean_survival_Qs) * np.array(counts_survival)) / np.sum(counts_survival)
     overall_variance_survival_Q = np.sum(counts_survival * (variance_survival_Qs + np.array(mean_survival_Qs - overall_mean_survival_Q)**2)) / np.sum(counts_survival)
     overall_std_survival_Q = np.sqrt(overall_variance_survival_Q)
 
+    # non-survival Qs
     mean_non_survival_Qs = losses_dict["non_survival_Q"]
     variance_non_survival_Qs = losses_dict["non_survival_variance_Q"]
     counts_non_survival = losses_dict["non_survival_n"]
+
+    # drop nan values from mean_non_survival_Qs and variance_non_survival_Qs and zeros from counts_non_survival
+    mean_non_survival_Qs = [q for q in mean_non_survival_Qs if not np.isnan(q)]
+    variance_non_survival_Qs = [v for v in variance_non_survival_Qs if not np.isnan(v)]
+    counts_non_survival = [c for c in counts_non_survival if c > 0]
 
     overall_mean_non_survival_Q = np.sum(np.array(mean_non_survival_Qs) * np.array(counts_non_survival)) / np.sum(counts_non_survival)
     overall_variance_non_survival_Q = np.sum(counts_non_survival * (variance_non_survival_Qs + np.array(mean_non_survival_Qs - overall_mean_non_survival_Q)**2)) / np.sum(counts_non_survival)
@@ -274,7 +286,7 @@ def save_results(
     with open(results_path, 'w') as f:
         json.dump(to_json_safe({
             'best_hyperparameters': hyperparameters,
-            'time_bins': config_manager.time_bins,
+            # 'time_bins': config_manager.time_bins,
             'final_metrics': test_scores,
             'config': config_manager.training_config
         }), f, indent=2)
@@ -610,7 +622,7 @@ def train_with_hyperparameters(
     
     # Use defaultdict to automatically create new keys
     training_losses = defaultdict(list) 
-    raw_grad_norms = defaultdict(list)
+    raw_grad_norms = []
     
     # if not final_model:
     #    val_losses = defaultdict(list)
@@ -635,13 +647,13 @@ def train_with_hyperparameters(
         epoch_raw_grad_norms = defaultdict(list)
 
         for batch_idx, batch in enumerate(training_buffer):
-            batch_losses, raw_grad_norms = trainer.train(batch)
+            batch_losses, raw_grad_norm = trainer.train(batch)
 
             # Automatically append all metrics - creates new keys if needed
             for key, value in batch_losses.items():
                 epoch_training_losses[key].append(value)
             
-            epoch_raw_grad_norms['raw_grad_norm'].append(raw_grad_norms)
+            epoch_raw_grad_norms['raw_grad_norm'].append(raw_grad_norm)
 
             # check if we are simply testing the training loop, in which case we break after 100 batches
             if batch_idx >= 10 and testing:
@@ -650,6 +662,7 @@ def train_with_hyperparameters(
                 
         # Calculate average loss for this epoch and append to training_losses
         append_epoch_losses(epoch_training_losses, training_losses)
+        raw_grad_norms.append(np.mean(epoch_raw_grad_norms['raw_grad_norm']))
 
         # optionally, estimate V0 and append to training losses
         if config_manager.training_config['monitor_v0']:

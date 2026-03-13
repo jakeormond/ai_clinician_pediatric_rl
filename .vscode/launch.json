@@ -479,7 +479,7 @@
                 "--split_num", "0",
                 "--search_variant", "random_search",
                 "--n_search_iterations", "1",
-                "--n_epochs", "5",
+                "--n_epochs", "50",
                 "--cohort", "sepsis_broad",
                 "--action_mode", "continuous_only"            
             ],

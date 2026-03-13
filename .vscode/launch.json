@@ -480,6 +480,7 @@
                 "--search_variant", "random_search",
                 "--n_search_iterations", "1",
                 "--n_epochs", "5",
+                "--cohort", "sepsis_broad",
                 "--action_mode", "continuous_only"            
             ],
             "console": "integratedTerminal",

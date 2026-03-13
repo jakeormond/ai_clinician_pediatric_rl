@@ -71,6 +71,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --n_epochs 5 \
     --n_search_iterations 2 \
     --action_mode continuous_only \
+    --cohort sepsis_broad \
     --start_time $START_TIME 
 
 exit_code=$?

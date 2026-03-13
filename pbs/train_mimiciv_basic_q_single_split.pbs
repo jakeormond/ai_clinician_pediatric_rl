@@ -64,12 +64,12 @@ echo "Starting training..."
 python -u -m src.scripts.rl.reinforcement_learning \
     --hospital mimic_iv \
     --experiment_type reinforcement_learning \
-    --model_type basiq_q \
+    --model_type basic_q \
     --mode single_split \
     --split_num 0 \
     --search_variant random_search \
-    --n_epochs 200 \
-    --n_search_iterations 4 \
+    --n_epochs 5 \
+    --n_search_iterations 2 \
     --action_mode continuous_only \
     --start_time $START_TIME 
 

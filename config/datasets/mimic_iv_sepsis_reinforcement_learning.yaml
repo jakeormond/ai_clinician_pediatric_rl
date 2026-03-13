@@ -27,7 +27,7 @@ actions: ["combined_hourly_iv", "vasoactive_inotropic_score"] # ["intake", "vis"
 
 # reward is stored in the experiments dir, and the path is specified in config/rewards/reward_paths.yaml
 # use_reward: True
-reward_path: "/home/jake/Documents/AI_Clinician/dynamic_deephit_results/mimic_iv/five_splits"
+# reward_path: "/home/jake/Documents/AI_Clinician/dynamic_deephit_results/mimic_iv/five_splits"
 reward_type: "health_score" # if no reward, set to "none"
 flip_reward: False
 

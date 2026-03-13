@@ -219,7 +219,11 @@ class ConfigManager:
             if self._data_config['use_reward']:
                 reward_type = self._data_config['reward_type']
                 # reward_paths_config_path = self.config_dir / "rewards" / "reward_paths.yaml"
-                reward_path = self.data_config['reward_path']
+                # reward_path = self.data_config['reward_path']
+                reward_path = os.path.join(
+                    self.paths['supervised_final_model_dir'],
+                    "five_splits",
+                )
 
                 split_name = f"split_{self.split_num}"
                 

@@ -56,32 +56,41 @@ def plot_losses(training_scores, val_scores, test_scores, config_manager):
     plt.close()
 
 
-def plot_gradient_norms(raw_grad_norms, config_manager):
-    plt.figure(figsize=(10, 6))
-    epochs_range = np.arange(1, len(raw_grad_norms) + 1)
+def plot_gradient_norms(grad_norms, config_manager):
+    grad_keys = list(grad_norms.keys())
+    if 'was_clipped' in grad_keys:
+        grad_keys.remove('was_clipped')
 
-    plt.plot(epochs_range, raw_grad_norms, color=plt.cm.viridis(0.9), linewidth=2, label='Gradient Norm')
+    n_subplots = len(grad_keys)
+    plt.figure(figsize=(15, 5 * n_subplots))
 
-    plt.xlabel('Epochs')
-    plt.ylabel('Gradient Norm')
-    plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
-    plt.xlim(-0.5, np.max(epochs_range)+0.5)
-    plt.title('Gradient Norm over Epochs')
-    plt.grid(True)
-    plt.legend(
-        loc='upper right',
-        facecolor='white',  # solid white background
-        framealpha=1,
-        edgecolor='lightgray',
-        bbox_to_anchor=(0.98, 0.98),
-        fontsize=10,
-    )
+    for i, key in enumerate(grad_keys):
+        plt.subplot(n_subplots, 1, i + 1)
+        epochs_range = np.arange(1, len(grad_norms[key]) + 1)
 
-    # Save the plot
-    plot_path = Path(config_manager.experiment_dir) / f"gradient_norm_plot.png"
+        plt.plot(epochs_range, grad_norms[key], color=plt.cm.viridis(0.9), linewidth=2, label=key)
+
+        if i == len(grad_keys) - 1:
+            plt.xlabel('Epochs')
+        plt.ylabel('Gradient Norm')
+        plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
+        plt.xlim(-0.5, np.max(epochs_range)+0.5)
+        plt.title(f'{key} over Epochs')
+        plt.grid(True)
+        plt.legend(
+            loc='upper right',
+            facecolor='white',  # solid white background
+            framealpha=1,
+            edgecolor='lightgray',
+            bbox_to_anchor=(0.98, 0.98),
+            fontsize=10,
+        )
+
+     # Save the plot
+    plot_path = Path(config_manager.experiment_dir) / f"gradient_norms_plot.png"
     plt.savefig(plot_path)
     plt.close()
-
+    
 
 def plot_c_and_brier_over_time(test_scores, config_manager):
     

@@ -192,6 +192,13 @@ def estimate_v0(trainer, starting_states, batch_size, losses_dict):
         losses_dict['v0_sem'].append(float(v0_sem))
 
 
+def append_grad_norms(epoch_grad_norm, grad_norms):
+    """Calculates average gradient norms for the epoch and appends to grad_norms."""
+    epoch_avg_grad_norm = {key: np.mean(values) for key, values in epoch_grad_norm.items()}
+    # Append epoch averages to grad_norms
+    for key, value in epoch_avg_grad_norm.items():
+        grad_norms[key].append(value)
+
 
 def calculate_q_stats(losses_dict):
     # calculate q value stats if available
@@ -450,7 +457,7 @@ def single_split_training(config_manager):
         logger.info(" Hyperparameter tuning mode enabled.")
 
         # hyperparameter optimization
-        trainer, hyperparams, training_scores, val_scores, n_epochs, raw_grad_norms = optimize_hyperparameters(
+        trainer, hyperparams, training_scores, val_scores, n_epochs, grad_norm = optimize_hyperparameters(
             train_processor, 
             val_processor, 
             config_manager
@@ -465,7 +472,7 @@ def single_split_training(config_manager):
         hyperparams = get_fixed_hyperparameters(config_manager)
 
         # train final model
-        training_scores, val_scores, n_epochs, trainer, raw_grad_norms = train_with_hyperparameters( # we can probably remove the final model flag when we refactor train_with_hyperparameters to not do early stopping during final training, since we won't be doing early stopping during final training
+        training_scores, val_scores, n_epochs, trainer, grad_norm = train_with_hyperparameters( # we can probably remove the final model flag when we refactor train_with_hyperparameters to not do early stopping during final training, since we won't be doing early stopping during final training
             train_processor, 
             val_processor, 
             config_manager, 
@@ -495,9 +502,8 @@ def single_split_training(config_manager):
     # plot losses
     plot_results(training_scores, val_scores, final_val_losses, config_manager)
 
-    # plot gradient norms if available
-    if raw_grad_norms is not None:
-        plot_gradient_norms(raw_grad_norms, config_manager)
+    # plot gradient norms 
+    plot_gradient_norms(grad_norm, config_manager)
 
     # save results
     all_scores = save_results(
@@ -542,7 +548,7 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
         logger.info(f"Testing hyperparameters {i+1}/{config_manager.n_search_iterations}: {current_params}")
 
         ################# Train with current hyperparameters #################       
-        training_scores, val_scores, n_epochs, trainer, raw_grad_norms = train_with_hyperparameters(
+        training_scores, val_scores, n_epochs, trainer, grad_norm = train_with_hyperparameters(
             train_processor, 
             val_processor, 
             config_manager, 
@@ -572,7 +578,7 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
             best_hyperparams = current_params.copy()
             training_scores_best = training_scores
             val_scores_best = val_scores
-            raw_grad_norms_best = raw_grad_norms
+            grad_norm_best = grad_norm
             n_epochs_best = n_epochs
         else:
             logger.info(f"No improvement (current best: {best_val_loss:.4f})\n")
@@ -581,7 +587,7 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
     logger.info(f"Best hyperparameters after {config_manager.n_search_iterations} iterations: {best_hyperparams}")
     logger.info(f"\n                 Hyperparameter optimization complete!")
 
-    return best_trainer, best_hyperparams, training_scores_best, val_scores_best, n_epochs_best, raw_grad_norms_best
+    return best_trainer, best_hyperparams, training_scores_best, val_scores_best, n_epochs_best, grad_norm_best
 
 
 def train_with_hyperparameters(
@@ -622,7 +628,7 @@ def train_with_hyperparameters(
     
     # Use defaultdict to automatically create new keys
     training_losses = defaultdict(list) 
-    raw_grad_norms = []
+    grad_norms = defaultdict(list)
     
     # if not final_model:
     #    val_losses = defaultdict(list)
@@ -644,16 +650,17 @@ def train_with_hyperparameters(
         # print epoch
         logger.info(f"Epoch {epoch+1}/{n_epochs}")  
         epoch_training_losses = defaultdict(list)
-        epoch_raw_grad_norms = defaultdict(list)
+        epoch_grad_norm = defaultdict(list)
 
         for batch_idx, batch in enumerate(training_buffer):
-            batch_losses, raw_grad_norm = trainer.train(batch)
+            batch_losses, grad_norm = trainer.train(batch)
 
             # Automatically append all metrics - creates new keys if needed
             for key, value in batch_losses.items():
                 epoch_training_losses[key].append(value)
             
-            epoch_raw_grad_norms['raw_grad_norm'].append(raw_grad_norm)
+            for key, value in grad_norm.items():
+                epoch_grad_norm[key].append(value)
 
             # check if we are simply testing the training loop, in which case we break after 100 batches
             if batch_idx >= 10 and testing:
@@ -662,7 +669,8 @@ def train_with_hyperparameters(
                 
         # Calculate average loss for this epoch and append to training_losses
         append_epoch_losses(epoch_training_losses, training_losses)
-        raw_grad_norms.append(np.mean(epoch_raw_grad_norms['raw_grad_norm']))
+        append_grad_norms(epoch_grad_norm, grad_norms)
+        
 
         # optionally, estimate V0 and append to training losses
         if config_manager.training_config['monitor_v0']:
@@ -677,8 +685,8 @@ def train_with_hyperparameters(
                 
                 # Determine validation loss for early stopping
                 current_val_loss = val_losses[loss_metric][-1]            
-                logger.info(f"Epoch {epoch}: Train {loss_metric}={training_losses[loss_metric][-1]:.4f}, Val {loss_metric}={current_val_loss:.4f}")
-                                
+                logger.info(f"Epoch {epoch}: Train {loss_metric}={training_losses[loss_metric][-1]:.4f}, Val {loss_metric}={current_val_loss:.4f}")              
+                
                 # optionally, estimate V0 and append to validation losses
                 if config_manager.training_config['monitor_v0']:
                     estimate_v0(trainer, val_starting_states, batch_size, val_losses)
@@ -707,7 +715,7 @@ def train_with_hyperparameters(
             restore_model_parameters(trainer, best_model_state, config_manager)
             logger.info(f"    Restored best model (val_loss={best_val_loss:.4f})")
 
-        return training_losses, val_losses, n_epochs, trainer, raw_grad_norms
+        return training_losses, val_losses, n_epochs, trainer, grad_norms
 
     ########################## evaluate on test set after training if final model ##########################
     # note that results df will be None if no targets/predictions were collected during evaluation (i.e.Q learning)
@@ -735,5 +743,5 @@ def train_with_hyperparameters(
         results_df.to_parquet(results_path)
         logger.info(f" Test predictions saved to {results_path}\n")       
 
-    return training_losses, val_losses, test_losses, raw_grad_norms
+    return training_losses, val_losses, test_losses, grad_norms
 

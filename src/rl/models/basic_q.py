@@ -17,40 +17,94 @@ intermediate rewards help learning
 """
 
 class Critic(nn.Module):
-	def __init__(self, state_dim, action_dim):
-		super(Critic, self).__init__()
+    def __init__(self, state_dim, action_dim):
+        
+        super(Critic, self).__init__()
 
-		# Q1 architecture
-		self.l1 = nn.Linear(state_dim + action_dim, 256)
-		self.l2 = nn.Linear(256, 256)
-		self.l3 = nn.Linear(256, 1)
+        # standardize the incoming embeddings
+        self.state_norm = nn.LayerNorm(state_dim)
 
-		# Q2 architecture
-		self.l4 = nn.Linear(state_dim + action_dim, 256)
-		self.l5 = nn.Linear(256, 256)
-		self.l6 = nn.Linear(256, 1)
+        # Q1 architecture
+        self.q1_net = nn.Sequential(
+            nn.Linear(state_dim + action_dim, 256),
+            nn.LayerNorm(256), # Normalize internal activations
+            nn.LeakyReLU(),
+            nn.Linear(256, 256),
+            nn.LeakyReLU(),
+            nn.Linear(256, 1)
+        )
+
+        # Q2 architecture
+        self.q2_net = nn.Sequential(
+            nn.Linear(state_dim + action_dim, 256),
+            nn.LayerNorm(256),
+            nn.LeakyReLU(),
+            nn.Linear(256, 256),
+            nn.LeakyReLU(),
+            nn.Linear(256, 1)
+        )
+
+        # # Q1 architecture
+        # self.l1 = nn.Linear(state_dim + action_dim, 256)
+        # self.l2 = nn.Linear(256, 256)
+        # self.l3 = nn.Linear(256, 1)
+
+		# # Q2 architecture
+        # self.l4 = nn.Linear(state_dim + action_dim, 256)
+        # self.l5 = nn.Linear(256, 256)
+        # self.l6 = nn.Linear(256, 1)
+
+        self.apply(self._init_weights)
+        
+    
+    def _init_weights(self, m):
+        # Initialize hidden layers with Xavier/Glorot for stability
+        if isinstance(m, nn.Linear):
+            # Check if this is the final output layer (it has 1 output)
+            if m.out_features == 1:
+                # The "Conservative" init: squeeze initial Q-values to near zero
+                nn.init.uniform_(m.weight, -3e-3, 3e-3)
+                nn.init.uniform_(m.bias, -3e-3, 3e-3)
+            else:
+                # Hidden layers: Xavier Uniform for gradient stability
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0.1) # Helps prevent "Dead ReLU" issues early on
+        
+        elif isinstance(m, nn.LayerNorm):
+            # LayerNorm should start as an identity transform
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)    
+    
+    def forward(self, state, action):
+
+        # normalize states before concatenation
+        state = self.state_norm(state)
+
+        sa = torch.cat([state, action], 1)
+
+        q1 = self.q1_net(sa)
+        q2 = self.q2_net(sa)
+
+        # q1 = F.relu(self.l1(sa))
+        # q1 = F.relu(self.l2(q1))
+        # q1 = self.l3(q1)
+
+        # q2 = F.relu(self.l4(sa))
+        # q2 = F.relu(self.l5(q2))
+        # q2 = self.l6(q2)
+        return q1, q2
 
 
-	def forward(self, state, action):
-		sa = torch.cat([state, action], 1)
+    def Q1(self, state, action):
+        sa = torch.cat([state, action], 1)
 
-		q1 = F.relu(self.l1(sa))
-		q1 = F.relu(self.l2(q1))
-		q1 = self.l3(q1)
+        q1 = self.q1_net(sa)
 
-		q2 = F.relu(self.l4(sa))
-		q2 = F.relu(self.l5(q2))
-		q2 = self.l6(q2)
-		return q1, q2
-
-
-	def Q1(self, state, action):
-		sa = torch.cat([state, action], 1)
-
-		q1 = F.relu(self.l1(sa))
-		q1 = F.relu(self.l2(q1))
-		q1 = self.l3(q1)
-		return q1
+        # q1 = F.relu(self.l1(sa))
+        # q1 = F.relu(self.l2(q1))
+        # q1 = self.l3(q1)
+        return q1
 	
 
 def get_grad_norm(model):
@@ -88,6 +142,10 @@ class Q_Learner(object):
         self.tau = tau
 
         self.grad_clip = grad_clip
+
+        # for calculating moving average of gradient clipping binary
+        self.clip_fraction_ema = 0.0
+        self.ema_alpha = 0.99 # Closer to 1.0 means more smoothing
 		
         # copy the critic network to create the target critic
         self.critic_target = copy.deepcopy(self.critic)
@@ -191,8 +249,16 @@ class Q_Learner(object):
         critic_loss.backward()
         
         # capture gradient norms
-        raw_grad_norm = get_grad_norm(self.critic)
+        grad_norm = {"raw_grad_norm": get_grad_norm(self.critic)}
+        
+        # determine whether to clip gradients based on grad_clip value
+        grad_norm['was_clipped'] = 1.0 if (self.grad_clip and grad_norm['raw_grad_norm'] > self.grad_clip) else 0.0
 
+       
+        # update the moving average of the clipping binary
+        self.clip_fraction_ema = self.ema_alpha * self.clip_fraction_ema + (1 - self.ema_alpha) * grad_norm['was_clipped']
+        grad_norm['clip_fraction_ema'] = self.clip_fraction_ema
+        
         # Gradient clipping if specified
         if self.grad_clip is not None:
             torch.nn.utils.clip_grad_norm_(
@@ -206,7 +272,7 @@ class Q_Learner(object):
             for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-        return log_dict, raw_grad_norm
+        return log_dict, grad_norm
     
 
     def evaluate(self, batch: TensorBatch) -> Dict[str, float]:

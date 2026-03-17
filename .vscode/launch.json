@@ -479,9 +479,10 @@
                 "--split_num", "0",
                 "--search_variant", "random_search",
                 "--n_search_iterations", "1",
-                "--n_epochs", "50",
+                "--n_epochs", "2",
                 "--cohort", "sepsis_broad",
-                "--action_mode", "continuous_only"            
+                "--action_mode", "continuous_only",
+                "--testing",            
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

@@ -17,7 +17,7 @@ intermediate rewards help learning
 """
 
 class Critic(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, action_dim, dropout=0.1):
         
         super(Critic, self).__init__()
 
@@ -29,8 +29,10 @@ class Critic(nn.Module):
             nn.Linear(state_dim + action_dim, 256),
             nn.LayerNorm(256), # Normalize internal activations
             nn.LeakyReLU(),
+            nn.Dropout(p=dropout),
             nn.Linear(256, 256),
             nn.LeakyReLU(),
+            nn.Dropout(p=dropout),
             nn.Linear(256, 1)
         )
 
@@ -39,8 +41,10 @@ class Critic(nn.Module):
             nn.Linear(state_dim + action_dim, 256),
             nn.LayerNorm(256),
             nn.LeakyReLU(),
+            nn.Dropout(p=dropout),
             nn.Linear(256, 256),
             nn.LeakyReLU(),
+            nn.Dropout(p=dropout),
             nn.Linear(256, 1)
         )
 
@@ -147,9 +151,6 @@ class Q_Learner(object):
         self.clip_fraction_ema = 0.0
         self.ema_alpha = 0.99 # Closer to 1.0 means more smoothing
 		
-        # copy the critic network to create the target critic
-        self.critic_target = copy.deepcopy(self.critic)
-		
     def target_q(self, reward, not_done, next_state, next_action): # need to add next action to replay buffer
         with torch.no_grad():            
             # Compute the target Q value
@@ -230,7 +231,12 @@ class Q_Learner(object):
             done = done * mortality
         
         not_done = 1 - done
-        target_Q = self.target_q(reward, not_done, next_state, next_action)
+        
+        self.critic.train()          # Dropout ACTIVE for the network we are updating
+        self.critic_target.eval()
+        
+        with torch.no_grad():
+            target_Q = self.target_q(reward, not_done, next_state, next_action)
 
         # Get current Q estimates
         current_Q1, current_Q2 = self.critic(state, action)
@@ -309,24 +315,63 @@ class Q_Learner(object):
         }
     
 
+def get_adamw_optimizer(model, lr, weight_decay):
+    """
+    Sets up AdamW with weight decay only on Linear weights, 
+    excluding biases and LayerNorm parameters.
+    """
+    decay_params = []
+    no_decay_params = []
+    
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        
+        # Check for keywords that should NOT be decayed
+        # Biases and LayerNorm 'weight' (which is a scale) and 'bias' (shift)
+        if any(nd in name.lower() for nd in ['bias', 'norm']):
+            no_decay_params.append(param)
+        else:
+            decay_params.append(param)
+            
+    optim_groups = [
+        {'params': decay_params, 'weight_decay': weight_decay},
+        {'params': no_decay_params, 'weight_decay': 0.0}
+    ]
+    
+    return torch.optim.AdamW(optim_groups, lr=lr)
+
+
 def get_trainer(config_manager, state_dim, action_dim, _, hyperparams):
 
     learning_rate = float(hyperparams['learning_rate'])
+    weight_decay = float(hyperparams.get('weight_decay', 0.01)) # New hyperparam
+    device = config_manager.training_config['device']
     
-    critic = Critic(state_dim, action_dim).to(config_manager.training_config['device'])
+    critic = Critic(
+        state_dim, 
+        action_dim, 
+        dropout=hyperparams.get('dropout', 0.1)
+    ).to(device)  
 
-    critic_optimizer = torch.optim.Adam(
-        critic.parameters(),
-        lr=learning_rate
-    )
+    critic_optimizer = get_adamw_optimizer(critic, learning_rate, weight_decay)
 
+    # trainer = Q_Learner(
+    #         critic=critic,
+    #         critic_optimizer=critic_optimizer,
+    #         discount=config_manager.training_config['discount'],
+    #         device=config_manager.training_config['device'],
+    #         tau=config_manager.training_config['tau'],	
+    #         grad_clip = hyperparams['grad_clip']
+    #     )
+    
     trainer = Q_Learner(
-            critic=critic,
-            critic_optimizer=critic_optimizer,
-            discount=config_manager.training_config['discount'],
-            device=config_manager.training_config['device'],
-            tau=config_manager.training_config['tau'],	
-            grad_clip = hyperparams['grad_clip']
-        )
+        critic=critic,
+        critic_optimizer=critic_optimizer,
+        discount=hyperparams.get('discount', config_manager.training_config['discount']),
+        device=device,
+        tau=hyperparams.get('tau', config_manager.training_config['tau']),  
+        grad_clip=hyperparams['grad_clip']
+    )
 
     return trainer

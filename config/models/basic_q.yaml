@@ -19,7 +19,7 @@
     # max_traj_len: 72  # Max trajectory length - probably need to change this - in data config
     device: "cuda"  # Device (cuda or cpu)
     learning_rate: "loguniform(1e-6, 1e-5)"           #      [1e-6]  # Learning rates to try
-    dropout: "uniform(0.2, 0.22)"
+    dropout: "uniform(0.0, 0.3)"
     tau: [0.0005, 0.001, 0.005, 0.01] # Target network update rate
     weight_decay: "loguniform(1e-4, 1e-1)" # L2 regularization strength
     # policy_noise: 0.2 # Noise added to target policy during critic updates

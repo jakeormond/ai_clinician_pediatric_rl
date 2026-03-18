@@ -78,7 +78,7 @@ def parse_arguments():
 
     parser.add_argument('--search_variant', 
                         default='random_search', 
-                        choices=['random_search', 'grid_search'], 
+                        choices=['random_search', 'grid_search', 'fixed_hyperparameters'], 
                         help='Variant of the search to use (default: random_search)')
 
     parser.add_argument('--n_search_iterations', type=int, default=2,

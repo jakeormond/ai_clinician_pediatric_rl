@@ -670,6 +670,8 @@ def train_with_hyperparameters(
         # Calculate average loss for this epoch and append to training_losses
         append_epoch_losses(epoch_training_losses, training_losses)
         append_grad_norms(epoch_grad_norm, grad_norms)
+        # print grad norm here
+        logger.info(f"Epoch {epoch}: Train {loss_metric}={training_losses[loss_metric][-1]:.4f}, Grad Norms: {[f'{key}={value[-1]:.4f}' for key, value in grad_norms.items()]}")
         
 
         # optionally, estimate V0 and append to training losses

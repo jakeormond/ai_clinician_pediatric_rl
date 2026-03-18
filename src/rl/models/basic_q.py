@@ -22,7 +22,7 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
 
         # standardize the incoming embeddings
-        self.state_norm = nn.LayerNorm(state_dim)
+        self.state_norm = nn.LayerNorm(state_dim + action_dim)
 
         # Q1 architecture
         self.q1_net = nn.Sequential(
@@ -82,11 +82,11 @@ class Critic(nn.Module):
     
     def forward(self, state, action):
 
-        # normalize states before concatenation
-        state = self.state_norm(state)
-
         sa = torch.cat([state, action], 1)
 
+        # normalize states after concatenation
+        sa = self.state_norm(sa)
+        
         q1 = self.q1_net(sa)
         q2 = self.q2_net(sa)
 
@@ -100,15 +100,18 @@ class Critic(nn.Module):
         return q1, q2
 
 
-    def Q1(self, state, action):
-        sa = torch.cat([state, action], 1)
+    # def Q1(self, state, action):
+    #     # normalize states before concatenation
+    #     state = self.state_norm(state)        
+        
+    #     sa = torch.cat([state, action], 1)
 
-        q1 = self.q1_net(sa)
+    #     q1 = self.q1_net(sa)
 
-        # q1 = F.relu(self.l1(sa))
-        # q1 = F.relu(self.l2(q1))
-        # q1 = self.l3(q1)
-        return q1
+    #     # q1 = F.relu(self.l1(sa))
+    #     # q1 = F.relu(self.l2(q1))
+    #     # q1 = self.l3(q1)
+    #     return q1
 	
 
 def get_grad_norm(model):
@@ -243,7 +246,7 @@ class Q_Learner(object):
 
         # critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
         # use Huber loss instead
-        critic_loss = F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)
+        critic_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
         
         log_dict = {"critic_loss": critic_loss.item()}
 
@@ -297,7 +300,7 @@ class Q_Learner(object):
             # Compute critic loss
             # critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
             # use Huber loss instead
-            critic_loss = F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)
+            critic_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
             
             log_dict = {"critic_loss": critic_loss.item()}
             

@@ -223,6 +223,10 @@ class ShardProcessor:
                 end_idx = index_ptr[j + 1]
                 hourly_health_change[start_idx:end_idx] = np.diff(health_score[start_idx:end_idx], append=health_score[end_idx-1])
 
+            # reward_std = hourly_health_change.std()
+            #clip rewards to -5, 5
+            hourly_health_change = np.clip(hourly_health_change, -5.0, 5.0)
+            
             self.dynamic_deephit_predictions['reward'] = hourly_health_change.astype(np.float32)                                         
         
         else:

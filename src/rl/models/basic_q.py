@@ -17,35 +17,36 @@ intermediate rewards help learning
 """
 
 class Critic(nn.Module):
-    def __init__(self, state_dim, action_dim, dropout=0.1):
+    def __init__(self, state_dim, action_dim, dropout=0.1, hidden_dim=512):
         
         super(Critic, self).__init__()
 
         # standardize the incoming embeddings
         self.state_norm = nn.LayerNorm(state_dim + action_dim)
+        self.hidden_dim = hidden_dim
 
         # Q1 architecture
         self.q1_net = nn.Sequential(
-            nn.Linear(state_dim + action_dim, 256),
-            nn.LayerNorm(256), # Normalize internal activations
+            nn.Linear(state_dim + action_dim, self.hidden_dim),
+            nn.LayerNorm(self.hidden_dim), # Normalize internal activations
             nn.LeakyReLU(),
             nn.Dropout(p=dropout),
-            nn.Linear(256, 256),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
             nn.LeakyReLU(),
             nn.Dropout(p=dropout),
-            nn.Linear(256, 1)
+            nn.Linear(self.hidden_dim, 1)
         )
 
         # Q2 architecture
         self.q2_net = nn.Sequential(
-            nn.Linear(state_dim + action_dim, 256),
-            nn.LayerNorm(256),
+            nn.Linear(state_dim + action_dim, self.hidden_dim),
+            nn.LayerNorm(self.hidden_dim), # Normalize internal activations 
             nn.LeakyReLU(),
             nn.Dropout(p=dropout),
-            nn.Linear(256, 256),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
             nn.LeakyReLU(),
             nn.Dropout(p=dropout),
-            nn.Linear(256, 1)
+            nn.Linear(self.hidden_dim, 1)
         )
 
         # # Q1 architecture
@@ -70,10 +71,18 @@ class Critic(nn.Module):
                 nn.init.uniform_(m.weight, -3e-3, 3e-3)
                 nn.init.uniform_(m.bias, -3e-3, 3e-3)
             else:
-                # Hidden layers: Xavier Uniform for gradient stability
-                nn.init.xavier_uniform_(m.weight)
+                # # Hidden layers: Xavier Uniform for gradient stability
+                # nn.init.xavier_uniform_(m.weight)
+                # if m.bias is not None:
+                #     nn.init.constant_(m.bias, 0.1) # Helps prevent "Dead ReLU" issues early on
+                
+                # SWITCH: Kaiming Normal is the standard for deep ReLU/LeakyReLU nets
+                # a=0.01 corresponds to the default negative_slope of LeakyReLU
+                nn.init.kaiming_normal_(m.weight, a=0.01, mode='fan_in', nonlinearity='leaky_relu')
+                
                 if m.bias is not None:
-                    nn.init.constant_(m.bias, 0.1) # Helps prevent "Dead ReLU" issues early on
+                    # SWITCH: Set to 0. LeakyReLU doesn't need the 0.1 "kickstart"
+                    nn.init.constant_(m.bias, 0)      
         
         elif isinstance(m, nn.LayerNorm):
             # LayerNorm should start as an identity transform
@@ -354,7 +363,8 @@ def get_trainer(config_manager, state_dim, action_dim, _, hyperparams):
     critic = Critic(
         state_dim, 
         action_dim, 
-        dropout=hyperparams.get('dropout', 0.1)
+        dropout=hyperparams.get('dropout', 0.1),
+        hidden_dim=hyperparams.get('hidden_dim', 512)
     ).to(device)  
 
     critic_optimizer = get_adamw_optimizer(critic, learning_rate, weight_decay)

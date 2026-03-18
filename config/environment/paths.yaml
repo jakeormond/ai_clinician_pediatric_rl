@@ -17,6 +17,8 @@ bayreuth_hpc:
     code_dir: "/groups/a-faisal/jakeormond/code/choc_code"
   mimic_iv:
     experiments_dir: "/groups/a-faisal/jakeormond/experiments"
+    supervised_final_model_dir: "/groups/a-faisal/jakeormond/dynamic_deephit_results/mimic_iv/"
+    rl_final_model_dir: "/groups/a-faisal/jakeormond/reinforcement_learning/mimic_iv/"
     data_dir: "/groups/a-faisal/jakeormond/data/mimic_iv_3.1_data"
     code_dir: "/groups/a-faisal/jakeormond/code/mimic_iv_icu_data_processing"
 

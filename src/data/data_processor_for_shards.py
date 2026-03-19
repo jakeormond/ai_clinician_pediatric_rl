@@ -14,7 +14,7 @@ import json
 import time
 import pyarrow
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import PowerTransformer
+from sklearn.preprocessing import PowerTransformer, StandardScaler, RobustScaler
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -88,6 +88,7 @@ class ShardProcessor:
 
                 self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
                                                                         keys_to_exclude=['predictions', 'entropy'])
+                
                 if self.split == 'tuning': # we need to filter the predictions to only include the stays in the tuning set, which are a subset of the training set
                     tuning_stay_ids = self.dynamic_deephit_dataset['stay_ids']
                     self.filter_by_stay_ids(tuning_stay_ids, dataset_name='dynamic_deephit_predictions')
@@ -235,7 +236,7 @@ class ShardProcessor:
     
 
 
-    def create_rl_dataset(self, states="model_outputs"):
+    def create_rl_dataset(self, states="model_outputs", scaler=None):
         self.rl_dataset = {}
         
         action_ind = self.dynamic_deephit_dataset['response_zero_ind'] + self.dynamic_deephit_dataset['carry_forward_ind']
@@ -259,8 +260,17 @@ class ShardProcessor:
 
         # get states
         if states == "model_outputs":
-            self.rl_dataset['states'] = torch.tensor(self.dynamic_deephit_predictions["model_outputs"][state_ind, :], dtype=torch.float32)
-            self.rl_dataset['next_states'] = torch.tensor(self.dynamic_deephit_predictions["model_outputs"][next_state_ind, :], dtype=torch.float32)
+            # need to scale the outputs
+            if scaler == None:
+                # use StandardScaler to scale the model outputs, fit on the states in the training set
+                scaler = StandardScaler()
+                scaler.fit(self.dynamic_deephit_predictions["model_outputs"])
+            
+            # apply the scaler to the model outputs
+            scaled_model_outputs = scaler.transform(self.dynamic_deephit_predictions["model_outputs"])                            
+            
+            self.rl_dataset['states'] = torch.tensor(scaled_model_outputs[state_ind, :], dtype=torch.float32)
+            self.rl_dataset['next_states'] = torch.tensor(scaled_model_outputs[next_state_ind, :], dtype=torch.float32)
         else:
             raise NotImplementedError(f"Only states='model_outputs' is currently implemented, but got states={states}")
 
@@ -287,6 +297,8 @@ class ShardProcessor:
         mortality_full[trajectory_end_inds] = mortality  # set the mortality value at the start of each trajectory to the mortality value for that trajectory
         mortality_full = mortality_full[next_state_ind]  # only keep mortality for the next states, since the current states will never be terminal in our setting (since we exclude end of trajectory timesteps)
         self.rl_dataset['mortality'] = torch.tensor(mortality_full, dtype=torch.float32)
+
+        return scaler
 
 
     def get_start_states(self):

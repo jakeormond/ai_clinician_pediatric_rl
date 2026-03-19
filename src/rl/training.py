@@ -125,11 +125,11 @@ def create_processor_from_shards(config_manager, normalize=True, set_to_return='
         return test_processor
     
 
-def create_buffer(processor, batch_size, shuffle=True):
-    processor.create_rl_dataset(states="model_outputs") # states argument is not currently used, but we can add options for different state representations in the future
+def create_buffer(processor, batch_size, shuffle=True, scaler=None):
+    scaler = processor.create_rl_dataset(states="model_outputs", scaler=scaler) # states argument is not currently used, but we can add options for different state representations in the future
     dataset = RLDataset(processor) # model_outputs refer to dynamic_deephit transformer outputs; other options not currently implemented
     buffer = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
-    return buffer
+    return buffer, scaler
 
 
 def create_trainer(train_processor, hyperparams, config_manager):
@@ -310,7 +310,7 @@ def evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_lo
     epoch_val_losses = defaultdict(list)
 
     for batch_idx, batch in enumerate(val_test_buffer):      
-        if batch_idx * batch_size >= 5000:  # Limit validation to 5000 samples for speed, make this a variable
+        if batch_idx * batch_size >= 50000:  # Limit validation to 5000 samples for speed, make this a variable
             break
        
         batch_losses, _, _ = trainer.evaluate(batch)
@@ -472,7 +472,7 @@ def single_split_training(config_manager):
         hyperparams = get_fixed_hyperparameters(config_manager)
 
         # train final model
-        training_scores, val_scores, n_epochs, trainer, grad_norm = train_with_hyperparameters( # we can probably remove the final model flag when we refactor train_with_hyperparameters to not do early stopping during final training, since we won't be doing early stopping during final training
+        training_scores, val_scores, n_epochs, trainer, grad_norm, scaler = train_with_hyperparameters( # we can probably remove the final model flag when we refactor train_with_hyperparameters to not do early stopping during final training, since we won't be doing early stopping during final training
             train_processor, 
             val_processor, 
             config_manager, 
@@ -481,7 +481,7 @@ def single_split_training(config_manager):
             final_model=False
         )
 
-    val_buffer = create_buffer(val_processor, config_manager.training_config['batch_size'], shuffle=False)
+    val_buffer, _ = create_buffer(val_processor, config_manager.training_config['batch_size'], shuffle=False, scaler=scaler)
     final_val_losses, _ = evaluate_final_model( # this evaluates on the entire test set (during training we only use a subset for speed)
         trainer, 
         val_buffer, 
@@ -607,8 +607,8 @@ def train_with_hyperparameters(
     loss_metric = config_manager.training_config['loss_metric']
 
     # Create replay buffers
-    training_buffer = create_buffer(train_processor, batch_size)
-    val_test_buffer = create_buffer(val_test_processor, batch_size)
+    training_buffer, scaler = create_buffer(train_processor, batch_size)
+    val_test_buffer, _ = create_buffer(val_test_processor, batch_size, scaler=scaler)
     
     # get starting state distribution for V0 estimation if we're doing TD3-BC
     if config_manager.training_config['monitor_v0']:
@@ -666,7 +666,12 @@ def train_with_hyperparameters(
             if batch_idx >= 10 and testing:
                 logger.info(" Testing mode: breaking after 10 batches.")
                 break
-                
+
+        # step the scheduler
+        if trainer.scheduler is not None:
+            trainer.scheduler.step()
+            print(f"Epoch {epoch} finished. New LR: {trainer.critic_optimizer.param_groups[0]['lr']:.2e}")
+
         # Calculate average loss for this epoch and append to training_losses
         append_epoch_losses(epoch_training_losses, training_losses)
         append_grad_norms(epoch_grad_norm, grad_norms)
@@ -717,7 +722,7 @@ def train_with_hyperparameters(
             restore_model_parameters(trainer, best_model_state, config_manager)
             logger.info(f"    Restored best model (val_loss={best_val_loss:.4f})")
 
-        return training_losses, val_losses, n_epochs, trainer, grad_norms
+        return training_losses, val_losses, n_epochs, trainer, grad_norms, scaler
 
     ########################## evaluate on test set after training if final model ##########################
     # note that results df will be None if no targets/predictions were collected during evaluation (i.e.Q learning)

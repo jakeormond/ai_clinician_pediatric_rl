@@ -17,7 +17,7 @@ intermediate rewards help learning
 """
 
 class Critic(nn.Module):
-    def __init__(self, state_dim, action_dim, dropout=0.1, hidden_dim=512):
+    def __init__(self, state_dim, action_dim, dropout=0.1, hidden_dim=512, negative_slope=0.1):
         
         super(Critic, self).__init__()
 
@@ -28,19 +28,21 @@ class Critic(nn.Module):
         self.hidden_dim2 = hidden_dim // 2  # Example of a second hidden layer with half the units of the first
         self.hidden_dim3 = self.hidden_dim2 // 2  # Example of a third hidden layer with half the units of the second
 
+        self.negative_slope = negative_slope
+
         # Q1 architecture
         self.q1_net = nn.Sequential(
             nn.Linear(state_dim + action_dim, self.hidden_dim),
             nn.LayerNorm(self.hidden_dim), # Normalize internal activations
-            nn.LeakyReLU(),
+            nn.LeakyReLU(negative_slope=self.negative_slope),
             nn.Dropout(p=dropout),
             
             nn.Linear(self.hidden_dim, self.hidden_dim2),
-            nn.LeakyReLU(),
+            nn.LeakyReLU(negative_slope=self.negative_slope),
             nn.Dropout(p=dropout),
             
             nn.Linear(self.hidden_dim2, self.hidden_dim3),
-            nn.LeakyReLU(),
+            nn.LeakyReLU(negative_slope=self.negative_slope),
             # nn.Dropout(p=dropout),    
             
             nn.Linear(self.hidden_dim3, 1)
@@ -50,15 +52,15 @@ class Critic(nn.Module):
         self.q2_net = nn.Sequential(
             nn.Linear(state_dim + action_dim, self.hidden_dim),
             nn.LayerNorm(self.hidden_dim), # Normalize internal activations 
-            nn.LeakyReLU(),
+            nn.LeakyReLU(negative_slope=self.negative_slope),
             nn.Dropout(p=dropout),
             
             nn.Linear(self.hidden_dim, self.hidden_dim2),
-            nn.LeakyReLU(),
+            nn.LeakyReLU(negative_slope=self.negative_slope),
             nn.Dropout(p=dropout),
             
             nn.Linear(self.hidden_dim2, self.hidden_dim3),
-            nn.LeakyReLU(),
+            nn.LeakyReLU(negative_slope=self.negative_slope),
             # nn.Dropout(p=dropout),            
             
             nn.Linear(self.hidden_dim3, 1)
@@ -78,31 +80,35 @@ class Critic(nn.Module):
         
     
     def _init_weights(self, m):
-        # Initialize hidden layers with Xavier/Glorot for stability
         if isinstance(m, nn.Linear):
-            # Check if this is the final output layer (it has 1 output)
+            # 1. THE FINAL HEAD (Output = 1)
             if m.out_features == 1:
-                # The "Conservative" init: squeeze initial Q-values to near zero
-                nn.init.uniform_(m.weight, -3e-3, 3e-3)
-                nn.init.uniform_(m.bias, -3e-3, 3e-3)
+                # Squeezing to near-zero is good, but 3e-3 is VERY tight for a 3-layer net.
+                # Let's use a slightly wider window to give the gradient a "handle."
+                nn.init.uniform_(m.weight, -1e-2, 1e-2) 
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, -0.2)
+            
+            # 2. THE HIDDEN LAYERS
             else:
-                # # Hidden layers: Xavier Uniform for gradient stability
-                # nn.init.xavier_uniform_(m.weight)
-                # if m.bias is not None:
-                #     nn.init.constant_(m.bias, 0.1) # Helps prevent "Dead ReLU" issues early on
-                
-                # SWITCH: Kaiming Normal is the standard for deep ReLU/LeakyReLU nets
-                # a=0.01 corresponds to the default negative_slope of LeakyReLU
-                nn.init.kaiming_normal_(m.weight, a=0.01, mode='fan_in', nonlinearity='leaky_relu')
+                # CRITICAL: Match 'a' to your negative_slope (0.1)
+                # 'fan_in' is correct for preserving signal in the forward pass
+                nn.init.kaiming_normal_(
+                    m.weight, 
+                    a=self.negative_slope,  # <--- Change this from 0.01 to 0.1
+                    mode='fan_in', 
+                    nonlinearity='leaky_relu'
+                )
                 
                 if m.bias is not None:
-                    # SWITCH: Set to 0. LeakyReLU doesn't need the 0.1 "kickstart"
-                    nn.init.constant_(m.bias, 0)      
+                    # Keep this at 0. With LayerNorm, non-zero biases can 
+                    # actually introduce unnecessary shift.
+                    nn.init.constant_(m.bias, 0.05)      
         
         elif isinstance(m, nn.LayerNorm):
-            # LayerNorm should start as an identity transform
+            # Standard identity transform - keep as is
             nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)    
+            nn.init.constant_(m.weight, 1.0)
     
     def forward(self, state, action):
 
@@ -137,6 +143,28 @@ class Critic(nn.Module):
     #     # q1 = self.l3(q1)
     #     return q1
 	
+    @torch.no_grad()
+    def get_neuron_stats(self, state, action):
+        # Ensure we are in eval mode to avoid Dropout interference
+        self.eval()
+        
+        # Concatenate input
+        x_init = torch.cat([state, action], dim=-1)
+        
+        stats = {}
+        # We only need to check q1_net to get a representative sample of activity
+        x = x_init
+        leaky_idx = 0
+        for layer in self.q1_net:
+            x = layer(x)
+            if isinstance(layer, nn.LeakyReLU):
+                # (x <= 0) is 1 for inactive, 0 for active
+                pct_inactive = (x <= 0).float().mean().item() * 100
+                stats[f"inactive_L{leaky_idx}_pct"] = pct_inactive
+                leaky_idx += 1
+                
+        return stats
+
 
 def get_grad_norm(model):
     total_norm = 0
@@ -148,6 +176,7 @@ def get_grad_norm(model):
     return total_norm
 
 
+
 class Q_Learner(object):
     def __init__(
         self,
@@ -157,7 +186,8 @@ class Q_Learner(object):
         device: str = "CUDA" if torch.cuda.is_available() else "CPU",
         tau: float = 0.005,
         grad_clip: float = 1.0,
-        reward_scaling: float = 1.0
+        reward_scaling: float = 1.0,
+        scheduler: torch.optim.lr_scheduler._LRScheduler = None
     ):
         
         self.total_it = 0
@@ -166,7 +196,7 @@ class Q_Learner(object):
 
         self.critic = critic.to(self.device)
         self.critic_optimizer = critic_optimizer
-
+        
         self.critic_target = copy.deepcopy(self.critic)
 
         self.discount = discount
@@ -177,6 +207,9 @@ class Q_Learner(object):
 
         self.reward_scaling = reward_scaling
 
+        self.critic_optimizer = critic_optimizer
+        self.scheduler = scheduler
+        
         # for calculating moving average of gradient clipping binary
         self.clip_fraction_ema = 0.0
         self.ema_alpha = 0.99 # Closer to 1.0 means more smoothing
@@ -334,6 +367,11 @@ class Q_Learner(object):
             
             log_dict = {"critic_loss": critic_loss.item()}
             
+            # ADD THIS LINE:
+            neuron_stats = self.critic.get_neuron_stats(state, action)
+            # Merge stats into your log_dict
+            log_dict.update(neuron_stats)
+
             # get Q statistics
             log_dict = self.get_q_stats(current_Q1, current_Q2, mortality, log_dict)
         
@@ -390,6 +428,10 @@ def get_trainer(config_manager, state_dim, action_dim, _, hyperparams):
 
     critic_optimizer = get_adamw_optimizer(critic, learning_rate, weight_decay)
 
+    # 2. Define the Scheduler 
+    # Using StepLR to "step down" the intensity every 3 epochs
+    scheduler = torch.optim.lr_scheduler.StepLR(critic_optimizer, step_size=2, gamma=0.5)
+
     # trainer = Q_Learner(
     #         critic=critic,
     #         critic_optimizer=critic_optimizer,
@@ -406,7 +448,8 @@ def get_trainer(config_manager, state_dim, action_dim, _, hyperparams):
         device=device,
         tau=hyperparams.get('tau', config_manager.training_config['tau']),  
         grad_clip=hyperparams['grad_clip'], 
-        reward_scaling=hyperparams.get('reward_scaling', 1.0)
+        reward_scaling=hyperparams.get('reward_scaling', 1.0),
+        scheduler=scheduler
     )
 
     return trainer

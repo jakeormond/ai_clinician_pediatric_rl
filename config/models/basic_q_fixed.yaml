@@ -23,7 +23,7 @@
     tau: 0.005 # Target network update rate
     weight_decay: 0.01 # L2 regularization strength
     # policy_noise: 0.2 # Noise added to target policy during critic updates
-    batch_size: 256  # Batch size for all networks
+    batch_size: 1024  # Batch size for all networks
     # hidden_dim: [128, 128]  # Hidden dimension for all networks [128, 256, 256]] 
 
     # Early stopping parameters (fixed for all combinations)

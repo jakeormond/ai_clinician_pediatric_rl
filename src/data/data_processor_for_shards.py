@@ -226,7 +226,7 @@ class ShardProcessor:
             # reward_std = hourly_health_change.std()
             #clip rewards to -5, 5
             hourly_health_change = np.clip(hourly_health_change, -5.0, 5.0)
-            
+           
             self.dynamic_deephit_predictions['reward'] = hourly_health_change.astype(np.float32)                                         
         
         else:

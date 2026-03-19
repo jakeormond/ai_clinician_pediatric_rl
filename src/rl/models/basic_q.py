@@ -25,16 +25,25 @@ class Critic(nn.Module):
         self.state_norm = nn.LayerNorm(state_dim + action_dim)
         self.hidden_dim = hidden_dim
 
+        self.hidden_dim2 = hidden_dim // 2  # Example of a second hidden layer with half the units of the first
+        self.hidden_dim3 = self.hidden_dim2 // 2  # Example of a third hidden layer with half the units of the second
+
         # Q1 architecture
         self.q1_net = nn.Sequential(
             nn.Linear(state_dim + action_dim, self.hidden_dim),
             nn.LayerNorm(self.hidden_dim), # Normalize internal activations
             nn.LeakyReLU(),
             nn.Dropout(p=dropout),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
+            
+            nn.Linear(self.hidden_dim, self.hidden_dim2),
             nn.LeakyReLU(),
             nn.Dropout(p=dropout),
-            nn.Linear(self.hidden_dim, 1)
+            
+            nn.Linear(self.hidden_dim2, self.hidden_dim3),
+            nn.LeakyReLU(),
+            # nn.Dropout(p=dropout),    
+            
+            nn.Linear(self.hidden_dim3, 1)
         )
 
         # Q2 architecture
@@ -43,10 +52,16 @@ class Critic(nn.Module):
             nn.LayerNorm(self.hidden_dim), # Normalize internal activations 
             nn.LeakyReLU(),
             nn.Dropout(p=dropout),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
+            
+            nn.Linear(self.hidden_dim, self.hidden_dim2),
             nn.LeakyReLU(),
             nn.Dropout(p=dropout),
-            nn.Linear(self.hidden_dim, 1)
+            
+            nn.Linear(self.hidden_dim2, self.hidden_dim3),
+            nn.LeakyReLU(),
+            # nn.Dropout(p=dropout),            
+            
+            nn.Linear(self.hidden_dim3, 1)
         )
 
         # # Q1 architecture
@@ -142,6 +157,7 @@ class Q_Learner(object):
         device: str = "CUDA" if torch.cuda.is_available() else "CPU",
         tau: float = 0.005,
         grad_clip: float = 1.0,
+        reward_scaling: float = 1.0
     ):
         
         self.total_it = 0
@@ -158,6 +174,8 @@ class Q_Learner(object):
         self.tau = tau
 
         self.grad_clip = grad_clip
+
+        self.reward_scaling = reward_scaling
 
         # for calculating moving average of gradient clipping binary
         self.clip_fraction_ema = 0.0
@@ -236,6 +254,8 @@ class Q_Learner(object):
         # sample the replay buffer
         state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
 
+        reward = reward * self.reward_scaling
+
         # compute the target Q value
         treat_survival_as_truncated = True
         if treat_survival_as_truncated:
@@ -297,6 +317,7 @@ class Q_Learner(object):
         self.critic.eval()  # Ensure critic is also in eval mode
         
         state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
+        reward = reward * self.reward_scaling
         not_done = 1 - done
 
         with torch.no_grad():
@@ -384,7 +405,8 @@ def get_trainer(config_manager, state_dim, action_dim, _, hyperparams):
         discount=hyperparams.get('discount', config_manager.training_config['discount']),
         device=device,
         tau=hyperparams.get('tau', config_manager.training_config['tau']),  
-        grad_clip=hyperparams['grad_clip']
+        grad_clip=hyperparams['grad_clip'], 
+        reward_scaling=hyperparams.get('reward_scaling', 1.0)
     )
 
     return trainer

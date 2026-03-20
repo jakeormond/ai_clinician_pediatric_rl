@@ -430,7 +430,7 @@ def get_trainer(config_manager, state_dim, action_dim, _, hyperparams):
 
     # 2. Define the Scheduler 
     # Using StepLR to "step down" the intensity every 3 epochs
-    scheduler = torch.optim.lr_scheduler.StepLR(critic_optimizer, step_size=2, gamma=0.5)
+    scheduler = torch.optim.lr_scheduler.StepLR(critic_optimizer, step_size=10, gamma=0.5)
 
     # trainer = Q_Learner(
     #         critic=critic,

@@ -52,41 +52,107 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-	def __init__(self, state_dim, action_dim):
+	def __init__(self, state_dim, action_dim, dropout=0.1, hidden_dim=512, negative_slope=0.1):
+		
 		super(Critic, self).__init__()
 
+		# standardize the incoming embeddings
+		self.state_norm = nn.LayerNorm(state_dim + action_dim)
+		self.hidden_dim = hidden_dim
+
+		self.hidden_dim2 = hidden_dim // 2  # Example of a second hidden layer with half the units of the first
+		self.hidden_dim3 = self.hidden_dim2 // 2  # Example of a third hidden layer with half the units of the second
+
+		self.negative_slope = negative_slope
+
 		# Q1 architecture
-		self.l1 = nn.Linear(state_dim + action_dim, 256)
-		self.l2 = nn.Linear(256, 256)
-		self.l3 = nn.Linear(256, 1)
+		self.q1_net = nn.Sequential(
+			nn.Linear(state_dim + action_dim, self.hidden_dim),
+			nn.LayerNorm(self.hidden_dim), # Normalize internal activations
+			nn.LeakyReLU(negative_slope=self.negative_slope),
+			nn.Dropout(p=dropout),
+			
+			nn.Linear(self.hidden_dim, self.hidden_dim2),
+			nn.LeakyReLU(negative_slope=self.negative_slope),
+			nn.Dropout(p=dropout),
+			
+			nn.Linear(self.hidden_dim2, self.hidden_dim3),
+			nn.LeakyReLU(negative_slope=self.negative_slope),
+			# nn.Dropout(p=dropout),    
+			
+			nn.Linear(self.hidden_dim3, 1)
+		)
 
 		# Q2 architecture
-		self.l4 = nn.Linear(state_dim + action_dim, 256)
-		self.l5 = nn.Linear(256, 256)
-		self.l6 = nn.Linear(256, 1)
+		self.q2_net = nn.Sequential(
+			nn.Linear(state_dim + action_dim, self.hidden_dim),
+			nn.LayerNorm(self.hidden_dim), # Normalize internal activations 
+			nn.LeakyReLU(negative_slope=self.negative_slope),
+			nn.Dropout(p=dropout),
+			
+			nn.Linear(self.hidden_dim, self.hidden_dim2),
+			nn.LeakyReLU(negative_slope=self.negative_slope),
+			nn.Dropout(p=dropout),
+			
+			nn.Linear(self.hidden_dim2, self.hidden_dim3),
+			nn.LeakyReLU(negative_slope=self.negative_slope),
+			# nn.Dropout(p=dropout),            
+			
+			nn.Linear(self.hidden_dim3, 1)
+		)
 
+		self.apply(self._init_weights)
+		
+
+	def _init_weights(self, m):
+		if isinstance(m, nn.Linear):
+			# 1. THE FINAL HEAD (Output = 1)
+			if m.out_features == 1:
+				# Squeezing to near-zero is good, but 3e-3 is VERY tight for a 3-layer net.
+				# Let's use a slightly wider window to give the gradient a "handle."
+				nn.init.uniform_(m.weight, -1e-2, 1e-2) 
+				if m.bias is not None:
+					nn.init.constant_(m.bias, -0.2)
+			
+			# 2. THE HIDDEN LAYERS
+			else:
+				# CRITICAL: Match 'a' to your negative_slope (0.1)
+				# 'fan_in' is correct for preserving signal in the forward pass
+				nn.init.kaiming_normal_(
+					m.weight, 
+					a=self.negative_slope,  # <--- Change this from 0.01 to 0.1
+					mode='fan_in', 
+					nonlinearity='leaky_relu'
+				)
+				
+				if m.bias is not None:
+					# Keep this at 0. With LayerNorm, non-zero biases can 
+					# actually introduce unnecessary shift.
+					nn.init.constant_(m.bias, 0.05)      
+		
+		elif isinstance(m, nn.LayerNorm):
+			# Standard identity transform - keep as is
+			nn.init.constant_(m.bias, 0)
+			nn.init.constant_(m.weight, 1.0)
 
 	def forward(self, state, action):
+
 		sa = torch.cat([state, action], 1)
 
-		q1 = F.relu(self.l1(sa))
-		q1 = F.relu(self.l2(q1))
-		q1 = self.l3(q1)
+		# normalize states after concatenation
+		sa = self.state_norm(sa)
+		
+		q1 = self.q1_net(sa)
+		q2 = self.q2_net(sa)
 
-		q2 = F.relu(self.l4(sa))
-		q2 = F.relu(self.l5(q2))
-		q2 = self.l6(q2)
 		return q1, q2
-
-
+	
 	def Q1(self, state, action):
 		sa = torch.cat([state, action], 1)
-
-		q1 = F.relu(self.l1(sa))
-		q1 = F.relu(self.l2(q1))
-		q1 = self.l3(q1)
-		return q1
-
+		sa = self.state_norm(sa)
+		q1 = self.q1_net(sa)
+		return q1	
+    
 
 	@torch.no_grad()
 	def get_neuron_stats(self, state, action):
@@ -109,7 +175,8 @@ class Critic(nn.Module):
 				leaky_idx += 1
 				
 		return stats
-	
+
+
 	def get_grad_norm(self):
 		total_norm = 0
 		for p in self.parameters():
@@ -118,7 +185,7 @@ class Critic(nn.Module):
 				total_norm += param_norm.item() ** 2
 		total_norm = total_norm ** 0.5
 		return total_norm
-
+	
 
 class TD3_BC(object):
 	def __init__(
@@ -134,9 +201,9 @@ class TD3_BC(object):
 		policy_freq: int = 2,
 		alpha: float = 2.5,
         device: str = "CUDA" if torch.cuda.is_available() else "CPU",
-        action_mode: str = "mixed",
+        action_mode: str = "continuous",
         dose_actions: int = 2,  #  Number of dose actions
-        binary_actions: int = 2,		
+        binary_actions: int = 0,		
 		tau: float = 0.005,
 		grad_clip: float = None,  # Add grad_clip argument
 		ema_alpha: float = 0.99  # Add ema_alpha argument for moving
@@ -205,7 +272,7 @@ class TD3_BC(object):
 		
 		return total_bc_loss, actor_dict
 		
-		
+
 	def target_q(self, action, next_state, reward, not_done):
 		with torch.no_grad():
 			# Select action according to policy and add clipped noise
@@ -392,28 +459,34 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 
 	learning_rate = float(hyperparams['learning_rate'])
 
-	action_mode = config_manager.action_mode
+	# action_mode = config_manager.action_mode FOR NOW, WE CAN ASSUME CONTINUOUS
 
-	if action_mode == 'binary_only' or action_mode == 'continuous_only':
-		actor = Actor(
-			state_dim=state_dim, 
-			action_dim=action_dim, 
-			hidden_dim=hyperparams['hidden_dim'], 
-			dropout=hyperparams['dropout'],
-			max_action = 1.0,
-			action_mode = action_mode  # max_action is 1.0 for binary
-			).to(config_manager.training_config['device'])
+	# if action_mode == 'binary_only' or action_mode == 'continuous_only':
+	# 	actor = Actor(
+	# 		state_dim=state_dim, 
+	# 		action_dim=action_dim, 
+	# 		hidden_dim=hyperparams['hidden_dim'], 
+	# 		dropout=hyperparams['dropout'],
+	# 		max_action = 1.0,
+	# 		action_mode = action_mode  # max_action is 1.0 for binary
+	# 		).to(config_manager.training_config['device'])
 		
-	elif action_mode == 'mixed':
-		actor = MixedActionActor(
-			state_dim=state_dim, 
-			dose_actions=action_dim//2, 
-			binary_actions=action_dim//2, 
-			hidden_dim=hyperparams['hidden_dim'], 
-			dropout=hyperparams['dropout'],
-			max_action = max_action
-			).to(config_manager.training_config['device'])
+	# elif action_mode == 'mixed':
+	# 	actor = MixedActionActor(
+	# 		state_dim=state_dim, 
+	# 		dose_actions=action_dim//2, 
+	# 		binary_actions=action_dim//2, 
+	# 		hidden_dim=hyperparams['hidden_dim'], 
+	# 		dropout=hyperparams['dropout'],
+	# 		max_action = max_action
+	# 		).to(config_manager.training_config['device'])
 		
+	actor = Actor(
+		state_dim=state_dim, 
+		action_dim=action_dim, 
+		hidden_dim=hyperparams['hidden_dim'], 
+		dropout=hyperparams['dropout']
+	).to(config_manager.training_config['device'])
 	
 	actor_optimizer = torch.optim.Adam(
 		actor.parameters(), 
@@ -427,39 +500,55 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 		lr=learning_rate
 	)
 
-	if action_mode == 'binary_only' or action_mode == 'continuous_only':
-		trainer = TD3_BC(
-			max_action=max_action,
-			actor=actor,
-			actor_optimizer=actor_optimizer,
-			critic=critic,
-			critic_optimizer=critic_optimizer,
-			discount=config_manager.training_config['discount'],
-			device=config_manager.training_config['device'],
-			action_mode=action_mode,
-			tau=config_manager.training_config['tau'],	
-			policy_noise=config_manager.training_config['policy_noise'],
-			noise_clip=config_manager.training_config['noise_clip'],
-			policy_freq=config_manager.training_config['policy_freq'],
-			alpha=config_manager.training_config['alpha']		
-		)
+	trainer = TD3_BC(               # LIST OF PARAMETERS NEEDS TO BE UPDATED
+		max_action=max_action,
+		actor=actor,
+		actor_optimizer=actor_optimizer,
+		critic=critic,
+		critic_optimizer=critic_optimizer,
+		discount=hyperparams['discount'],
+		device=config_manager.training_config['device'],
+		action_mode=config_manager.action_mode,
+		tau=hyperparams['tau'],
+		policy_noise=hyperparams['policy_noise'],
+		noise_clip=hyperparams['noise_clip'],
+		policy_freq=hyperparams['policy_freq'],
+		alpha=hyperparams['alpha'],
+	)
+
+	# if action_mode == 'binary_only' or action_mode == 'continuous_only':
+	# 	trainer = TD3_BC(
+	# 		max_action=max_action,
+	# 		actor=actor,
+	# 		actor_optimizer=actor_optimizer,
+	# 		critic=critic,
+	# 		critic_optimizer=critic_optimizer,
+	# 		discount=config_manager.training_config['discount'],
+	# 		device=config_manager.training_config['device'],
+	# 		action_mode=action_mode,
+	# 		tau=config_manager.training_config['tau'],	
+	# 		policy_noise=config_manager.training_config['policy_noise'],
+	# 		noise_clip=config_manager.training_config['noise_clip'],
+	# 		policy_freq=config_manager.training_config['policy_freq'],
+	# 		alpha=config_manager.training_config['alpha']		
+	# 	)
 	
-	elif action_mode == 'mixed':
-		trainer = TD3_BC(
-				max_action=max_action,
-				actor=actor,
-				actor_optimizer=actor_optimizer,
-				critic=critic,
-				critic_optimizer=critic_optimizer,
-				discount=config_manager.training_config['discount'],
-				device=config_manager.training_config['device'],
-				action_mode=action_mode,
-				dose_actions=action_dim//2,
-				binary_actions=action_dim//2,
-				tau=config_manager.training_config['tau'],	
-				policy_noise=config_manager.training_config['policy_noise'],
-				noise_clip=config_manager.training_config['noise_clip'],
-				policy_freq=config_manager.training_config['policy_freq'],
-				alpha=config_manager.training_config['alpha']		
-		)
+	# elif action_mode == 'mixed':
+	# 	trainer = TD3_BC(
+	# 			max_action=max_action,
+	# 			actor=actor,
+	# 			actor_optimizer=actor_optimizer,
+	# 			critic=critic,
+	# 			critic_optimizer=critic_optimizer,
+	# 			discount=config_manager.training_config['discount'],
+	# 			device=config_manager.training_config['device'],
+	# 			action_mode=action_mode,
+	# 			dose_actions=action_dim//2,
+	# 			binary_actions=action_dim//2,
+	# 			tau=config_manager.training_config['tau'],	
+	# 			policy_noise=config_manager.training_config['policy_noise'],
+	# 			noise_clip=config_manager.training_config['noise_clip'],
+	# 			policy_freq=config_manager.training_config['policy_freq'],
+	# 			alpha=config_manager.training_config['alpha']		
+	# 	)
 	return trainer

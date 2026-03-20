@@ -6,80 +6,50 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .shared_components import Actor, MixedActionActor, TrainerUtils
+from .shared_components import TrainerUtils # Actor, MixedActionActor, 
 
 
 TensorBatch = List[torch.Tensor]
 
+class Actor(nn.Module):
+    def __init__(
+            self, 
+            state_dim: int, 
+            action_dim: int, 
+            hidden_dim: List[int], 
+            dropout: float = 0.1,
+            negative_slope: float = 0.1
+            ):
+        
+        super(Actor, self).__init__()
 
-# class Actor(nn.Module):
-# 	"""
-# 	This is the implementation from CORL
-# 	"""
-# 	def __init__(self, state_dim, action_dim, max_action):
-# 		super(Actor, self).__init__()
+        layers = []
+        input_dim = state_dim
 
-# 		self.l1 = nn.Linear(state_dim, 256)
-# 		self.l2 = nn.Linear(256, 256)
-# 		self.l3 = nn.Linear(256, action_dim)
-		
-# 		self.max_action = max_action
-		
+        for h_dim in hidden_dim:
+            layers.append(nn.Linear(input_dim, h_dim))
+            # Critical: Always keep the activation, then apply dropout
+            layers.append(nn.LeakyReLU(negative_slope)) 
+            if dropout > 0:
+                layers.append(nn.Dropout(dropout))
+            input_dim = h_dim
 
-# 	def forward(self, state):
-# 		a = F.relu(self.l1(state))
-# 		a = F.relu(self.l2(a))
-# 		return self.max_action * torch.tanh(self.l3(a))
+        self.backbone = nn.Sequential(*layers)
+        self.output_head = nn.Linear(input_dim, action_dim)
+        self.sigmoid = nn.Sigmoid()
 
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
+        # Returns values in [0, 1] for both Vasopressors and Fluids
+        return self.sigmoid(self.output_head(self.backbone(state)))
 
-# class MixedActionActor(nn.Module):
-# 	"""
-# 	This is the same actor from behavioural_cloning.py. I've copied it here
-# 	as changes will likely be made specific to TD3+BC training.
-# 	"""
-# 	def __init__(self, state_dim: int, dose_actions: int, 
-# 			binary_actions: int, hidden_dim: List[int], max_action: float):
-# 		super().__init__()
+    @torch.no_grad()
+    def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
+        self.eval() # Ensure dropout is OFF during inference
+        state = torch.as_tensor(state, device=device, dtype=torch.float32)
+        if state.ndim == 1:
+            state = state.unsqueeze(0)
+        return self.forward(state).cpu().numpy().flatten()
 
-# 		# Build network dynamically from hidden_dim list
-# 		layers = []
-# 		input_dim = state_dim
-
-# 		# Add hidden layers
-# 		for h_dim in hidden_dim:
-# 			layers.extend([
-# 				nn.Linear(input_dim, h_dim),
-# 				nn.ReLU()
-# 			])
-# 			input_dim = h_dim
-
-# 		# Create the shared network (this was missing!)
-# 		self.shared_net = nn.Sequential(*layers)
-
-# 		# Separate heads for different action types
-# 		self.dose_head = nn.Sequential(
-# 			nn.Linear(input_dim, dose_actions),
-# 			nn.Sigmoid()  # Outputs in [0,1] range for doses
-# 		)
-
-# 		self.binary_head = nn.Sequential(
-# 			nn.Linear(input_dim, binary_actions), 
-# 			nn.Sigmoid()  # Outputs probabilities for binary actions
-# 		)
-
-# 		self.max_action = max_action
-# 		self.dose_actions = dose_actions
-
-# 	def forward(self, state: torch.Tensor) -> torch.Tensor:
-# 		# Shared features
-# 		features = self.shared_net(state)
-
-# 		# Different processing for different action types
-# 		dose_outputs = self.dose_head(features) * self.max_action  # Scale doses
-# 		binary_outputs = self.binary_head(features)  # Keep as probabilities
-
-# 		# Concatenate outputs
-# 		return torch.cat([dose_outputs, binary_outputs], dim=1)
 
 class Critic(nn.Module):
 	def __init__(self, state_dim, action_dim):
@@ -118,6 +88,38 @@ class Critic(nn.Module):
 		return q1
 
 
+	@torch.no_grad()
+	def get_neuron_stats(self, state, action):
+		# Ensure we are in eval mode to avoid Dropout interference
+		self.eval()
+		
+		# Concatenate input
+		x_init = torch.cat([state, action], dim=-1)
+		
+		stats = {}
+		# We only need to check q1_net to get a representative sample of activity
+		x = x_init
+		leaky_idx = 0
+		for layer in self.q1_net:
+			x = layer(x)
+			if isinstance(layer, nn.LeakyReLU):
+				# (x <= 0) is 1 for inactive, 0 for active
+				pct_inactive = (x <= 0).float().mean().item() * 100
+				stats[f"inactive_L{leaky_idx}_pct"] = pct_inactive
+				leaky_idx += 1
+				
+		return stats
+	
+	def get_grad_norm(self):
+		total_norm = 0
+		for p in self.parameters():
+			if p.grad is not None:
+				param_norm = p.grad.detach().norm(2)
+				total_norm += param_norm.item() ** 2
+		total_norm = total_norm ** 0.5
+		return total_norm
+
+
 class TD3_BC(object):
 	def __init__(
 		self,
@@ -136,6 +138,8 @@ class TD3_BC(object):
         dose_actions: int = 2,  #  Number of dose actions
         binary_actions: int = 2,		
 		tau: float = 0.005,
+		grad_clip: float = None,  # Add grad_clip argument
+		ema_alpha: float = 0.99  # Add ema_alpha argument for moving
     ):
 		
 		self.max_action = max_action
@@ -153,6 +157,8 @@ class TD3_BC(object):
 		self.dose_actions = dose_actions
 		self.binary_actions = binary_actions
 		self.tau = tau
+		self.grad_clip = grad_clip
+		self.ema_alpha = ema_alpha
 
 		self.total_it = 0
 
@@ -171,37 +177,35 @@ class TD3_BC(object):
 		return self.actor(state).cpu().data.numpy().flatten()
 
 
-	def compute_actor_loss(self, pi: torch.Tensor, action: torch.Tensor) -> Dict[str, float]:
-		log_dict = {}
-		if self.action_mode in ["binary_only", "continuous_only"]:
-			
-			# actor_loss = self._compute_actor_loss(pi, action)
-			actor_loss = TrainerUtils._compute_actor_loss(
-				pi=pi, 
-				action=action, 
-				action_mode=self.actor.action_mode,
-				dose_actions=self.dose_actions if hasattr(self, 'dose_actions') else None
-			)
+	def compute_actor_loss(pi: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+		"""
+		Refined BC Loss for sparse clinical actions (Fluids/Vasopressors).
+		"""
+		# 1. Standard MSE for the base BC loss
+		mse_loss = F.mse_loss(pi, action, reduction='none')
+		
+		# 2. Create a 'Clinical Importance' weight
+		# We weight time-steps where the doctor actually intervened (action > 0)
+		# This prevents the model from just learning to 'do nothing'
+		weights = torch.where(action > 0, 5.0, 1.0) 
+		
+		weighted_bc_loss = (mse_loss * weights).mean()
 
-			log_dict["actor_loss_prelim"] = actor_loss.item()
+		# 3. Optional: Add a small L1 penalty to keep the policy sparse
+		# (Only if you find the AI is 'micro-dosing' constantly)
+		l1_sparse = pi.abs().mean() * 1e-3
+		
+		total_bc_loss = weighted_bc_loss + l1_sparse
 
-		elif self.action_mode == "mixed":
-			actor_loss, dose_loss, binary_loss = TrainerUtils._compute_actor_loss(
-				pi=pi, 
-				action=action, 
-				action_mode=self.actor.action_mode,
-				dose_actions=self.dose_actions if hasattr(self, 'dose_actions') else None
-			)     
-			
-			# Log individual losses for monitoring
-			log_dict["actor_loss_prelim"] = actor_loss.item()
-			log_dict["dose_loss"] = dose_loss.item() 
-			log_dict["binary_loss"] = binary_loss.item()
-
-		return actor_loss, log_dict
-
-
-
+		actor_dict = {
+			"bc_mse_only": mse_loss.mean().item(),
+			"weighted_bc_loss": weighted_bc_loss.item(),
+			"pi_mean_val": pi.mean().item()
+		}
+		
+		return total_bc_loss, actor_dict
+		
+		
 	def target_q(self, action, next_state, reward, not_done):
 		with torch.no_grad():
 			# Select action according to policy and add clipped noise
@@ -211,7 +215,7 @@ class TD3_BC(object):
 			
 			next_action = (
 				self.actor_target(next_state) + noise
-			).clamp(-self.max_action, self.max_action)
+			).clamp(0, self.max_action) # action must be min maxed (or log min maxed) so min is 0.
 
 			# Compute the target Q value
 			target_Q1, target_Q2 = self.critic_target(next_state, next_action)
@@ -240,7 +244,25 @@ class TD3_BC(object):
 
 		# Optimize the critic
 		self.critic_optimizer.zero_grad()
-		critic_loss.backward()
+		critic_loss.backward()		
+		
+		# capture gradient norms
+		grad_norm = {"raw_grad_norm": self.critic.get_grad_norm()}
+
+		# determine whether to clip gradients based on grad_clip value
+		grad_norm['was_clipped'] = 1.0 if (self.grad_clip and grad_norm['raw_grad_norm'] > self.grad_clip) else 0.0
+		
+		# update the moving average of the clipping binary
+		self.clip_fraction_ema = self.ema_alpha * self.clip_fraction_ema + (1 - self.ema_alpha) * grad_norm['was_clipped']
+		grad_norm['clip_fraction_ema'] = self.clip_fraction_ema
+		
+		# Gradient clipping if specified
+		if self.grad_clip is not None:
+			torch.nn.utils.clip_grad_norm_(
+				self.critic.parameters(), 
+				self.grad_clip
+			)
+			
 		self.critic_optimizer.step()
 
 		# Delayed policy updates
@@ -260,21 +282,32 @@ class TD3_BC(object):
 			# Optimize the actor 
 			self.actor_optimizer.zero_grad()
 			actor_loss.backward()
-			self.actor_optimizer.step()
+			self.actor_optimizer.step()		
 
-			# Update the frozen target models
-			for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-				target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+			with torch.no_grad():
+				for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+					target_param.mul_(1.0 - self.tau)
+					target_param.add_(param.data * self.tau)
 
-			for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
-				target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+				for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
+					target_param.mul_(1.0 - self.tau)
+					target_param.add_(param.data * self.tau)
+						
+			# # Update the frozen target models
+			# for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+			# 	target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-		return log_dict
+			# for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
+			# 	target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+
+		return log_dict, grad_norm
 	
 
 	@torch.no_grad()
 	def estimate_v0(self, start_states: torch.Tensor, batch_size: int = 256) -> float:
 		"""
+		Estimate the value of the initial state under the current policy.
+		NEED TO CONFIRM THIS IS GETTING START STATES
 		"""
 		self.actor.eval(); 
 		self.critic.eval()

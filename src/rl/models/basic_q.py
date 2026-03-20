@@ -66,16 +66,6 @@ class Critic(nn.Module):
             nn.Linear(self.hidden_dim3, 1)
         )
 
-        # # Q1 architecture
-        # self.l1 = nn.Linear(state_dim + action_dim, 256)
-        # self.l2 = nn.Linear(256, 256)
-        # self.l3 = nn.Linear(256, 1)
-
-		# # Q2 architecture
-        # self.l4 = nn.Linear(state_dim + action_dim, 256)
-        # self.l5 = nn.Linear(256, 256)
-        # self.l6 = nn.Linear(256, 1)
-
         self.apply(self._init_weights)
         
     
@@ -120,29 +110,9 @@ class Critic(nn.Module):
         q1 = self.q1_net(sa)
         q2 = self.q2_net(sa)
 
-        # q1 = F.relu(self.l1(sa))
-        # q1 = F.relu(self.l2(q1))
-        # q1 = self.l3(q1)
-
-        # q2 = F.relu(self.l4(sa))
-        # q2 = F.relu(self.l5(q2))
-        # q2 = self.l6(q2)
         return q1, q2
+    
 
-
-    # def Q1(self, state, action):
-    #     # normalize states before concatenation
-    #     state = self.state_norm(state)        
-        
-    #     sa = torch.cat([state, action], 1)
-
-    #     q1 = self.q1_net(sa)
-
-    #     # q1 = F.relu(self.l1(sa))
-    #     # q1 = F.relu(self.l2(q1))
-    #     # q1 = self.l3(q1)
-    #     return q1
-	
     @torch.no_grad()
     def get_neuron_stats(self, state, action):
         # Ensure we are in eval mode to avoid Dropout interference
@@ -166,14 +136,14 @@ class Critic(nn.Module):
         return stats
 
 
-def get_grad_norm(model):
-    total_norm = 0
-    for p in model.parameters():
-        if p.grad is not None:
-            param_norm = p.grad.detach().data.norm(2)
-            total_norm += param_norm.item() ** 2
-    total_norm = total_norm ** 0.5
-    return total_norm
+    def get_grad_norm(self):
+        total_norm = 0
+        for p in self.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.detach().norm(2)
+                total_norm += param_norm.item() ** 2
+        total_norm = total_norm ** 0.5
+        return total_norm
 
 
 
@@ -320,7 +290,7 @@ class Q_Learner(object):
         critic_loss.backward()
         
         # capture gradient norms
-        grad_norm = {"raw_grad_norm": get_grad_norm(self.critic)}
+        grad_norm = {"raw_grad_norm": self.critic.get_grad_norm()}
         
         # determine whether to clip gradients based on grad_clip value
         grad_norm['was_clipped'] = 1.0 if (self.grad_clip and grad_norm['raw_grad_norm'] > self.grad_clip) else 0.0

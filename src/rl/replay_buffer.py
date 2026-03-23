@@ -182,9 +182,9 @@ class DynamicDeepHitTransformerDataset(Dataset):
             time_to_event = torch.cat([tte_pad_block, time_to_event], dim=0)
 
         # zero out or carry forward response features at final timestep for RL setting
-        if self.response_zero_ind:
+        if len(self.response_zero_ind) > 0:
             trajectories[-1, self.response_zero_ind] = 0.0
-        if self.carry_forward_ind:
+        if len(self.carry_forward_ind) > 0:
             trajectories[-1, self.carry_forward_ind] = trajectories[-2, self.carry_forward_ind]
 
         # add local window time feature (time since start of window) as an additional input feature

@@ -302,7 +302,7 @@ class TD3_BC(object):
 		# compute the target Q value
 		target_Q = self.target_q(action, next_state, reward, not_done)
 
-		# Get current Q estimates
+		# Get current Q estimates>
 		current_Q1, current_Q2 = self.critic(state, action)
 
 		# Compute critic loss

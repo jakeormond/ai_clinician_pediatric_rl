@@ -215,6 +215,10 @@ class ShardProcessor:
         reward_type = config_manager.data_config['reward_type']
         if reward_type == 'health_score':
             health_score = self.dynamic_deephit_predictions['health_score']
+            
+            # health score is from 0 to 100, we need to centre it so it is -50 to 50
+            health_score = health_score - 50.0            
+            
             index_ptr = self.dynamic_deephit_dataset['index_ptr']
 
             # calculate hourly change; first hour should be 0

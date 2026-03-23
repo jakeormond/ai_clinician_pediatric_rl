@@ -108,7 +108,28 @@ class DynamicDeepHitTransformerDataset(Dataset):
         # get indices of response features to zero out or carry forward at the final timestep (for RL setting)
         self.response_zero_ind = data_processor.dynamic_deephit_dataset['response_zero_ind']
         self.carry_forward_ind = data_processor.dynamic_deephit_dataset['carry_forward_ind']
+
+        # get the indices of the actions to be used for RL, it is the intersection of these
+        # and the response_zero_ind and carry_forward_ind features which we need to omit 
+        # from the final timestep
+        actions = config_manager.training_config['actions']
                
+        if actions is not None:
+            action_ind = []
+            for action in actions:
+                ind = self.feature_names.index(action)
+                action_ind.append(ind)
+
+                ind2 = self.feature_names.index(action + "_mask")
+                action_ind.append(ind2)
+
+                ind3 = self.feature_names.index(action + "_delta")
+                action_ind.append(ind3)
+
+
+            self.response_zero_ind = np.sort(list(set(self.response_zero_ind) & set(action_ind)))
+            self.carry_forward_ind = np.sort(list(set(self.carry_forward_ind) & set(action_ind)))
+
         self.reshuffle_subsample() 
 
 

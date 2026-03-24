@@ -123,6 +123,7 @@ def inference_loop(
         model, 
         processor, 
         config_manager, 
+        hyperparams=None,
         filename=None, 
         model_type=None, 
         experiment_dir=None,
@@ -136,6 +137,23 @@ def inference_loop(
     response_zero_ind = processor.dynamic_deephit_dataset['response_zero_ind']
     carry_forward_ind = processor.dynamic_deephit_dataset['carry_forward_ind']
 
+    actions = hyperparams['actions']
+    
+    if actions is not None:
+        action_ind = []
+        for action in actions:
+            ind = processor.dynamic_deephit_dataset['feature_names'].index(action)
+            action_ind.append(ind)
+
+            ind2 = processor.dynamic_deephit_dataset['feature_names'].index(action + "_mask")
+            action_ind.append(ind2)
+
+            ind3 = processor.dynamic_deephit_dataset['feature_names'].index(action + "_delta")
+            action_ind.append(ind3)
+
+        response_zero_ind = np.sort(list(set(response_zero_ind) & set(action_ind)))
+        carry_forward_ind = np.sort(list(set(carry_forward_ind) & set(action_ind)))
+    
     # create storage for predictions
     all_predictions = []   
     all_outputs = [] 
@@ -160,8 +178,10 @@ def inference_loop(
             windows = padded_traj.unfold(0, window_length, 1).transpose(1, 2)
 
             # zero out or carry forward response features at the final timestep of each window, as appropriate for the RL setting
-            windows[:, -1, response_zero_ind] = 0.0
-            windows[:, -1, carry_forward_ind] = windows[:, -2, carry_forward_ind]
+            if len(response_zero_ind) > 0:
+                windows[:, -1, response_zero_ind] = 0.0
+            if len(carry_forward_ind) > 0:
+                windows[:, -1, carry_forward_ind] = windows[:, -2, carry_forward_ind]
             
             # initialize loss mask (not used during inference, but required by model forward), zeros of shape (batch_size, window_length)
             # loss_mask = torch.ones((windows.shape[0], window_length), dtype=torch.float32, device=device)
@@ -489,6 +509,7 @@ def get_predictions(config_manager, model_type, experiment_dir, set='test', stay
             dynamic_deephit_model, 
             processor, 
             config_manager,
+            hyperparams=hyperparams,
             filename=filename,
             model_type=model_type,
             experiment_dir=experiment_dir,

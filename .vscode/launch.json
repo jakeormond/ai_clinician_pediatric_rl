@@ -150,6 +150,7 @@
                 "--model_type", "dynamic_deephit_transformer",
                 "--mode", "single_split", 
                 "--split_num", "0",
+                "--model_dir", "vent_models/fio2_peep_tidal_volume",
                 "--experiment_variant", "prediction"
             ],
             "console": "integratedTerminal",

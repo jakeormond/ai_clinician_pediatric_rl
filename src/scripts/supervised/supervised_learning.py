@@ -208,6 +208,9 @@ def main():
 
             if config_manager.hospital == "mimic_iv":
                 time_bins = [0, 13, 28, 47, 75, 116, 185, 322, 1435]
+            elif config_manager.hospital == "choc":
+                # calculated in get_time_bins.ipynb based on the distribution of trajectory lengths in the CHOC dataset, with a max trajectory length of 60 days (1440 hours)
+                time_bins = [0, 45, 94, 154, 230, 329, 472, 696, 1441]
             else:            
                 time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
             config_manager.max_encounter_length = max_encounter_length
@@ -275,8 +278,12 @@ def main():
             
             if config_manager.hospital == "mimic_iv":
                 time_bins = [0, 13, 28, 47, 75, 116, 185, 322, 1435]
+            elif config_manager.hospital == "choc":
+                # calculated in get_time_bins.ipynb based on the distribution of trajectory lengths in the CHOC dataset, with a max trajectory length of 60 days (1440 hours)
+                time_bins = [0, 45, 94, 154, 230, 329, 472, 696, 1441]
             else:            
-                time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
+                # time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
+                raise ValueError(f"Time bins for hospital {config_manager.hospital} not defined")
             config_manager.max_encounter_length = max_encounter_length
             config_manager.time_bins = time_bins  
 

@@ -164,9 +164,17 @@ class ShardProcessor:
         self.dynamic_deephit_dataset['response_zero_ind'] = [] # for final timestep features that should be zeroed out because they are responses to interventions at that timestep, and we don't want to feed the model the true response values at the final timestep, as that would leak information about the target
         self.dynamic_deephit_dataset['carry_forward_ind'] = [] # for rinal timestep features that should be carry-forwarded because they are responses to interventions at that timestep, and we want to carry forward the last observed value instead of using the true response value at the final timestep, to avoid leaking information about the target, but also to provide a more realistic scenario for the model to learn from, as in real life, we wouldn't have access to the true response values at the final timestep during inference, but we would have access to the last observed values that we can carry forward.
         
-        physiological_feature_sets = [
-            'hemodynamics', 'labs', 'neurological', 'routine_vital_signs', 'respiratory'
-            ]
+        if config_manager.hospital == 'mimic_iv':
+            physiological_feature_sets = [
+                'hemodynamics', 'labs', 'neurological', 'routine_vital_signs', 'respiratory'
+                ]
+        elif config_manager.hospital == 'choc': # demographics included because it has weight_kg
+            physiological_feature_sets = [
+                'airway', 'blood_gas', 'demographics', 'respiratory', 'input_output',
+                'labs', 'neuro', 'vitals'
+                ]
+        else:
+            raise ValueError(f"Invalid hospital: {config_manager.hospital}. Supported hospitals are: 'mimic_iv' and 'choc'.")
                 
         for i, feature in enumerate(self.dynamic_deephit_dataset['feature_names']):
             if feature == 'time':
@@ -183,7 +191,10 @@ class ShardProcessor:
                     self.dynamic_deephit_dataset['physiological_feature_type'].append(data_type)
 
                 elif response_intervention == 'intervention':
-                    if feature_set in ['fluids_intake', 'medications']:
+                    if feature_set in [
+                        'fluids_intake', 'medications', 'infusion', 'input_output', 'other_meds',
+                        'sedation', 'vasoactive_inotropic_infusion'
+                        ]:
                         self.dynamic_deephit_dataset['response_zero_ind'].append(i)
                     else:
                         self.dynamic_deephit_dataset['carry_forward_ind'].append(i)
@@ -574,7 +585,8 @@ class ShardProcessor:
                 trajectories, feature_names = self.add_time_column(trajectories, stay_ids, index_ptr, feature_names)
             
             # get the index of the death feature, and drop it from the trajectories
-            death_feature_index = feature_names.index('death')
+            death_feature_name = config_manager.data_config['target_col']
+            death_feature_index = feature_names.index(death_feature_name)
             # update feature_names
             feature_names.pop(death_feature_index)
             trajectories = np.delete(trajectories, death_feature_index, axis=1)
@@ -622,8 +634,10 @@ class ShardProcessor:
             trajectories, feature_names = self.add_time_column(trajectories, stay_ids, index_ptr, feature_names)        
 
         # get the index of the death feature
-        death_feature_index = feature_names.index('death')
-        
+        # death_feature_index = feature_names.index('death')
+        death_feature_name = config_manager.data_config['target_col']
+        death_feature_index = feature_names.index(death_feature_name)
+
         # extract death feature values before removing
         death_values = trajectories[:, death_feature_index]
         

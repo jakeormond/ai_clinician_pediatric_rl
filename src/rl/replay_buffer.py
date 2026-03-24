@@ -120,11 +120,15 @@ class DynamicDeepHitTransformerDataset(Dataset):
                 ind = self.feature_names.index(action)
                 action_ind.append(ind)
 
-                ind2 = self.feature_names.index(action + "_mask")
-                action_ind.append(ind2)
+                mask_feature_name = action + "_mask"
+                if mask_feature_name in self.feature_names:                
+                    ind2 = self.feature_names.index(action + "_mask")
+                    action_ind.append(ind2)
 
-                ind3 = self.feature_names.index(action + "_delta")
-                action_ind.append(ind3)
+                delta_feature_name = action + "_delta"
+                if delta_feature_name in self.feature_names:
+                    ind3 = self.feature_names.index(action + "_delta")
+                    action_ind.append(ind3)
 
 
             self.response_zero_ind = np.sort(list(set(self.response_zero_ind) & set(action_ind)))

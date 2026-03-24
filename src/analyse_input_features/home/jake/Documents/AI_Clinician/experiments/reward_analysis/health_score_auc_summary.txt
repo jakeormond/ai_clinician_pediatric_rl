@@ -1,8 +1,0 @@
-roc_auc: 0.20581184359023252
-roc_auc_ci: (0.2048114191996386, 0.20686516139896208)
-average_precision: 0.04353231397288078
-average_precision_ci: (0.04337351452711869, 0.04372639227458012)
-pos_rate: 0.0747271722853599
-n_samples: 2878190
-n_boot_valid: 10
-plot: home/jake/Documents/AI_Clinician/experiments/reward_analysis/roc_pr_curves.png

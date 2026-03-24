@@ -1,4 +1,4 @@
-dataframe_path: "combined_data/hourly/combined_hourly_features_phoenix_sepsis.parquet"
+shard_dir: "combined_data/hourly_all_patients"
 features_to_use_path: "dataframes/features_to_use.csv"
 model_type: "supervised_learning"
 
@@ -6,7 +6,7 @@ seed: 42
 
 proportion_w_data: 0.80
 
-max_encounter_length: 2880  # in hours, 4 months
+max_encounter_length: 1440  # in hours, 2 months
 
 target_col: "mortality"
 
@@ -18,9 +18,9 @@ normalize_actions: False
 transform_actions: False
 create_binary_actions: False
 
-time_col: "EVENT_END_DT_TM"
-encounter_col: "MASKED_ENCNTR_ID"
-
+time_col: "time"
+add_time_col: True
+encounter_col: "stay_id"
 
 
 

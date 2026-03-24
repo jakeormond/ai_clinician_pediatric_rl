@@ -159,13 +159,14 @@ def create_processor_from_shards(config_manager, normalize=True, set_to_return='
 
 def create_buffer(processor, batch_size, config_manager, shuffle=True):
     if config_manager.hospital == 'choc' and config_manager.model_type == 'dynamic_deephit':
-        dataset = DynamicDeepHitDataset(processor.dynamic_deephit_dataset)
-        buffer = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+        # dataset = DynamicDeepHitDataset(processor.dynamic_deephit_dataset)
+        # buffer = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+        raise NotImplementedError("DynamicDeepHitDataset is not implemented for CHOC dataset. Only DynamicDeepHitTransformerDataset is implemented for CHOC.")
 
     elif config_manager.hospital == 'choc' and config_manager.model_type != 'dynamic_deephit_transformer':
         raise NotImplementedError("Only dynamic_deephit model is implemented for CHOC dataset.")
 
-    elif config_manager.hospital == 'mimic_iv' and \
+    elif (config_manager.hospital == 'mimic_iv' or config_manager.hospital == 'choc') and \
         (config_manager.model_type == 'dynamic_deephit_transformer' or config_manager.model_type == 'dynamic_deephit'):
         dataset = DynamicDeepHitTransformerDataset(processor, config_manager)
         buffer = DataLoader(
@@ -177,34 +178,37 @@ def create_buffer(processor, batch_size, config_manager, shuffle=True):
             pin_memory=False,       # set True if transfers dominate
             )
 
-    elif config_manager.hospital == 'mimic_iv' and config_manager.training_config['use_windows_from_memory']:
-        dataset = DynamicDeepHit_InMemory(
-            processor,
-            config_manager
-        )
+    elif (config_manager.hospital == 'mimic_iv' or config_manager.hospital == 'choc') \
+        and config_manager.training_config['use_windows_from_memory']:
+        # dataset = DynamicDeepHit_InMemory(
+        #     processor,
+        #     config_manager
+        # )
 
-        buffer = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=shuffle
-        )
+        # buffer = DataLoader(
+        #     dataset,
+        #     batch_size=batch_size,
+        #     shuffle=shuffle
+        # )
+        raise NotImplementedError("In-memory training is not implemented yet. Only lazy loading is implemented for MIMIC-IV.")     
 
     elif config_manager.hospital == 'mimic_iv' and not config_manager.training_config['use_windows_from_memory']:
-        dataset = DynamicDeepHit_Lazy(
-            processor,
-            config_manager
-        )
+        # dataset = DynamicDeepHit_Lazy(
+        #     processor,
+        #     config_manager
+        # )
         
-        buffer = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=shuffle,
-            num_workers=16, # set to 0 for debugging; increase for performance (e.g., 4 or 8)
-            worker_init_fn=worker_init_fn,
-            pin_memory=True,
-            persistent_workers=True,
-            prefetch_factor=4,
-        )
+        # buffer = DataLoader(
+        #     dataset,
+        #     batch_size=batch_size,
+        #     shuffle=shuffle,
+        #     num_workers=16, # set to 0 for debugging; increase for performance (e.g., 4 or 8)
+        #     worker_init_fn=worker_init_fn,
+        #     pin_memory=True,
+        #     persistent_workers=True,
+        #     prefetch_factor=4,
+        # )
+        raise NotImplementedError("Lazy loading training is not implemented yet. Only in-memory training is implemented for MIMIC-IV.")
     
     return buffer, dataset
 

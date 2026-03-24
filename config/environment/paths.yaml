@@ -25,6 +25,7 @@ bayreuth_hpc:
 imperial_hpc:
   choc:
     experiments_dir: "/rds/general/user/jormond/home/projects/ai_clinician/experiments"
+    supervised_final_model_dir: "/rds/general/user/jormond/home/projects/ai_clinician/dynamic_deephit_results/choc/"
     data_dir: "/rds/general/user/jormond/home/projects/ai_clinician/data/choc_data"
     code_dir: "/rds/general/user/jormond/home/projects/ai_clinician/code/choc_code"
   mimic_iv:

@@ -113,6 +113,9 @@ class DynamicDeepHitTransformerDataset(Dataset):
         # and the response_zero_ind and carry_forward_ind features which we need to omit 
         # from the final timestep
         actions = config_manager.training_config['actions']
+        # if actions is a list of lists, flatten it
+        if isinstance(actions, list) and len(actions) > 0 and isinstance(actions[0], list):
+            actions = [item for sublist in actions for item in sublist]
                
         if actions is not None:
             action_ind = []

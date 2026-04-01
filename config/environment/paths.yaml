@@ -1,6 +1,7 @@
 local:
   choc:
     experiments_dir: "/home/jake/Documents/AI_Clinician/experiments"
+    supervised_final_model_dir: "/home/jake/Documents/AI_Clinician/dynamic_deephit_results/choc/"
     data_dir: "/home/jake/Documents/AI_Clinician/choc_data"
     code_dir: "/home/jake/Documents/AI_Clinician/choc_code"
   mimic_iv:
@@ -13,6 +14,7 @@ local:
 bayreuth_hpc:
   choc:
     experiments_dir: "/groups/a-faisal/jakeormond/experiments"
+    supervised_final_model_dir: "/groups/a-faisal/jakeormond/dynamic_deephit_results/choc/"
     data_dir: "/groups/a-faisal/jakeormond/data/choc_data"
     code_dir: "/groups/a-faisal/jakeormond/code/choc_code"
   mimic_iv:

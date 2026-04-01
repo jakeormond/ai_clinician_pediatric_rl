@@ -145,11 +145,15 @@ def inference_loop(
             ind = processor.dynamic_deephit_dataset['feature_names'].index(action)
             action_ind.append(ind)
 
-            ind2 = processor.dynamic_deephit_dataset['feature_names'].index(action + "_mask")
-            action_ind.append(ind2)
+            mask_name = action + "_mask"
+            if mask_name in processor.dynamic_deephit_dataset['feature_names']:
+                ind2 = processor.dynamic_deephit_dataset['feature_names'].index(action + "_mask")
+                action_ind.append(ind2)
 
-            ind3 = processor.dynamic_deephit_dataset['feature_names'].index(action + "_delta")
-            action_ind.append(ind3)
+            delta_name = action + "_delta"
+            if delta_name in processor.dynamic_deephit_dataset['feature_names']:
+                ind3 = processor.dynamic_deephit_dataset['feature_names'].index(action + "_delta")
+                action_ind.append(ind3)
 
         response_zero_ind = np.sort(list(set(response_zero_ind) & set(action_ind)))
         carry_forward_ind = np.sort(list(set(carry_forward_ind) & set(action_ind)))

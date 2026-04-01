@@ -243,7 +243,17 @@ class ShardProcessor:
             #clip rewards to -5, 5
             hourly_health_change = np.clip(hourly_health_change, -5.0, 5.0)
            
-            self.dynamic_deephit_predictions['reward'] = hourly_health_change.astype(np.float32)                                         
+            # scale the hourly change
+            hourly_change_scale = config_manager.training_config['health_score_hourly_change_scale']
+            hourly_health_change *= hourly_change_scale
+
+            # scale the raw health score
+            health_score_scale = config_manager.training_config['health_score_scale']
+            health_score *= health_score_scale
+
+            # add the scaled health score to the hourly change to get the final reward  
+            health_score_total = hourly_health_change + health_score        
+            self.dynamic_deephit_predictions['reward'] = health_score_total.astype(np.float32)                                         
         
         else:
             raise ValueError(f"Invalid reward type: {reward_type}. Supported reward types are: 'health_score' and 'time_to_event'.")

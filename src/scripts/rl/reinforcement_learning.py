@@ -94,10 +94,17 @@ def parse_arguments():
                     help='Number of epochs to train for - should be 1000, but for testing we set to 10')
     
     parser.add_argument('--cohort', type=str, default=None,
-        choices=['all', 'sepsis_strict', 'sepsis_broad', 
+        choices=['all', 'sepsis_strict', 'sepsis_broad', 'sepsis',
             'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad'],
         help='Cohort to use for this experiment (overrides config file)')  
+    
+    parser.add_argument('--model_dir', type=str, default=None,
+        help='Directory of the model to load for prediction or feature evaluation (required for prediction and feature_evaluation experiment variants)')
 
+    
+    
+    
+    
     parser.add_argument('--action_mode', 
                         type=str, 
                         default = "continuous_only",   

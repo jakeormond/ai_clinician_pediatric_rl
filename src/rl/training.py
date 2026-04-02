@@ -125,8 +125,8 @@ def create_processor_from_shards(config_manager, normalize=True, set_to_return='
         return test_processor
     
 
-def create_buffer(processor, batch_size, shuffle=True, scaler=None):
-    scaler = processor.create_rl_dataset(states="model_outputs", scaler=scaler) # states argument is not currently used, but we can add options for different state representations in the future
+def create_buffer(processor, batch_size, shuffle=True, scaler=None, action_names=None):
+    scaler = processor.create_rl_dataset(states="model_outputs", scaler=scaler, action_names=action_names) # states argument is not currently used, but we can add options for different state representations in the future
     dataset = RLDataset(processor) # model_outputs refer to dynamic_deephit transformer outputs; other options not currently implemented
     buffer = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     return buffer, scaler
@@ -481,7 +481,7 @@ def single_split_training(config_manager):
             final_model=False
         )
 
-    val_buffer, _ = create_buffer(val_processor, config_manager.training_config['batch_size'], shuffle=False, scaler=scaler)
+    val_buffer, _ = create_buffer(val_processor, config_manager.training_config['batch_size'], shuffle=False, scaler=scaler, action_names=config_manager.data_config['actions'])
     final_val_losses, _ = evaluate_final_model( # this evaluates on the entire test set (during training we only use a subset for speed)
         trainer, 
         val_buffer, 
@@ -607,8 +607,8 @@ def train_with_hyperparameters(
     loss_metric = config_manager.training_config['loss_metric']
 
     # Create replay buffers
-    training_buffer, scaler = create_buffer(train_processor, batch_size)
-    val_test_buffer, _ = create_buffer(val_test_processor, batch_size, scaler=scaler)
+    training_buffer, scaler = create_buffer(train_processor, batch_size, action_names=config_manager.data_config['actions'])
+    val_test_buffer, _ = create_buffer(val_test_processor, batch_size, scaler=scaler, action_names=config_manager.data_config['actions'])
     
     # get starting state distribution for V0 estimation if we're doing TD3-BC
     if config_manager.training_config['monitor_v0']:

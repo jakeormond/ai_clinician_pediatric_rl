@@ -55,23 +55,23 @@ class RLDataset(Dataset):
             ]
 
 
-class DynamicDeepHitDataset(Dataset):
-    def __init__(self, dyn_deephit_dataset: Dict[str, np.ndarray]):
-        self.features = torch.tensor(dyn_deephit_dataset["features"], dtype=torch.float32)
-        self.time_to_event = torch.tensor(dyn_deephit_dataset["time_to_event"], dtype=torch.float32)
-        self.event = torch.tensor(dyn_deephit_dataset["event"], dtype=torch.float32)
-        self.mask = torch.tensor(dyn_deephit_dataset["mask"], dtype=torch.float32)
+# class DynamicDeepHitDataset(Dataset):
+#     def __init__(self, dyn_deephit_dataset: Dict[str, np.ndarray]):
+#         self.features = torch.tensor(dyn_deephit_dataset["features"], dtype=torch.float32)
+#         self.time_to_event = torch.tensor(dyn_deephit_dataset["time_to_event"], dtype=torch.float32)
+#         self.event = torch.tensor(dyn_deephit_dataset["event"], dtype=torch.float32)
+#         self.mask = torch.tensor(dyn_deephit_dataset["mask"], dtype=torch.float32)
 
-    def __len__(self) -> int:
-        return len(self.mask)
+#     def __len__(self) -> int:
+#         return len(self.mask)
 
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        return [
-            self.features[idx],
-            self.time_to_event[idx],
-            self.event[idx],
-            self.mask[idx]
-        ]
+#     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+#         return [
+#             self.features[idx],
+#             self.time_to_event[idx],
+#             self.event[idx],
+#             self.mask[idx]
+#         ]
     
 
 

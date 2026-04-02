@@ -48,11 +48,10 @@ class ShardProcessor:
         # find the shard dir for the given split
         if config_manager.split_num is None:
             shard_dir = os.path.join(config_manager.paths['data_dir'], 
-                        config_manager.data_config['shard_dir'])
+                config_manager.data_config['shard_dir'])
         else:
             shard_dir = os.path.join(config_manager.paths['data_dir'], 
-                        config_manager.data_config['shard_dir'], 
-                        f"split_{config_manager.split_num}")
+                config_manager.data_config['shard_dir'], f"split_{config_manager.split_num}")
 
         # switch to tuning dir if we're in tuning mode
         if not config_manager.training_config['tuning']:
@@ -75,16 +74,19 @@ class ShardProcessor:
             # if we are running RL, load reward
             if config_manager.data_config['model_type'] == 'reinforcement_learning' and config_manager.data_config['use_reward']:
                 # get the parent directory for the supervised model which generates the health score
-                supervised_model_dir = os.path.dirname(config_manager.paths['supervised_final_model_dir'])
-                supervised_model_dir = os.path.join(supervised_model_dir, "five_splits", 
-                                                       f"split_{config_manager.split_num}", "final_model")
+                # supervised_model_dir = os.path.dirname(config_manager.paths['supervised_final_model_dir'])
+                # supervised_model_dir = os.path.join(supervised_model_dir, "five_splits", 
+                #                                        f"split_{config_manager.split_num}", "final_model")
                 # get the folder inside
-                final_model_dir = os.listdir(supervised_model_dir)[0]
+                # final_model_dir = os.listdir(supervised_model_dir)[0]
+
+                final_model_dir = config_manager.data_config['reward_path']
 
                 pred_split = self.split
                 if self.split == 'tuning':
                     pred_split = 'train' # the tuning set predictions are generated from the model trained on the training set, so we need to load the train_set_predictions.h5 file
-                prediction_file_path = os.path.join(supervised_model_dir, final_model_dir, f"{pred_split}_set_predictions.h5")
+                # prediction_file_path = os.path.join(supervised_model_dir, final_model_dir, f"{pred_split}_set_predictions.h5")
+                prediction_file_path = os.path.join(final_model_dir, f"{pred_split}_set_predictions.h5")
 
                 self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
                                                                         keys_to_exclude=['predictions', 'entropy'])
@@ -250,6 +252,7 @@ class ShardProcessor:
             # scale the raw health score
             health_score_scale = config_manager.training_config['health_score_scale']
             health_score *= health_score_scale
+            health_score = np.clip(health_score, -5.0, 5.0)
 
             # add the scaled health score to the hourly change to get the final reward  
             health_score_total = hourly_health_change + health_score        
@@ -261,19 +264,30 @@ class ShardProcessor:
     
 
 
-    def create_rl_dataset(self, states="model_outputs", scaler=None):
+    def create_rl_dataset(self, states="model_outputs", scaler=None, action_names=None):
         self.rl_dataset = {}
         
-        action_ind = self.dynamic_deephit_dataset['response_zero_ind'] + self.dynamic_deephit_dataset['carry_forward_ind']
-        action_ind.sort()  # these are the indices of the response features that are either zeroed out or carried forward at the final timestep, so they correspond to the action space
+        # action_ind = self.dynamic_deephit_dataset['response_zero_ind'] + self.dynamic_deephit_dataset['carry_forward_ind']
+        # action_ind.sort()  # these are the indices of the response features that are either zeroed out or carried forward at the final timestep, so they correspond to the action space
 
-        action_names = np.array(self.dynamic_deephit_dataset['feature_names'])[action_ind]
+        # action_names = np.array(self.dynamic_deephit_dataset['feature_names'])[action_ind]
 
         # find all actions with 'delta' or 'mask' in the name and remove them from the action space (since these are not actual treatments but rather engineered features for the model)
-        remove_mask = np.array([('delta' in name) or ('mask' in name) for name in action_names])
+        # remove_mask = np.array([('delta' in name) or ('mask' in name) for name in action_names])
 
-        action_ind = np.array(action_ind)[~remove_mask]
-        self.action_names = action_names[~remove_mask]
+        if type(action_names) == list:
+            action_ind = []
+            for action_name in action_names:
+                if action_name in self.dynamic_deephit_dataset['feature_names']:
+                    ind = self.dynamic_deephit_dataset['feature_names'].index(action_name)
+                    action_ind.append(ind)
+                else:
+                    raise ValueError(f"Action name {action_name} not found in feature names.") 
+        else:
+            action_ind = self.dynamic_deephit_dataset['feature_names'].index(action_names)
+        
+        # action_ind = np.array(action_ind)[~remove_mask]
+        # self.action_names = action_names[~remove_mask]
 
         # get trajectory starts and ends
         all_ind = np.arange(len(self.dynamic_deephit_dataset['trajectories']))
@@ -281,7 +295,8 @@ class ShardProcessor:
         trajectory_end_inds = self.dynamic_deephit_dataset['index_ptr'][1:] - 1
 
         state_ind = np.setdiff1d(all_ind, trajectory_end_inds)  # we will exclude the end of trajectory timesteps since these have no next state and action labels are ambiguous (since they could be either the action taken at that timestep or the action taken at the previous timestep)
-        next_state_ind = np.setdiff1d(all_ind, trajectory_start_inds)  # we will exclude the start of trajectory timesteps from the next states for the same reason as above
+        # next_state_ind = np.setdiff1d(all_ind, trajectory_start_inds)  # we will exclude the start of trajectory timesteps from the next states for the same reason as above
+        next_state_ind = state_ind + 1  # we will exclude the start of trajectory timesteps from the next states for the same reason as above
 
         # get states
         if states == "model_outputs":
@@ -298,7 +313,7 @@ class ShardProcessor:
             self.rl_dataset['next_states'] = torch.tensor(scaled_model_outputs[next_state_ind, :], dtype=torch.float32)
         else:
             raise NotImplementedError(f"Only states='model_outputs' is currently implemented, but got states={states}")
-
+             
         actions = torch.tensor(self.dynamic_deephit_dataset["trajectories"][:, action_ind], dtype=torch.float32)
         self.rl_dataset['actions'] = actions[state_ind, :]
 
@@ -319,7 +334,7 @@ class ShardProcessor:
         for start, end in zip(mortality_start_inds, mortality_end_inds):
             mortality_full[start:end+1] = 1.0
 
-        mortality_full[trajectory_end_inds] = mortality  # set the mortality value at the start of each trajectory to the mortality value for that trajectory
+        #  # set the mortality value at the start of each trajectory to the mortality value for that trajectory
         mortality_full = mortality_full[next_state_ind]  # only keep mortality for the next states, since the current states will never be terminal in our setting (since we exclude end of trajectory timesteps)
         self.rl_dataset['mortality'] = torch.tensor(mortality_full, dtype=torch.float32)
 

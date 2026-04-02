@@ -186,7 +186,13 @@ class ConfigManager:
             if self.experiment_type == "supervised_learning":
                 return self.config_dir / "datasets" / f"{self.hospital}_{self.experiment_type}.yaml"
             elif self.experiment_type == "reinforcement_learning":
-                disease_variant = self.cohort[:self.cohort.index('_')]
+                if self.cohort is None:
+                    raise ValueError("Cohort must be specified for reinforcement learning data config")
+                # if self.cohort doesn't contain an underscore, then we assume it is just the disease name and we add "_broad" to it
+                if '_' in self.cohort:
+                    disease_variant = self.cohort[:self.cohort.index('_')]
+                else:
+                    disease_variant = self.cohort
                 
                 return self.config_dir / "datasets" / f"{self.hospital}_{disease_variant}_{self.experiment_type}.yaml"
             
@@ -206,13 +212,13 @@ class ConfigManager:
     
         self._data_config['prediction_type'] = self.prediction_type
 
-        if 'dataframe_path' in self._data_config:
-            if not os.path.isabs(self._data_config['dataframe_path']):
-                self._data_config['dataframe_path'] = os.path.join(
-                    self.get_data_dir, 
-                    self._data_config['dataframe_path']
-                )
-                print(f"Updated dataframe_path to absolute: {self._data_config['dataframe_path']}")
+        # if 'dataframe_path' in self._data_config:
+        #     if not os.path.isabs(self._data_config['dataframe_path']):
+        #         self._data_config['dataframe_path'] = os.path.join(
+        #             self.get_data_dir, 
+        #             self._data_config['dataframe_path']
+        #         )
+        #         print(f"Updated dataframe_path to absolute: {self._data_config['dataframe_path']}")
         
         if 'features_to_use_path' in self._data_config:
             if not os.path.isabs(self._data_config['features_to_use_path']):
@@ -233,6 +239,14 @@ class ConfigManager:
                 )
 
                 split_name = f"split_{self.split_num}"
+                
+                if self.cohort is not None and self.cohort != "all":
+                    split_name = os.path.join(split_name, self.cohort)
+
+                actions = self.data_config.get('actions', None)
+                if actions is not None:
+                    actions_name = "-".join(actions)
+                    split_name = os.path.join(split_name, actions_name)                
                 
                 final_model_dir = os.path.join(
                     reward_path,

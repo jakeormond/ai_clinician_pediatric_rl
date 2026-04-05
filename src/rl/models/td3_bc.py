@@ -557,7 +557,7 @@ class TD3_BC(object):
 			actor_loss_prelim, actor_dict = self.compute_actor_loss(pi, action)
 
 			if self.total_it == 0:
-				current_lmbda = self.alpha/Q.abs().mean().detach().item()
+				current_lmbda = self.alpha/(Q.abs().mean().detach().item() + 1e-6)
 			else:
 				current_lmbda = self.running_lmbda
 

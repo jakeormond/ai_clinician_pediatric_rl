@@ -188,7 +188,8 @@ class Q_Learner(object):
         with torch.no_grad():            
             # Compute the target Q value
             target_Q1, target_Q2 = self.critic_target(next_state, next_action)
-            target_Q = (target_Q1 + target_Q2) / 2.0
+            # target_Q = (target_Q1 + target_Q2) / 2.0
+            target_Q = torch.min(target_Q1, target_Q2)  # TD3 style: take the minimum of the two critics to mitigate overestimation bias
             target_Q = reward + not_done * self.discount * target_Q			
 
         return target_Q
@@ -209,14 +210,6 @@ class Q_Learner(object):
 
             survival_n = survival_mask.sum().item()
             non_survival_n = non_survival_mask.sum().item()
-            
-            # # calculate the survival_Q and non_survival_Q as the mean of current_Q where mortality is 0 and 1 respectively            
-            # survival_Q = current_Q[mortality == 0].mean().item() if (mortality == 0).any() else float('nan')
-            # survival_variance_Q = current_Q[mortality == 0].var().item() if (mortality == 0).any() else float('nan')           
-            # survival_n = (mortality == 0).sum().item()
-            # non_survival_Q = current_Q[mortality == 1].mean().item() if (mortality == 1).any() else float('nan')
-            # non_survival_variance_Q = current_Q[mortality == 1].var().item() if (mortality == 1).any() else float('nan')
-            # non_survival_n = (mortality == 1).sum().item()
             
             # only compute subgroup mean/variance together when n > 2
             if survival_n > 2:

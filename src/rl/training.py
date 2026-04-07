@@ -253,11 +253,12 @@ def calculate_q_stats(losses_dict):
         "survival_non_survival_snr": survival_non_survival_snr
     }
 
+    # No longer dropping, because we are tracking across iterations
     # drop q keys from losses
-    for key in ["mean_Q", "variance_Q", "batch_n",
-                "survival_Q", "survival_variance_Q", "survival_n",
-                "non_survival_Q", "non_survival_variance_Q", "non_survival_n"]:
-        losses_dict.pop(key, None)
+    # for key in ["mean_Q", "variance_Q", "batch_n",
+    #             "survival_Q", "survival_variance_Q", "survival_n",
+    #             "non_survival_Q", "non_survival_variance_Q", "non_survival_n"]:
+    #     losses_dict.pop(key, None)
 
 
     return q_stats, losses_dict
@@ -605,11 +606,14 @@ def train_with_hyperparameters(
         n_epochs = config_manager.n_epochs
 
     batch_size = hyperparams['batch_size']
-    loss_metric = config_manager.training_config['loss_metric']
+    loss_metric = config_manager.training_config['loss_metric']   
 
     # Create replay buffers
     training_buffer, scaler = create_buffer(train_processor, batch_size, action_names=config_manager.data_config['actions'])
     val_test_buffer, _ = create_buffer(val_test_processor, batch_size, scaler=scaler, action_names=config_manager.data_config['actions'])
+    
+    # get total number of steps for scheduler if needed
+    hyperparams['total_steps'] = n_epochs * len(training_buffer)
     
     # get starting state distribution for V0 estimation if we're doing TD3-BC
     if config_manager.training_config['monitor_v0']:
@@ -669,7 +673,7 @@ def train_with_hyperparameters(
                 break
 
         # step the scheduler
-        if trainer.scheduler is not None:
+        if trainer.scheduler is not None and config_manager.model_type in ['basic_q']:
             trainer.scheduler.step()
             print(f"Epoch {epoch} finished. New LR: {trainer.critic_optimizer.param_groups[0]['lr']:.2e}")
 

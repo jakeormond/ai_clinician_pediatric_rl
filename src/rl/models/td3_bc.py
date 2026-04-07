@@ -1,6 +1,7 @@
 import typing
 from typing import Dict, List, Tuple
 import copy
+# import config_manager
 import numpy as np
 import torch
 import torch.nn as nn
@@ -76,7 +77,15 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-	def __init__(self, state_dim, action_dim, dropout=0.1, hidden_dim=512, negative_slope=0.1):
+	def __init__(
+			self, 
+			state_dim, 
+			action_dim, 
+			dropout=0.1, 
+			hidden_dim=512, 
+			negative_slope=0.1,
+			scheduler: torch.optim.lr_scheduler._LRScheduler = None
+		):
 		
 		super(Critic, self).__init__()
 
@@ -228,7 +237,9 @@ class TD3_BC(object):
 		tau: float = 0.005,
 		grad_clip: float = None,  # Add grad_clip argument
 		ema_alpha: float = 0.99,  # Add ema_alpha argument for moving
-		reward_scaling: float = 1.0
+		reward_scaling: float = 1.0,
+		scheduler: torch.optim.lr_scheduler._LRScheduler = None
+
 	):
 		
 		self.max_action = max_action
@@ -249,6 +260,8 @@ class TD3_BC(object):
 		self.grad_clip = grad_clip
 
 		self.running_lmbda = 1.0
+
+		self.scheduler = scheduler
 		
 		# for calculating moving average of gradient clipping binary
 		self.clip_fraction_ema = 0.0
@@ -420,7 +433,8 @@ class TD3_BC(object):
 
 		# Optimize the critic
 		self.critic_optimizer.zero_grad()
-		critic_loss.backward()		
+		critic_loss.backward()
+		self.critic_optimizer.step()		
 
 		# capture gradient norms
 		grad_norm = {"raw_grad_norm": self.critic.get_grad_norm()}
@@ -630,6 +644,8 @@ class TD3_BC(object):
 def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 
 	learning_rate = float(hyperparams['learning_rate'])
+	weight_decay = float(hyperparams.get('weight_decay', 0.01)) # New hyperparam
+	device = config_manager.training_config['device']
 
 	# action_mode = config_manager.action_mode FOR NOW, WE CAN ASSUME CONTINUOUS
 
@@ -662,14 +678,22 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 	
 	actor_optimizer = torch.optim.Adam(
 		actor.parameters(), 
-		lr=learning_rate
+		lr=learning_rate,
+		weight_decay=weight_decay
 		)
 	
 	critic = Critic(state_dim, action_dim).to(config_manager.training_config['device'])
 
 	critic_optimizer = torch.optim.Adam(
 		critic.parameters(),
-		lr=learning_rate
+		lr=learning_rate,
+		weight_decay=weight_decay
+	)
+
+	critic_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+		critic_optimizer, 
+		T_max=hyperparams['total_steps'],
+		eta_min=1e-6
 	)
 
 	trainer = TD3_BC(               # LIST OF PARAMETERS NEEDS TO BE UPDATED
@@ -686,6 +710,7 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 		noise_clip=hyperparams['noise_clip'],
 		policy_freq=hyperparams['policy_freq'],
 		alpha=hyperparams['alpha'],
+		scheduler=critic_scheduler
 	)
 
 	# if action_mode == 'binary_only' or action_mode == 'continuous_only':

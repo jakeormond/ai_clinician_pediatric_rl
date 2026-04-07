@@ -313,7 +313,14 @@ class Q_Learner(object):
         self.critic.eval()  # Ensure critic is also in eval mode
         
         state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
+        
         reward = reward * self.reward_scaling
+        
+        treat_survival_as_truncated = True
+        if treat_survival_as_truncated:
+                # make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
+            done = done * mortality        
+        
         not_done = 1 - done
 
         with torch.no_grad():

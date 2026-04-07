@@ -8,34 +8,6 @@
 
 
         {
-            "name": "save_dataframe",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.scripts.supervised.supervised_learning",
-            "args": [
-                "--hospital", "choc", 
-                "--experiment_type", "supervised_learning",
-                "--mode", "save_dataframe"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
-        },
-
-        {
-            "name": "analyse target features",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.analyse_input_features.analyse_target_features",
-            "args": [
-                "--hospital", "choc", 
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
-        },       
-
-        {
             "name": "mimic_iv_transformer_fixed",
             "type": "debugpy",
             "request": "launch",
@@ -261,123 +233,6 @@
             "envFile": "${workspaceFolder}/.env"
         },
 
-        {
-            "name": "dynamic_deephit_feature_evaluation",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.scripts.supervised.supervised_learning",
-            "args": [
-                "--hospital", "mimic_iv", 
-                "--experiment_type", "supervised_learning",
-                "--prediction_type", "discharge_mortality_tte",
-                "--model_type", "dynamic_deephit_transformer",
-                "--mode", "single_split", 
-                "--experiment_variant", "feature_evaluation"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
-        },
-
-        {
-            "name": "mimic_iv_transformer_prediction",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.scripts.supervised.supervised_learning",
-            "args": [
-                "--hospital", "mimic_iv", 
-                "--experiment_type", "supervised_learning",
-                "--model_type", "dynamic_deephit_transformer", 
-                "--prediction_type", "discharge_mortality_tte",
-                "--search_variant", "fixed_hyperparameters",
-                "--mode", "single_split", 
-                "--cohort", "all",
-                "--experiment_variant", "prediction",
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
-        },
-
-        {
-            "name": "mimic_iv",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.scripts.supervised.supervised_learning",
-            "args": [
-                "--hospital", "mimic_iv", 
-                "--experiment_type", "supervised_learning",
-                "--model_type", "dynamic_deephit", 
-                "--prediction_type", "discharge_mortality_tte",
-                "--mode", "single_split", 
-                "--search_variant", "random_search",
-                "--n_search_iterations", "1",
-                "--n_epochs", "5",
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
-        },
-
-        {
-            "name": "mimic_iv_predict",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.scripts.supervised.supervised_learning",
-            "args": [
-                "--hospital", "mimic_iv", 
-                "--experiment_type", "supervised_learning",
-                "--model_type", "dynamic_deephit", 
-                "--prediction_type", "discharge_mortality_tte",
-                "--mode", "single_split", 
-                "--experiment_variant", "prediction",                
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
-        },
-
-        {
-            "name": "DynamicDeepHit_dev",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.scripts.supervised.supervised_learning",
-            "args": [
-                "--hospital", "choc", 
-                "--experiment_type", "supervised_learning",
-                "--model_type", "dynamic_deephit", 
-                "--prediction_type", "discharge_mortality_tte",
-                "--mode", "development_single_split", 
-                "--search_variant", "fixed_hyperparameters",
-                "--n_epochs", "20",
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
-        },
-
-
-        {
-            "name": "DynamicDeepHit",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.scripts.supervised.supervised_learning",
-            "args": [
-                "--hospital", "choc", 
-                "--experiment_type", "supervised_learning",
-                "--model_type", "dynamic_deephit", 
-                "--prediction_type", "discharge_mortality_tte",
-                "--mode", "single_fold", 
-                "--fold", "2",
-                "--experiment_variant", "standard",                
-                "--search_variant", "random_search",
-                "--n_epochs", "200",
-                "--n_search_iterations", "20"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
-        },
 
         {
             "name": "DynamicDeepHit_truncated_traj",
@@ -421,52 +276,7 @@
             "envFile": "${workspaceFolder}/.env"
         },
 
-        {
-            "name": "DynamicDeepHit_artificial_cv",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.scripts.supervised.supervised_learning",
-            "args": [
-                "--hospital", "artificial", 
-                "--action_mode", "continuous_only",
-                "--experiment_type", "supervised_learning",
-                "--model_type", "dynamic_deephit", 
-                "--prediction_type", "discharge_mortality_tte",
-                "--mode", "single_fold", 
-                "--testing",
-                "--fold", "0",
-                "--experiment_variant", "standard",                
-                "--search_variant", "random_search",
-                "--n_epochs", "20",
-                "--n_search_iterations", "1"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
-        },
 
-        {
-            "name": "DynamicDeepHit_testing",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.scripts.supervised.supervised_learning",
-            "args": [
-                "--hospital", "choc", 
-                "--action_mode", "continuous_only",
-                "--experiment_type", "supervised_learning",
-                "--model_type", "dynamic_deephit", 
-                "--prediction_type", "discharge_mortality_tte",
-                "--mode", "single_fold", 
-                "--fold", "0",
-                "--testing",
-                "--experiment_variant", "quick_test",                
-                "--search_variant", "random_search",
-                "--n_search_iterations", "1"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
-        },
 
         {
             "name": "any_percent_bc",
@@ -486,23 +296,6 @@
                 "--n_epochs", "100",
                 "--action_mode", "continuous_only",
                 "--frac", "0.2"                
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
-        },
-
-        {
-            "name": "reward_analysis",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.scripts.rl.reinforcement_learning",
-            "args": [
-                "--hospital", "choc", 
-                "--experiment_type", "reinforcement_learning",
-                "--model_type", "reward_analysis", 
-                "--mode", "analysis", 
-                "--search_variant", "random_search",
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
@@ -576,29 +369,7 @@
         },
 
         {
-            "name": "basic_q",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.scripts.rl.reinforcement_learning",
-            "args": [
-                "--hospital", "choc", 
-                "--experiment_type", "reinforcement_learning",
-                "--model_type", "basic_q", 
-                "--mode", "single_fold", 
-                "--fold", "0",
-                "--experiment_variant", "standard",
-                "--search_variant", "random_search",
-                "--n_search_iterations", "1",
-                "--n_epochs", "200",
-                "--action_mode", "continuous_only"            
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
-        },
-
-        {
-            "name": "mimiciv_td3_bc",
+            "name": "mimiciv_td3_bc_fixed",
             "type": "debugpy",
             "request": "launch",
             "module": "src.scripts.rl.reinforcement_learning",
@@ -606,13 +377,13 @@
                 "--hospital", "mimic_iv", 
                 "--experiment_type", "reinforcement_learning",
                 "--model_type", "td3_bc", 
-                "--mode", "single_fold", 
-                "--fold", "0",
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--model_dir", "sepsis_models/intake_vis",
                 "--experiment_variant", "standard",
-                "--search_variant", "random_search",
-                "--n_search_iterations", "1",
+                "--search_variant", "fixed_hyperparameters",
                 "--testing",
-                "--n_epochs", "200",
+                "--n_epochs", "20",
                 "--action_mode", "continuous_only",
             
             ],
@@ -622,7 +393,7 @@
         },
 
         {
-            "name": "choc_td3_bc",
+            "name": "choc_td3_bc_fixed",
             "type": "debugpy",
             "request": "launch",
             "module": "src.scripts.rl.reinforcement_learning",
@@ -630,13 +401,14 @@
                 "--hospital", "choc", 
                 "--experiment_type", "reinforcement_learning",
                 "--model_type", "td3_bc", 
-                "--mode", "single_fold", 
-                "--fold", "0",
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--model_dir", "sepsis_models/intake_vis",
                 "--experiment_variant", "standard",
-                "--search_variant", "random_search",
-                "--n_search_iterations", "1",
-                "--testing", "true",
-                "--n_epochs", "200",
+                "--search_variant", "fixed_hyperparameters",
+                "--cohort", "sepsis",
+                "--testing",
+                "--n_epochs", "20",
                 "--action_mode", "continuous_only",
             
             ],

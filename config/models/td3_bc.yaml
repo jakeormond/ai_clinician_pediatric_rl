@@ -1,6 +1,9 @@
     project: "AI_Clininician"
     "group": "reinforcement_learning"
     name: "td3_bc"
+    
+    tuning: True
+    
     n_episodes: 100  # How many episodes run during evaluation
     # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path

@@ -331,6 +331,7 @@ def evaluate_during_training(trainer, epoch, val_test_buffer, batch_size, val_lo
 
     # add a key for epoch number
     epoch_val_avg['epoch'] = epoch
+    epoch_val_avg['total_it'] = trainer.total_it
 
     # add q stats if available
     if 'q_stats' in locals():

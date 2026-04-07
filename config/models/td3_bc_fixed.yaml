@@ -1,0 +1,52 @@
+    project: "AI_Clininician"
+    "group": "reinforcement_learning"
+    name: "td3_bc"
+    
+    tuning: True
+    
+    n_episodes: 1000  # How many episodes run during evaluation
+    # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
+    checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
+    discount: 0.95 # 0.999  # Discount factor
+    # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
+    # max_traj_len: 2000  # Max trajectory length - probably need to change this
+    device: "cuda"  # Device (cuda or cpu)
+    learning_rate: 1e-6 # "loguniform(1e-4, 1e-3)"           #      [1e-6]  # Learning rates to try
+    dropout: 0.05 # "uniform(0.0, 0.5)"
+    tau: 0.0005 # Target network update rate
+    weight_decay: 0. # L2 regularization strength
+    
+    policy_noise: 0.2 # Noise added to target policy during critic updates
+    noise_clip: 0.5 # Range to clip target policy noise
+    policy_freq: 2 # Frequency of delayed policy updates
+    alpha: 2.5 # Weighting for BC loss
+    
+    
+    batch_size: 1024 # [256, 512, 1024]  # Batch size for all networks
+    # hidden_dim: [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
+
+    # Early stopping parameters (fixed for all combinations)
+    patience: 3        # Stop if no improvement for 15 evaluations
+    eval_freq: 5       # Evaluate every 20 epochs  
+    min_delta: 0.0001   # Minimum improvement threshold
+
+    # evaluation parameters
+    monitor_v0: True  # Whether to monitor V0 during training - specific to TD3-BC
+
+    # validation loss
+    # val_loss_metric: "critic_loss"  # Which metric to use for validation loss
+    loss_metric: "critic_loss"  # Which metric to use for validation loss
+
+    # changes to reward structure
+    make_rewards_positive: False  # Whether to shift rewards to be positive
+
+    # include next actions
+    include_next_actions: True  # needed for SARSA
+
+    # gradient clipping
+    grad_clip: 1.0
+
+    # reward scaling
+    reward_scaling: 1.5  # Scaling factor for rewards
+    health_score_scale: 0.05  # Scaling factor for health score component of reward
+    health_score_hourly_change_scale: 1  # Scaling factor for hourly change component of reward

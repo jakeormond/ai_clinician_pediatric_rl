@@ -100,10 +100,6 @@ def parse_arguments():
     
     parser.add_argument('--model_dir', type=str, default=None,
         help='Directory of the model to load for prediction or feature evaluation (required for prediction and feature_evaluation experiment variants)')
-
-    
-    
-    
     
     parser.add_argument('--action_mode', 
                         type=str, 

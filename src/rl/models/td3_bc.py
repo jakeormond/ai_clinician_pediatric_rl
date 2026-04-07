@@ -21,7 +21,7 @@ class Actor(nn.Module):
 			self, 
 			state_dim: int, 
 			action_dim: int, 
-			hidden_dim: List[int], 
+			hidden_dim: List[int] = [512, 256, 128], 
 			dropout: float = 0.1,
 			negative_slope: float = 0.1
 			):
@@ -279,24 +279,27 @@ class TD3_BC(object):
 		Refined BC Loss for sparse clinical actions (Fluids/Vasopressors).
 		"""
 		# 1. Standard MSE for the base BC loss
-		mse_loss = F.mse_loss(pi, action, reduction='none')
+		mse_loss = F.mse_loss(pi, action, reduction='none') # MSE loss penalizes large deviations, gemini thinks this is best for the actor
 		
 		# 2. Create a 'Clinical Importance' weight
 		# We weight time-steps where the doctor actually intervened (action > 0)
 		# This prevents the model from just learning to 'do nothing'
 		weights = torch.where(action > 0, 5.0, 1.0) # You can tune this weight (5.0) based on how much you want to encourage matching the doctor's interventions
-		
+		# we will probably want to implement different weights for fluids vs vasopressors in the mixed action setting, but for now we can just apply the same weight to all non-zero actions
+
 		weighted_bc_loss = (mse_loss * weights).mean()
 
 		# 3. Optional: Add a small L1 penalty to keep the policy sparse
 		# (Only if you find the AI is 'micro-dosing' constantly)
-		l1_sparse = pi.abs().mean() * 1e-3
+		l1_sparse = pi.abs().mean() * 1e-3 # this should prevent many small non-zero actions, while still allowing for large actions when clinically indicated. Tune the 1e-3 coefficient as needed.
 		
 		total_bc_loss = weighted_bc_loss + l1_sparse
 
 		actor_dict = {
+			"total_bc_loss": total_bc_loss.item(),
 			"bc_mse_only": mse_loss.mean().item(),
 			"weighted_bc_loss": weighted_bc_loss.item(),
+			"l1_sparse": l1_sparse.item(),
 			"pi_mean_val": pi.mean().item()
 		}
 		
@@ -325,13 +328,19 @@ class TD3_BC(object):
 			return target_Q
 
 
-	def get_q_stats(self, current_Q1, current_Q2, mortality, log_dict) -> Tuple[float, float]:
+	def get_q_stats(self, current_Q1, current_Q2, actor_Q, mortality, log_dict) -> Tuple[float, float]:
 		
 		# create current_Q as the mean of current_Q1 and current_Q2
 		current_Q = (current_Q1 + current_Q2) / 2.0
 		mean_Q = current_Q.mean().item()
 		variance_Q = current_Q.var().item()
 		batch_n = current_Q.shape[0]
+		uncertainty_Q = F.mse_loss(current_Q1, current_Q2).item() # simple measure of uncertainty based on disagreement between the two critics
+
+		if actor_Q is not None:
+			advantage_Q = (actor_Q - current_Q).mean().item() # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
+		else:
+			advantage_Q = None
 
 		# masks and counts
 		survival_mask = (mortality == 0)
@@ -363,6 +372,9 @@ class TD3_BC(object):
 			"batch_n": batch_n,
 			"mean_Q": mean_Q,
 			"variance_Q": variance_Q,
+			"uncertainty_Q": uncertainty_Q,
+			"actor_Q": actor_Q.mean().item() if actor_Q is not None else None,
+			"advantage_Q": advantage_Q,
 			"survival_n": survival_n,
 			"survival_Q": survival_Q,
 			"survival_variance_Q": survival_variance_Q,
@@ -404,7 +416,7 @@ class TD3_BC(object):
 		log_dict = {"critic_loss": critic_loss.item()}
 
 		# get Q statistics
-		log_dict = self.get_q_stats(current_Q1, current_Q2, mortality, log_dict)
+		log_dict = self.get_q_stats(current_Q1, current_Q2, None, mortality, log_dict)
 
 		# Optimize the critic
 		self.critic_optimizer.zero_grad()
@@ -430,12 +442,15 @@ class TD3_BC(object):
 		self.critic_optimizer.step()
 
 		# Delayed policy updates
-		if self.total_it % self.policy_freq == 0:
-
+		if self.total_it % self.policy_freq != 0:
+			log_dict = self.get_q_stats(current_Q1, current_Q2, None, mortality, log_dict)
+		else:
 			# Compute actor loss
 			self.actor.train() # Dropout ACTIVE for the network we are updating
 			pi = self.actor(state)
 			Q = self.critic.Q1(state, pi)
+
+			log_dict = self.get_q_stats(current_Q1, current_Q2, Q, mortality, log_dict)
 			
 			# calculate the standard TD3-BC lambda coefficient
 			lmbda_base = self.alpha/Q.abs().mean().detach()
@@ -534,7 +549,16 @@ class TD3_BC(object):
 		self.actor.eval()  # This is correct and important!
 		self.critic.eval()  # Ensure critic is also in eval mode
 		
-		state, action, reward, next_state, done = TrainerUtils._unpack_batch(batch, self.device)
+		state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
+		
+		reward = reward * self.reward_scaling
+
+		# compute the target Q value
+		treat_survival_as_truncated = True
+		if treat_survival_as_truncated:
+				# make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
+			done = done * mortality
+		
 		not_done = 1 - done
 
 		with torch.no_grad():
@@ -542,32 +566,36 @@ class TD3_BC(object):
 			target_Q = self.target_q(action, next_state, reward, not_done, noise=False)
 
 			# Get current Q estimates
-			current_Q1, current_Q2 = self.critic(state, action)
+			current_Q1, current_Q2 = self.critic(state, action) # critic value of action taken by doctor
 
 			# Compute critic loss
-			critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
+			# critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
+			critic_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0			
 			log_dict = {"critic_loss": critic_loss.item()}
-		
+
 			# Compute actor loss
 			pi = self.actor(state)
-			Q = self.critic.Q1(state, pi)
-			# lmbda = self.alpha/Q.abs().mean().detach()
-
+			Q = self.critic.Q1(state, pi) # critic value of action suggested by the actor
+			# lmbda = self.alpha/Q.abs().mean().detach()		
+			
+			log_dict = self.get_q_stats(current_Q1, current_Q2, Q, mortality, log_dict)
+						
 			# compute actor loss using TrainerUtils function
 			actor_loss_prelim, actor_dict = self.compute_actor_loss(pi, action)
 
 			if self.total_it == 0:
-				current_lmbda = self.alpha/(Q.abs().mean().detach().item() + 1e-6)
+				current_lmbda = self.alpha / (Q.abs().mean().detach() + 1e-6)
 			else:
 				current_lmbda = self.running_lmbda
 
 			actor_loss = -current_lmbda * Q.mean() + actor_loss_prelim
 			log_dict.update(actor_dict)
 			log_dict["actor_loss"] = actor_loss.item()
+			log_dict["current_lmbda"] = current_lmbda.item()
 
 		return log_dict, action, pi
 
-
+	
 	def state_dict(self) -> Dict[str, torch.Tensor]:
 		return {
 			"actor": self.actor.state_dict(),
@@ -575,7 +603,8 @@ class TD3_BC(object):
 			"critic": self.critic.state_dict(),
 			"critic_optimizer": self.critic_optimizer.state_dict(),
 			"actor_target": self.actor_target.state_dict(),
-			"critic_target": self.critic_target.state_dict(),
+			"critic_target": self.critic_target.state_dict()
+			
 		}
 
 
@@ -627,7 +656,7 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 	actor = Actor(
 		state_dim=state_dim, 
 		action_dim=action_dim, 
-		hidden_dim=hyperparams['hidden_dim'], 
+		# hidden_dim=hyperparams['hidden_dim'], 
 		dropout=hyperparams['dropout']
 	).to(config_manager.training_config['device'])
 	

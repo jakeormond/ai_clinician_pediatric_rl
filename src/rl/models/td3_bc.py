@@ -350,11 +350,6 @@ class TD3_BC(object):
 		batch_n = current_Q.shape[0]
 		uncertainty_Q = F.mse_loss(current_Q1, current_Q2).item() # simple measure of uncertainty based on disagreement between the two critics
 
-		if actor_Q is not None:
-			advantage_Q = (actor_Q - current_Q).mean().item() # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
-		else:
-			advantage_Q = None
-
 		# masks and counts
 		survival_mask = (mortality == 0)
 		non_survival_mask = (mortality == 1)
@@ -386,8 +381,6 @@ class TD3_BC(object):
 			"mean_Q": mean_Q,
 			"variance_Q": variance_Q,
 			"uncertainty_Q": uncertainty_Q,
-			"actor_Q": actor_Q.mean().item() if actor_Q is not None else None,
-			"advantage_Q": advantage_Q,
 			"survival_n": survival_n,
 			"survival_Q": survival_Q,
 			"survival_variance_Q": survival_variance_Q,
@@ -395,6 +388,13 @@ class TD3_BC(object):
 			"non_survival_Q": non_survival_Q,
 			"non_survival_variance_Q": non_survival_variance_Q
 		})
+
+		if actor_Q is not None:
+			advantage_Q = (actor_Q - current_Q).mean().item() # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
+			log_dict.update({
+				"actor_Q": actor_Q.mean().item(),
+				"advantage_Q": advantage_Q
+			})
 		return log_dict
 
 
@@ -427,9 +427,6 @@ class TD3_BC(object):
 		critic_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
 		
 		log_dict = {"critic_loss": critic_loss.item()}
-
-		# get Q statistics
-		log_dict = self.get_q_stats(current_Q1, current_Q2, None, mortality, log_dict)
 
 		# Optimize the critic
 		self.critic_optimizer.zero_grad()
@@ -544,14 +541,14 @@ class TD3_BC(object):
 		"""
 		self.actor.eval(); 
 		self.critic.eval()
-
+		start_states = torch.as_tensor(start_states, dtype=torch.float32, device=self.device)
 		q_values = []
 		for i in range(0, len(start_states), batch_size):
 			batch_states = start_states[i:i+batch_size]
 			actions = self.actor(batch_states)
 			q1, q2 = self.critic(batch_states, actions)
 			q_batch = torch.min(q1, q2)
-			q_values.append(q_batch.cpu().numpy())
+			q_values.append(q_batch.detach().cpu().numpy())
 
 		q_values = np.concatenate(q_values, axis=0)
 		v0_mean = q_values.mean()
@@ -598,14 +595,14 @@ class TD3_BC(object):
 			actor_loss_prelim, actor_dict = self.compute_actor_loss(pi, action)
 
 			if self.total_it == 0:
-				current_lmbda = self.alpha / (Q.abs().mean().detach() + 1e-6)
+				current_lmbda = self.alpha / (Q.abs().mean().detach().item() + 1e-6)
 			else:
 				current_lmbda = self.running_lmbda
 
 			actor_loss = -current_lmbda * Q.mean() + actor_loss_prelim
 			log_dict.update(actor_dict)
 			log_dict["actor_loss"] = actor_loss.item()
-			log_dict["current_lmbda"] = current_lmbda.item()
+			log_dict["current_lmbda"] = current_lmbda
 
 		return log_dict, action, pi
 

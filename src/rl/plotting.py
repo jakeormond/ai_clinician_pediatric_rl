@@ -23,7 +23,7 @@ def plot_losses(training_scores, val_scores, test_scores, config_manager):
         plt.plot(epochs_range, training_scores[key], color=plt.cm.Blues(0.9), linewidth=2, label='Training Loss')
 
         val_epochs = np.array(val_scores['epoch']) + 1
-        val_losses = val_scores[key]
+        val_losses = val_scores[f"val/{key}"]
 
         if test_scores is None:
             plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      

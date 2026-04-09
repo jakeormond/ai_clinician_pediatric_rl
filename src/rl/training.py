@@ -644,6 +644,7 @@ def train_with_hyperparameters(
 
     # initialize wandb for this training run
     run = wandb_init(config_manager, hyperparams)
+    hyperparams['wandb_id'] = run.id if run is not None else None
 
     # Create replay buffers
     training_buffer, scaler = create_buffer(train_processor, batch_size, action_names=config_manager.data_config['actions'])

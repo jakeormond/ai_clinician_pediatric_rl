@@ -15,45 +15,59 @@ def plot_losses(training_scores, val_scores, test_scores, config_manager):
         loss_keys.remove('std_Q')
 
     n_subplots = len(loss_keys)
-    plt.figure(figsize=(15, 5 * n_subplots))
-    for i, key in enumerate(loss_keys):        
-        plt.subplot(n_subplots, 1, i + 1)
-        epochs_range = np.arange(1, len(training_scores[key]) + 1)
+    n_figures = n_subplots // 3 + int(n_subplots % 3 > 0)
+    n_subplots_per_figure = 3
 
-        plt.plot(epochs_range, training_scores[key], color=plt.cm.Blues(0.9), linewidth=2, label='Training Loss')
+    subplot_counter = 0
 
-        val_epochs = np.array(val_scores['epoch']) + 1
-        val_losses = val_scores[f"val/{key}"]
-
-        if test_scores is None:
-            plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      
+    for fig_idx in range(n_figures):    
+        plt.figure(figsize=(15, 5 * n_subplots_per_figure))
         
-        else:
-            plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Val Loss')     
-            val_loss = test_scores[key]
-            # plot val loss as horizontal line
-            plt.axhline(y=val_loss, color='green', linestyle='--', linewidth=2, label='Val Loss final')
+        for i in range(n_subplots_per_figure):
+            if subplot_counter >= n_subplots:
+                break
+            key = loss_keys[subplot_counter]
 
-        if i == len(loss_keys) - 1:
-            plt.xlabel('Epochs')
-        plt.ylabel(key)
-        plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
-        plt.xlim(-0.5, np.max(epochs_range)+0.5)
-        plt.title(f'{key} over Epochs')
-        plt.grid(True)
-        plt.legend(
-            loc='upper right',
-            facecolor='white',  # solid white background
-            framealpha=1,
-            edgecolor='lightgray',
-            bbox_to_anchor=(0.98, 0.98),
-            fontsize=10,
-        )
+            plt.subplot(n_subplots, 1, i + 1)
+            epochs_range = np.arange(1, len(training_scores[key]) + 1)
 
-     # Save the plot
-    plot_path = Path(config_manager.experiment_dir) / f"loss_plot.png"
-    plt.savefig(plot_path)
-    plt.close()
+            training_scores_4plot = [item for sublist in training_scores[key] for item in sublist]
+            training_range = np.linspace(epochs_range[0], epochs_range[-1], len(training_scores_4plot) + 1)[:-1]
+
+            plt.plot(training_range, training_scores_4plot, color=plt.cm.Blues(0.9), linewidth=2, label='Training Loss')
+
+            val_epochs = np.array(val_scores['epoch']) + 1
+            val_losses = val_scores[f"val/{key}"]
+
+            if test_scores is None:
+                plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      
+            
+            else:
+                plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Val Loss')     
+                val_loss = test_scores[key]
+                # plot val loss as horizontal line
+                plt.axhline(y=val_loss, color='green', linestyle='--', linewidth=2, label='Val Loss final')
+
+            if i == len(loss_keys) - 1:
+                plt.xlabel('Epochs')
+            plt.ylabel(key)
+            plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
+            plt.xlim(-0.5, np.max(epochs_range)+0.5)
+            plt.title(f'{key} over Epochs')
+            plt.grid(True)
+            plt.legend(
+                loc='upper right',
+                facecolor='white',  # solid white background
+                framealpha=1,
+                edgecolor='lightgray',
+                bbox_to_anchor=(0.98, 0.98),
+                fontsize=10,
+            )
+
+        # Save the plot
+        plot_path = Path(config_manager.experiment_dir) / f"loss_plot_{fig_idx}.png"
+        plt.savefig(plot_path)
+        plt.close()
 
 
 def plot_gradient_norms(grad_norms, config_manager):

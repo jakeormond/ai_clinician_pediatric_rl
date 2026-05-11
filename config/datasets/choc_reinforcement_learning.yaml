@@ -1,0 +1,50 @@
+dataframe_path: "combined_data/hourly/combined_hourly_features_phoenix_sepsis.parquet"
+features_to_use_path: "dataframes/features_to_use.csv"
+model_type: "reinforcement_learning"
+
+seed: 42
+
+proportion_w_data: 0.80
+
+time_col: "EVENT_END_DT_TM"
+encounter_col: "MASKED_ENCNTR_ID"
+
+action_feature_sets: ["input_output"] # ["vasoactive_inotropic_infusion", "input_output"]
+actions: ["intake"] # ["intake", "vis"]
+# create_binary_actions: True # because rewards are sparse, AI suggested supplementing with binary actions
+# binary now handled at command line
+transform_actions: True
+# action_transforms: ["yeo-johnson", "yeo-johnson"] yeo johnson doesn't work well with vis, collapses to binary
+# action_transforms: ["log1p", "log1p"]
+action_transforms: ["log1p"]
+normalize_actions: True # NOTE: we are not currently set up to use 
+                        # raw actions since the models use sigmoid
+                        # activations to bound actions between 0 and 1
+
+normalize_obs: True
+
+# reward is stored in the experiments dir, and the path is specified in config/rewards/reward_paths.yaml
+use_reward: True
+reward_type: "xgbclassifier_discharge_mortality" # if no reward, set to "none"
+reward_col: "health_score" # this is the name of the column in the reward file that has the reward values
+flip_reward: False
+offset_reward: 0.0
+scale_reward: 1000.0
+reward_lower_percentile: 1 # for clipping rewards
+reward_upper_percentile: 99
+
+use_terminal_reward: False
+terminal_reward_col: "mortality" # other wise make False
+flip_terminal_reward: True # mortality needs to be flipped so that death = -1
+offset_terminal_reward: 0.0
+scale_terminal_reward: 100.0
+make_terminal_incremental: True
+
+# features_to_drop: ["mortality"]
+features_to_drop: [] # we should never drop mortality, since we need it for evaluation even if we don't use it for reward
+
+# truncate trajectories
+truncate_trajectories: False
+truncate_from: "start" # "start" or "end"
+min_traj_len: 72  # in hours
+max_traj_length: 72 # in hours

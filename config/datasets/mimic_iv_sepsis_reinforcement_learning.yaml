@@ -1,0 +1,36 @@
+model_type: "reinforcement_learning"
+
+shard_dir: "combined_data/hourly_all_patients"
+features_to_use_path: "features_to_use/features_to_use_with_proportions.csv"
+
+dataframe_path: "combined_data/hourly_all_patients"
+
+seed: 42
+
+states: "dynamic_deephit_outputs"
+
+use_reward: True
+reward_type: health_score
+
+actions: ["combined_hourly_iv", "vasoactive_inotropic_score"] # ["intake", "vis"]
+# create_binary_actions: True # because rewards are sparse, AI suggested supplementing with binary actions
+# binary now handled at command line
+# transform_actions: True
+# action_transforms: ["yeo-johnson", "yeo-johnson"] yeo johnson doesn't work well with vis, collapses to binary
+# action_transforms: ["log1p", "log1p"]
+# action_transforms: ["log1p"]
+# normalize_actions: True # NOTE: we are not currently set up to use 
+                        # raw actions since the models use sigmoid
+                        # activations to bound actions between 0 and 1
+
+# normalize_obs: True
+
+# reward is stored in the experiments dir, and the path is specified in config/rewards/reward_paths.yaml
+# use_reward: True
+# reward_path: "/home/jake/Documents/AI_Clinician/dynamic_deephit_results/mimic_iv/five_splits"
+reward_type: "health_score" # if no reward, set to "none"
+flip_reward: False
+
+# features_to_drop: ["mortality"]
+features_to_drop: [] # we should never drop mortality, since we need it for evaluation even if we don't use it for reward
+

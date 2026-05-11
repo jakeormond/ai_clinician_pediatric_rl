@@ -1,0 +1,41 @@
+local:
+  choc:
+    experiments_dir: "/home/jake/Documents/AI_Clinician/experiments"
+    supervised_final_model_dir: "/home/jake/Documents/AI_Clinician/dynamic_deephit_results/choc/"
+    rl_models_dir: "/home/jake/Documents/AI_Clinician/rl_models/choc/"
+    data_dir: "/home/jake/Documents/AI_Clinician/choc_data"
+    code_dir: "/home/jake/Documents/AI_Clinician/choc_code"
+  mimic_iv:
+    experiments_dir: "/home/jake/Documents/AI_Clinician/experiments"
+    supervised_final_model_dir: "/home/jake/Documents/AI_Clinician/dynamic_deephit_results/mimic_iv/"
+    rl_models_dir: "/home/jake/Documents/AI_Clinician/rl_models/mimic_iv/"
+    data_dir: "/home/jake/Documents/AI_Clinician/mimic_iv_3.1_data"
+    code_dir: "/home/jake/Documents/AI_Clinician/mimic_iv_3.1_code/mimic_iv_icu_data_processing"
+  
+bayreuth_hpc:
+  choc:
+    experiments_dir: "/groups/a-faisal/jakeormond/experiments"
+    supervised_final_model_dir: "/groups/a-faisal/jakeormond/dynamic_deephit_results/choc/"
+    rl_models_dir: "/groups/a-faisal/jakeormond/rl_models/choc/"
+    data_dir: "/groups/a-faisal/jakeormond/data/choc_data"
+    code_dir: "/groups/a-faisal/jakeormond/code/choc_code"
+  mimic_iv:
+    experiments_dir: "/groups/a-faisal/jakeormond/experiments"
+    supervised_final_model_dir: "/groups/a-faisal/jakeormond/dynamic_deephit_results/mimic_iv/"
+    rl_models_dir: "/groups/a-faisal/jakeormond/rl_models/mimic_iv/"
+    data_dir: "/groups/a-faisal/jakeormond/data/mimic_iv_3.1_data"
+    code_dir: "/groups/a-faisal/jakeormond/code/mimic_iv_icu_data_processing"
+
+imperial_hpc:
+  choc:
+    experiments_dir: "/rds/general/user/jormond/home/projects/ai_clinician/experiments"
+    supervised_final_model_dir: "/rds/general/user/jormond/home/projects/ai_clinician/dynamic_deephit_results/choc/"
+    rl_models_dir: "/rds/general/user/jormond/home/projects/ai_clinician/rl_models/choc/"
+    data_dir: "/rds/general/user/jormond/home/projects/ai_clinician/data/choc_data"
+    code_dir: "/rds/general/user/jormond/home/projects/ai_clinician/code/choc_code"
+  mimic_iv:
+    experiments_dir: "/rds/general/user/jormond/home/projects/ai_clinician/experiments"
+    supervised_final_model_dir: "/rds/general/user/jormond/home/projects/ai_clinician/dynamic_deephit_results/mimic_iv/"
+    rl_models_dir: "/rds/general/user/jormond/home/projects/ai_clinician/rl_models/mimic_iv/"
+    data_dir: "/rds/general/user/jormond/home/projects/ai_clinician/data/mimic_iv_3.1_data"
+    code_dir: "/rds/general/user/jormond/home/projects/ai_clinician/code/mimic_iv_icu_data_processing"

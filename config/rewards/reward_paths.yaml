@@ -1,0 +1,4 @@
+# rewards are stored in the experiments dir
+rewards:
+  xgbclassifier_discharge_mortality: "xgbclassifier_discharge_mortality_choc_grid_search/20250814_185430/all_predictions.parquet"
+  

@@ -1,0 +1,27 @@
+shard_dir: "combined_data/hourly_all_patients"
+features_to_use_path: "features_to_use/features_to_use_with_proportions.csv"
+model_type: "supervised_learning"
+
+seed: 42
+
+proportion_w_data: 0.80
+
+max_encounter_length: 1440  # in hours, 2 months
+
+target_col: "death"
+
+action_feature_sets: ["vasoactive_inotropic_infusion", "input_output"]
+features_to_drop: []
+
+normalize_obs: True
+normalize_actions: False
+transform_actions: False
+create_binary_actions: False
+
+time_col: "time"
+add_time_col: True
+encounter_col: "stay_id"
+
+
+
+

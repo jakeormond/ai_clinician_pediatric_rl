@@ -1,0 +1,472 @@
+import os
+import yaml
+import time
+import shutil
+from pathlib import Path
+from .setup_environment import load_paths
+
+class ConfigManager:
+    def __init__(
+            self, 
+            args
+        ):
+
+        self.config_dir = Path(__file__).parent.parent / "config"
+        
+        # add all key value pairs from args to self
+        for key, value in vars(args).items():
+            setattr(self, key, value)
+
+        if not hasattr(args, "experiment_variant"):
+            self.experiment_variant = None
+
+        if self.experiment_type != "supervised_learning":
+            self.prediction_type = None  # prediction type is for supervised learning only
+ 
+        self.paths, self.environment = load_paths(self.hospital)
+        self.set_data()
+        
+        if self.mode == "single_fold":        
+            
+            self.set_experiment_name()
+            self._create_experiment_dir()    
+            self.set_cv_config()                   
+            self._build_wandb_config()
+            self.add_fold(self.fold)
+
+        elif self.mode == "single_split":
+            if self.experiment_variant == "prediction":
+                # find model directory
+                if self.model_type == "dynamic_deephit":
+                    results_dir = os.path.join(
+                        self.paths['final_model_dir'], 
+                        "GRU", "final_model"
+                    )
+                elif self.model_type == "dynamic_deephit_transformer" and self.cohort != 'all' and self.cohort is not None:
+                    results_dir = os.path.join(
+                        self.paths['final_model_dir'], 
+                        "transformer", "final_model"
+                    )
+                elif self.model_type == "dynamic_deephit_transformer" and self.split_num is not None:
+                    if self.model_dir is not None:
+                        results_dir = os.path.join(
+                            self.paths['supervised_final_model_dir'],
+                            "five_splits", f"split_{self.split_num}", 
+                            self.model_dir, "final_model"
+                        )
+                    else:                    
+                        results_dir = os.path.join(
+                            self.paths['supervised_final_model_dir'], 
+                            "five_splits", f"split_{self.split_num}", "final_model"
+                        )
+
+                elif self.cohort == 'all':
+                    # we will build the paths in the prediction function
+                    results_dir = None
+                    
+                else:
+                    raise ValueError(f"Unsupported model_type for prediction: {self.model_type}")
+
+                if results_dir is not None:
+                    # get the path to the folder inside the results_dir
+                    model_folders = [f for f in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, f))]
+                    if len(model_folders) > 1:
+                        raise ValueError("Multiple model folders found in final_model_dir, please specify one")
+                    model_folder = model_folders[0]
+                    self.experiment_dir = Path(results_dir) / model_folder
+
+            elif self.experiment_type == "model_evaluation":               
+                results_dir = os.path.join(
+                        self.paths["rl_models_dir"], self.rl_type,
+                        f"split_{self.split_num}", self.cohort, self.actions, "final_model"
+                    )
+                    # find the directory within result_dir
+                model_folders = [f for f in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, f))]
+                if len(model_folders) > 1:
+                    raise ValueError("Multiple model folders found in final_model_dir, please specify one")
+                model_folder = model_folders[0]
+                self.results_dir = Path(results_dir) / model_folder
+
+            else:
+                self.create_single_split_dir()
+
+        elif self.mode == "analyse_features":
+            self.set_experiment_name()
+            self._create_experiment_dir()    
+
+        elif self.mode == "aggregate":
+            
+            if self.experiment_folder is None:
+                raise ValueError("experiment_folder must be provided in aggregate mode")
+            
+            # model type needs to be found from experiment_folder, it is either 
+            # xgbclassifier or xgbregressor
+            if "xgbclassifier" in self.experiment_folder:
+                self.model_type = "xgbclassifier"
+            elif "xgbregressor" in self.experiment_folder:
+                self.model_type = "xgbregressor"
+            else:
+                raise ValueError("model_type not found in experiment_folder, must be either xgbclassifier or xgbregressor")
+                        
+            # join experiment_dir with self.paths['experiments_dir']
+            self.experiment_dir = Path(self.paths['experiments_dir']) / self.experiment_folder
+
+            # from inside the experiment_dir, enter the config directory and load cross_validation*.yaml
+            config_dir = self.experiment_dir / "config"
+            if not config_dir.exists():
+                raise FileNotFoundError(f"Config directory does not exist: {config_dir}")
+            
+            # load the yaml file that begins with "cross_validation" and ends with ".yaml"
+            cv_config_files = list(config_dir.glob("cross_validation_*.yaml"))
+            if not cv_config_files:
+                raise FileNotFoundError("No cross_validation config file found in the experiment directory")
+            if len(cv_config_files) > 1:
+                raise ValueError("Multiple cross_validation config files found, please specify one")
+            
+            with open(cv_config_files[0], 'r') as f:
+                self.cv_config = yaml.safe_load(f)
+
+
+        if self.cohort is not None and self.cohort != "all":
+            self._data_config['cohort'] = self.cohort   
+            self.data_config['cohort_dir'] = os.path.join(
+                self.get_data_dir,
+                'cohorts',
+                self._data_config['cohort']
+            )
+            self.data_config['cohort_stay_ids_path'] = os.path.join(
+                self.data_config['cohort_dir'],
+                'stay_ids.csv'
+            )
+        else:
+            self._data_config['cohort'] = 'all'
+
+
+    def reset_cohort(self, cohort):
+        """Reset the cohort in the data config."""
+        self.cohort = cohort
+        if self.cohort is not None and self.cohort != "all":
+            self._data_config['cohort'] = self.cohort   
+            self.data_config['cohort_dir'] = os.path.join(
+                self.get_data_dir,
+                'cohorts',
+                self._data_config['cohort']
+            )
+            self.data_config['cohort_stay_ids_path'] = os.path.join(
+                self.data_config['cohort_dir'],
+                'stay_ids.csv'
+            )
+        else:
+            self._data_config['cohort'] = 'all'
+
+                
+    def get_config_path(self, config_type, custom_path=None):
+        """Get config file path with variant support."""
+        if custom_path:
+            return Path(custom_path)
+                
+        if config_type == "cv":
+            # Try variant-specific first, fall back to default
+            variant_name = f"cross_validation_{self.experiment_variant}.yaml"
+            variant_path = self.config_dir / "search_spaces" / variant_name
+            if variant_path.exists():
+                return variant_path
+            else:
+                raise FileNotFoundError(f"CV config not found for variant: {self.experiment_variant}")
+
+        elif config_type == "training":
+            if self.search_variant == "fixed_hyperparameters":
+                variant_name = f"{self.model_type}_fixed.yaml"
+            else:
+                variant_name = f"{self.model_type}.yaml"
+            variant_path = self.config_dir / "models" / variant_name
+            if variant_path.exists():
+                return variant_path
+            else:
+                raise FileNotFoundError(f"Training config not found for model type: {self.model_type}")
+
+        elif config_type == "search_grid":
+            variant_name = f"{self.model_type}_{self.search_variant}.yaml"
+            variant_path = self.config_dir / "search_spaces" / variant_name
+            if variant_path.exists():
+                return variant_path
+            else:
+                raise FileNotFoundError(f"Search grid config not found for variant: {self.search_variant}")
+            
+        elif config_type == "wandb":
+            # W&B config usually doesn't need variants
+            return self.config_dir / "wandb" / "wandb.yaml"
+            
+        elif config_type == "data":
+            if self.experiment_type == "supervised_learning":
+                return self.config_dir / "datasets" / f"{self.hospital}_{self.experiment_type}.yaml"
+            elif self.experiment_type == "reinforcement_learning" or self.experiment_type == "model_evaluation":
+                if self.cohort is None:
+                    raise ValueError("Cohort must be specified for reinforcement learning data config")
+                # if self.cohort doesn't contain an underscore, then we assume it is just the disease name and we add "_broad" to it
+                if '_' in self.cohort:
+                    disease_variant = self.cohort[:self.cohort.index('_')]
+                else:
+                    disease_variant = self.cohort
+                
+                experiment_type = "reinforcement_learning"
+                return self.config_dir / "datasets" / f"{self.hospital}_{disease_variant}_{experiment_type}.yaml"
+            
+        elif config_type == "rl":
+            return self.config_dir / "models" / f"{self.model_type}.yaml"
+   
+
+    def set_data(self,):
+        data_config_path = self.get_config_path("data")
+        if data_config_path is None:
+            print("No data config path found, skipping data config loading")
+            return
+        if not data_config_path.exists():
+            raise FileNotFoundError(f"Data config file not found: {data_config_path}")
+        with open(data_config_path, 'r') as f:
+            self._data_config = yaml.safe_load(f)
+
+        # set self.seed to the seed in the data config
+        # self.seed = self._data_config['seed']
+    
+        self._data_config['prediction_type'] = self.prediction_type
+
+        # if 'dataframe_path' in self._data_config:
+        #     if not os.path.isabs(self._data_config['dataframe_path']):
+        #         self._data_config['dataframe_path'] = os.path.join(
+        #             self.get_data_dir, 
+        #             self._data_config['dataframe_path']
+        #         )
+        #         print(f"Updated dataframe_path to absolute: {self._data_config['dataframe_path']}")
+        
+        if 'features_to_use_path' in self._data_config:
+            if not os.path.isabs(self._data_config['features_to_use_path']):
+                self._data_config['features_to_use_path'] = os.path.join(
+                    self.get_code_dir, 
+                    self._data_config['features_to_use_path']
+                )
+
+        # set reward path if reward_type is not "none"
+        if self.experiment_type != "supervised_learning": # supervised learning is for generating rewards, so doesn't use them
+            if self._data_config['use_reward']:
+                reward_type = self._data_config['reward_type']
+                # reward_paths_config_path = self.config_dir / "rewards" / "reward_paths.yaml"
+                # reward_path = self.data_config['reward_path']
+                reward_path = os.path.join(
+                    self.paths['supervised_final_model_dir'],
+                    "five_splits",
+                )
+
+                split_name = f"split_{self.split_num}"
+                
+                if self.cohort is not None and self.cohort != "all":
+                    split_name = os.path.join(split_name, self.cohort)
+
+                actions = self.data_config.get('actions', None)
+                if actions is not None:
+                    actions_name = "-".join(actions)
+                    split_name = os.path.join(split_name, actions_name)   
+                    self.actions = actions_name             
+                
+                final_model_dir = os.path.join(
+                    reward_path,
+                    split_name,
+                    "final_model"
+                )
+                # find the folder in final_model_dir 
+                model_folders = [f for f in os.listdir(final_model_dir) if os.path.isdir(os.path.join(final_model_dir, f))]
+                if len(model_folders) > 1:
+                    raise ValueError("Multiple model folders found in reward path, please specify one")
+                model_folder = model_folders[0]
+                reward_path = os.path.join(final_model_dir, model_folder)
+                self._data_config['reward_path'] = reward_path
+
+
+                
+                # if not reward_paths_config_path.exists():
+                #     raise FileNotFoundError(f"Reward paths config file not found: {reward_paths_config_path}")
+                # with open(reward_paths_config_path, 'r') as f:
+                #     reward_paths = yaml.safe_load(f).get("rewards", {})
+                # if reward_type:
+                #     if reward_type not in reward_paths:
+                #         raise ValueError(f"Reward type '{reward_type}' not found in reward paths config")
+                #     reward_path = reward_paths[reward_type]
+                #     if not os.path.isabs(reward_path):
+                #         reward_path = os.path.join(self.get_experiments_dir, reward_path)
+                #     self._data_config['reward_path'] = reward_path
+                #     print(f"Set reward_path to: {self._data_config['reward_path']}")
+
+    def _build_wandb_config(self):
+        """Build W&B configuration and store it internally."""
+        wandb_config_path = self.get_config_path("wandb")
+        if not wandb_config_path.exists():
+            raise FileNotFoundError(f"W&B config file not found: {wandb_config_path}")
+        with open(wandb_config_path, 'r') as f:
+            self._wandb_config = yaml.safe_load(f)
+
+        self._wandb_config['hospital'] = self.hospital
+        self._wandb_config['experiment_type'] = self.experiment_type
+        self._wandb_config['model_type'] = self.model_type        
+        self._wandb_config['seed'] = self._data_config['seed'] if self.data_config else None
+        self._wandb_config['group'] = f"{self.hospital}_{self.model_type}_{self.experiment_variant}"
+
+        self.wandb_config['experiment_name'] = self.experiment_name       
+
+        # Apply environment-specific config
+        if self.environment == 'hpc':
+            self._wandb_config['mode'] = 'offline'
+        else:
+            self._wandb_config['mode'] = 'online'
+
+        # Apply experiment type configuration
+        if self.mode == "single_fold":
+            self._wandb_config['cv_config'] = self.cv_config
+        
+        if self.experiment_type == "supervised_learning":
+            
+            # Build tags
+            tags = ["mortality", self.hospital, self.model_type]
+            self._wandb_config['tags'] = tags  
+   
+    def set_cv_config(self):
+        """Set cross-validation configuration."""
+        cv_config_path = self.get_config_path("cv")
+        if not cv_config_path.exists():
+            raise FileNotFoundError(f"cv config file not found: {cv_config_path}")      
+
+        with open(cv_config_path, 'r') as f:
+            self.cv_config = yaml.safe_load(f)
+            
+
+        # get the filename from cv_config_path
+        cv_config_filename = cv_config_path.stem
+        experiment_copy_path = self.experiment_dir / f"{cv_config_filename}.yaml"
+        if not experiment_copy_path.exists():
+            shutil.copy2(cv_config_path, experiment_copy_path)
+            print(f"Copied CV config to: {experiment_copy_path}")
+        else:
+            print(f"CV config already exists at: {experiment_copy_path}, skipping copy")
+
+    def load_cv_config(self):
+        n_outer_folds = self.cv_config.get('n_outer_folds', None)
+        n_inner_folds = self.cv_config.get('n_inner_folds', None)
+        target_fold = self.cv_config.get('fold', None)
+
+        if target_fold is None:
+            raise ValueError("target_fold must be specified")
+
+        return n_outer_folds, n_inner_folds, target_fold     
+
+    def set_training_config(self):
+        training_config_path = self.get_config_path("training")
+        if not training_config_path.exists():
+            raise FileNotFoundError(f"Training config file not found: {training_config_path}")
+        with open(training_config_path, 'r') as f:
+            self.training_config = yaml.safe_load(f)
+        # add the action_mode to the training_config
+        if self.model_type != "dynamic_deephit":
+            self.training_config['action_mode'] = self.action_mode
+
+        
+    def add_fold(self, fold):
+        """Add fold information to the config."""
+        self._wandb_config['cv_config']['fold'] = fold
+
+    def set_search_grid(self):
+        """Add search grid to the W&B config."""
+        search_grid_path = self.get_config_path("search_grid")
+        if not search_grid_path.exists():
+            raise FileNotFoundError(f"Search grid config file not found: {search_grid_path}")
+        
+        with open(search_grid_path, 'r') as f:
+            # Load the search grid config
+            self.search_grid = yaml.safe_load(f)        
+            self._wandb_config['search_grid'] = self.search_grid
+
+        # get the filename from search_grid_path
+        search_grid_filename = search_grid_path.stem
+        experiment_copy_path = self.expt_config_dir / f"{search_grid_filename}.yaml"
+        if not experiment_copy_path.exists():
+            shutil.copy2(search_grid_path, experiment_copy_path)
+            print(f"Copied search grid config to: {experiment_copy_path}")
+        else:
+            print(f"Search grid config already exists at: {experiment_copy_path}, skipping copy")
+
+    def set_experiment_name(self):
+        if self.experiment_type == "supervised_learning":
+            if self.cohort is not None and self.cohort != "all":
+                self.experiment_variant = f"{self.experiment_variant}_{self.cohort}"
+            if self.split_num is not None:
+                self.experiment_variant = f"{self.experiment_variant}_split_{self.split_num}"
+            
+            self.experiment_name = \
+                f"{self.hospital}_{self.model_type}_{self.prediction_type}_{self.experiment_variant}_{self.start_time}"
+        
+        elif self.experiment_type == "model_evaluation":
+            return
+        
+        else:
+            self.experiment_name = \
+                f"{self.hospital}_{self.model_type}_{self.actions}_{self.search_variant}_{self.experiment_variant}_{self.start_time}"
+        # make directory if it doesn't exist
+        self._create_experiment_dir()
+
+    def _create_experiment_dir(self):
+        """Create and return the base experiment directory path."""       
+        self.experiment_dir = Path(self.get_experiments_dir) / self.experiment_name
+        self.experiment_dir.mkdir(parents=True, exist_ok=True)
+        # create a config dir inside the experiment directory
+        # self.expt_config_dir = self.experiment_dir / "config"
+        # self.expt_config_dir.mkdir(parents=True, exist_ok=True)
+
+    def set_fold_name(self):
+        """Add experiment name to the W&B config."""
+        self.fold_name = f"fold_{self.cv_config['fold']}_{self.start_time}"
+        self._wandb_config['name'] = self.fold_name        
+        self._create_fold_dir(self.fold_name)
+
+    def _create_fold_dir(self, experiment_name):
+        """Create and return experiment directory path."""
+        fold = self.cv_config.get('fold', None)
+        
+        # append "fold_{fold}" to experiment_dir name
+        new_dir_path = self.experiment_dir.parent / f"{self.experiment_dir.name}_fold_{fold}"
+        
+        # rename experiment_dir to new_dir_path
+        self.experiment_dir.rename(new_dir_path)
+        self.experiment_dir = new_dir_path
+        
+
+    def create_single_split_dir(self):
+        """Create and return single split experiment directory path."""
+        self.set_experiment_name()        
+        self._create_experiment_dir()
+    
+    
+    
+    @property
+    def get_experiments_dir(self):
+        return self.paths['experiments_dir']
+    
+    @property
+    def get_data_dir(self):
+        return self.paths['data_dir']
+    
+    @property
+    def get_code_dir(self):
+        return self.paths['code_dir']       
+    
+    # Properties for accessing hospital config
+    @property
+    def data_config(self):
+        """Get the complete hospital configuration."""
+        if self._data_config is None:
+            raise ValueError("Hospital not set. Call set_hospital() first.")
+        return self._data_config
+    
+    @property
+    def wandb_config(self):
+        """Get the W&B configuration."""
+        if self._wandb_config is None:
+            raise ValueError("W&B config not set. Call _build_wandb_config() first.")
+        return self._wandb_config

@@ -1,0 +1,8 @@
+n_estimators: [100, 300, 500]
+max_depth: [6, 8]
+learning_rate: [0.001, 0.005]
+subsample: [0.8]
+colsample_bytree: [0.45]
+reg_alpha: [0.1]
+reg_lambda: [0.1]
+scale_pos_weight: [1, 4]

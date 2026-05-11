@@ -1,0 +1,26 @@
+dataframe_path: "combined_data/hourly/artificial_tte_dataset.parquet"
+# features_to_use_path: "dataframes/features_to_use.csv"
+model_type: "supervised_learning"
+
+seed: 42
+
+# proportion_w_data: 0.80
+
+max_encounter_length: 2880  # in hours, 4 months
+
+target_col: "mortality"
+
+action_feature_sets: []
+features_to_drop: []
+
+normalize_obs: True
+normalize_actions: False
+transform_actions: False
+create_binary_actions: False
+
+time_col: "time"
+encounter_col: "encounter_id"
+
+
+
+

@@ -1,0 +1,60 @@
+# Experiment outputs and logs
+slurm/logs/
+pbs/logs/
+results/
+wandb/
+
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+rl_env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Log files
+*.log
+
+# Model files (optional - comment out if you want to track models)
+*.pkl
+*.joblib
+*.h5
+
+*.pth
+*.pt

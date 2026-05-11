@@ -1,0 +1,14 @@
+SHARD_DIR: "/home/jake/Documents/AI_Clinician/mimic_iv_3.1_data/combined_data/hourly_all_patients"
+FEATURES_TO_USE_PATH: "/home/jake/Documents/AI_Clinician/mimic_iv_3.1_code/mimic_iv_icu_data_processing/features_to_use/features_to_use_with_proportions.csv"
+
+PROPORTIONS_TO_USE: 0.80
+
+TARGETS: ["combined_hourly_iv", "vasoactive_inotropic_score"]
+
+REWARD: "sofa_score"
+FLIP_REWARD: True
+
+TERMINAL_REWARD: False
+
+TIME_COL: "charttime"
+ENCOUNTER_COL: "stay_id"

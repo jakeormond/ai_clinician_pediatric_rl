@@ -5,8 +5,10 @@
 import os
 import math
 import random
+from turtle import done
 import uuid
 from copy import deepcopy
+import copy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -18,6 +20,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 from torch.distributions import Normal, TanhTransform, TransformedDistribution
+
+from .shared_components import TrainerUtils # Actor, MixedActionActor, 
+
+
 
 
 TensorBatch = List[torch.Tensor]
@@ -321,18 +327,27 @@ def extend_and_repeat(tensor: torch.Tensor, dim: int, repeat: int) -> torch.Tens
     return tensor.unsqueeze(dim).repeat_interleave(repeat, dim=dim)
 
 
+
+
+
 class ContinuousPVP:
     def __init__(
         self,
-        critic_1 = None,
-        critic_1_optimizer = None,
-        critic_2 = None,
-        critic_2_optimizer = None,
+        max_action: np.ndarray,
+
+        actor: nn.Module = None,
+		actor_optimizer: torch.optim.Optimizer = None,
+		actor_scheduler: torch.optim.lr_scheduler._LRScheduler = None,
+
+        critic: nn.Module = None,
+		critic_optimizer: torch.optim.Optimizer = None,
+		critic_scheduler: torch.optim.lr_scheduler._LRScheduler = None,
+        
         grad_norm_max_actor = None,
         grad_norm_max_critic = None,
-        actor = None,
-        actor_optimizer = None,
+
         target_entropy: float = 0.,
+
         batch_norm: bool = False,
         zero_min_reward: bool = True,
         importance_sampling: bool = False,
@@ -340,8 +355,9 @@ class ContinuousPVP:
         alpha_multiplier: float = 1.0,
         use_automatic_entropy_tuning: bool = True,
         backup_entropy: bool = False,
+
         q_optim: str = "adam",
-        actor_optim: str = "adam",
+
         alpha_optim: str = "sgd",
         policy_lr: bool = 3e-4,
         qf_lr: bool = 3e-4,
@@ -359,8 +375,17 @@ class ContinuousPVP:
         ood_action_var: float = 0.2,
         device: str = "cpu",
     ):
-        super().__init__()
 
+        self.max_action = max_action
+
+        self.actor = actor
+        self.actor_optimizer = actor_optimizer
+        self.actor_scheduler = actor_scheduler
+        
+        self.critic = critic
+        self.critic_optimizer = critic_optimizer
+        self.critic_scheduler = critic_scheduler        
+        
         self.discount = discount
         self.batch_norm = batch_norm
         self.q_min = q_min
@@ -369,7 +394,7 @@ class ContinuousPVP:
         self.alpha_multiplier = alpha_multiplier
         self.use_automatic_entropy_tuning = use_automatic_entropy_tuning
         self.backup_entropy = backup_entropy
-        self.actor_optim = actor_optim
+
         self.alpha_optim = alpha_optim
         self.q_optim = q_optim
         self.policy_lr = policy_lr
@@ -391,18 +416,15 @@ class ContinuousPVP:
         self.next_state_reg = next_state_reg
         self.total_it = 0
 
-        self.critic_1 = critic_1
-        self.critic_2 = critic_2
+        self.critic = critic
 
-        if self.critic_1 is not None:
-            self.target_critic_1 = deepcopy(self.critic_1).to(device)
-            self.target_critic_2 = deepcopy(self.critic_2).to(device)
+        # if self.critic_1 is not None:
+        #     self.target_critic_1 = deepcopy(self.critic_1).to(device)
+        #     self.target_critic_2 = deepcopy(self.critic_2).to(device)
 
-        self.actor = actor
-
-        self.actor_optimizer = actor_optimizer
-        self.critic_1_optimizer = critic_1_optimizer
-        self.critic_2_optimizer = critic_2_optimizer
+        # copy the critic network to create the target critic
+        self.critic_target = copy.deepcopy(self.critic)
+        self.critic_target.eval()  # Target networks start in eval mode to disable Dropout
 
         if self.use_automatic_entropy_tuning:
             self.log_alpha = Scalar(0.0)
@@ -422,8 +444,7 @@ class ContinuousPVP:
         self.total_it = 0
 
     def update_target_network(self, soft_target_update_rate: float):
-        soft_update(self.target_critic_1, self.critic_1, soft_target_update_rate)
-        soft_update(self.target_critic_2, self.critic_2, soft_target_update_rate)
+        soft_update(self.target_critic, self.critic, soft_target_update_rate)
 
     def _alpha_and_alpha_loss(self, observations: torch.Tensor, log_pi: torch.Tensor):
         if self.use_automatic_entropy_tuning:
@@ -450,18 +471,17 @@ class ContinuousPVP:
             policy_loss = (alpha * log_pi - log_probs).mean()
         else:
             if self.batch_norm:
-                self.critic_1.eval()
-                self.critic_2.eval()
-            q_new_actions = torch.min(
-                self.critic_1(observations, new_actions),
-                self.critic_2(observations, new_actions),
-            )
+                self.critic.eval()
+
+            q_new_actions = torch.min(self.critic(observations, new_actions))
+
             if self.batch_norm:
-                self.critic_1.train()
-                self.critic_2.train()
+                self.critic.train()
+
             policy_critic_loss = -q_new_actions.mean()
             policy_entropy_loss = alpha*log_pi.mean()
             policy_loss = (alpha * log_pi - q_new_actions).mean()
+        
         return policy_loss, policy_critic_loss, policy_entropy_loss
 
     def _q_loss(
@@ -474,13 +494,11 @@ class ContinuousPVP:
         alpha: torch.Tensor,
         log_dict: Dict,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        q1_predicted = self.critic_1(observations, actions)
-        q2_predicted = self.critic_2(observations, actions)
+        q1_predicted, q2_predicted = self.critic(observations, actions)
 
         new_next_actions, next_log_pi = self.actor(next_observations)
         target_q_values = torch.min(
-            self.target_critic_1(next_observations, new_next_actions),
-            self.target_critic_2(next_observations, new_next_actions),
+            self.target_critic(next_observations, new_next_actions),
         )
 
         if self.backup_entropy:
@@ -507,8 +525,7 @@ class ContinuousPVP:
             epsilons = torch.randn_like(pvp_ood_actions_means)
             pvp_ood_actions = (pvp_ood_actions_means+epsilons*math.sqrt(self.ood_action_var)).reshape(batch_size, self.pvp_n_actions, -1)
         
-        pvp_ood_q1 = self.critic_1(observations, pvp_ood_actions)
-        pvp_ood_q2 = self.critic_2(observations, pvp_ood_actions)
+        pvp_ood_q1, pvp_ood_q2 = self.critic(observations, pvp_ood_actions)
 
         if not self.next_state_reg:
             if not self.importance_sampling:
@@ -556,25 +573,34 @@ class ContinuousPVP:
 
         return qf_loss
 
+           
+    
     def train(self, batch: TensorBatch) -> Dict[str, float]:
-        (
-            observations,
-            actions,
-            rewards,
-            next_observations,
-            dones,
-        ) = batch
+ 
         self.total_it += 1
 
-        new_actions, log_pi = self.actor(observations)
+        # Sample replay buffer 
+        state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
+		
+        reward = reward * self.reward_scaling
 
-        alpha, alpha_loss = self._alpha_and_alpha_loss(observations, log_pi)
+        # compute the target Q value
+        treat_survival_as_truncated = True
+        if treat_survival_as_truncated:
+                # make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
+            done = done * mortality
+		
+        not_done = 1 - done
+
+        new_actions, log_pi = self.actor(state)
+
+        alpha, alpha_loss = self._alpha_and_alpha_loss(state, log_pi)
 
         """ Policy loss """
         policy_loss, policy_critic_loss, policy_entropy_loss = self._policy_loss(
-            observations, actions, new_actions, alpha, log_pi
+            state, action, new_actions, alpha, log_pi
         )
-
+        
         log_dict = dict(
             log_pi=log_pi.mean().item(),
             policy_loss=policy_loss.item(),
@@ -586,38 +612,64 @@ class ContinuousPVP:
 
         """ Q function loss """
         qf_loss = self._q_loss(
-            observations, actions, next_observations, rewards, dones, alpha, log_dict
+            state, action, next_state, reward, done, alpha, log_dict
         )
 
         if self.use_automatic_entropy_tuning:
             self.alpha_optimizer.zero_grad()
-            alpha_loss.backward()
-            self.alpha_optimizer.step()
+            alpha_loss.backward()            
+
             self.alpha_grad_norm = torch.cat([param.grad.detach().flatten() for param in self.log_alpha.parameters() if param.grad is not None]).norm()
+            grad_norm = {"alpha_grad_norm": self.alpha_grad_norm}
+            
+            # need to implement gradient clipping
+            
+            self.alpha_optimizer.step()
 
         self.actor_optimizer.zero_grad()
         if not self.fixed_actor:
             policy_loss.backward()
+
+            total_actor_grad_norm = self._get_grad_norm(self.actor)
+            grad_norm['actor_grad_norm'] = total_actor_grad_norm
+
+            grad_norm['actor_was_clipped'] = 1.0 if total_actor_grad_norm > self.grad_clip else 0.0
+            
+            # update the moving average of the clipping binary
+            self.actor_clip_fraction_ema = self.ema_alpha * self.actor_clip_fraction_ema + (1 - self.ema_alpha) * grad_norm['actor_was_clipped']
+            grad_norm['actor_clip_fraction_ema'] = self.actor_clip_fraction_ema
+
+            torch.nn.utils.clip_grad_norm_(
+                self.actor.parameters(), 
+                self.grad_clip
+            )
+            
+            # self.policy_grad_norm = torch.cat([param.grad.detach().flatten() for param in self.actor.parameters() if param.grad is not None]).norm()
+            self.policy_grad_norm = total_actor_grad_norm
+
             self.actor_optimizer.step()
-            self.policy_grad_norm = torch.cat([param.grad.detach().flatten() for param in self.actor.parameters() if param.grad is not None]).norm()
+            if self.actor_scheduler is not None:
+                self.actor_scheduler.step()
+                log_dict.update(lr_actor=self.actor_optimizer.param_groups[0]['lr'])
+
         else:
             self.policy_grad_norm = torch.tensor(0)
             policy_loss = 0
 
-        self.critic_1_optimizer.zero_grad()
-        self.critic_2_optimizer.zero_grad()
+        self.critic_optimizer.zero_grad()
         qf_loss.backward(retain_graph=True)
+
+
+
+
 
         if self.grad_norm_max_actor is not None:
             torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.grad_norm_max_actor)
         if self.grad_norm_max_critic is not None:
-            torch.nn.utils.clip_grad_norm_(self.critic_1.parameters(), self.grad_norm_max_critic)
-            torch.nn.utils.clip_grad_norm_(self.critic_2.parameters(), self.grad_norm_max_critic)
+            torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.grad_norm_max_critic)
 
-        self.critic_1_optimizer.step()
-        self.critic1_grad_norm = torch.cat([param.grad.detach().flatten() for param in self.critic_1.parameters() if param.grad is not None]).norm()
-        self.critic_2_optimizer.step()
-        self.critic2_grad_norm = torch.cat([param.grad.detach().flatten() for param in self.critic_2.parameters() if param.grad is not None]).norm()
+        self.critic_optimizer.step()
+        self.critic_grad_norm = torch.cat([param.grad.detach().flatten() for param in self.critic.parameters() if param.grad is not None]).norm()
 
         log_dict.update(
             dict(
@@ -631,7 +683,57 @@ class ContinuousPVP:
         if self.total_it % self.target_update_period == 0:
             self.update_target_network(self.soft_target_update_rate)
 
+        return log_dict, grad_norm
+
+
+    def evaluate(self, batch: TensorBatch) -> Dict[str, float]:
+        self.actor.eval()  # This is correct and important!
+        self.critic.eval()  # Ensure critic is also in eval mode
+
+        state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
+		
+        reward = reward * self.reward_scaling
+
+        # compute the target Q value
+        treat_survival_as_truncated = True
+        if treat_survival_as_truncated:
+                # make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
+            done = done * mortality
+		
+        not_done = 1 - done
+
+        with torch.no_grad():
+            new_actions, log_pi = self.actor(state)
+
+            alpha, alpha_loss = self._alpha_and_alpha_loss(state, log_pi)
+
+            """ Policy loss """
+            policy_loss, policy_critic_loss, policy_entropy_loss = self._policy_loss(
+                state, action, new_actions, alpha, log_pi
+            )
+            
+            log_dict = dict(
+                log_pi=log_pi.mean().item(),
+                policy_loss=policy_loss.item(),
+                policy_critic_loss=policy_critic_loss.item(),
+                policy_entropy_loss=policy_entropy_loss.item(),
+                alpha_loss=alpha_loss.item(),
+                alpha=alpha.item(),
+            )
+
+            """ Q function loss """
+            qf_loss = self._q_loss(
+                state, action, next_state, reward, done, alpha, log_dict
+            )
+
+            log_dict.update(
+                dict(
+                    qf_loss=qf_loss.item(),
+                )
+            )
+        
         return log_dict
+
 
     def state_dict(self) -> Dict[str, Any]:
         return {

@@ -289,7 +289,7 @@ class Critic(nn.Module):
 		return q1.view(batch_size, num_samples), q2.view(batch_size, num_samples) 
 	
 
-class CQL(object):
+class CQL:
 	def __init__(
 		self,
 		max_action: np.ndarray,

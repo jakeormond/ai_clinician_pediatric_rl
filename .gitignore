@@ -36,7 +36,6 @@ rl_env/
 ENV/
 
 # IDE files
-.vscode/
 .idea/
 *.swp
 *.swo

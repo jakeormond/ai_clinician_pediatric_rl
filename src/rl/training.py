@@ -49,6 +49,7 @@ MODEL_MODULES = {
     "basic_q": "src.rl.models.basic_q",
     "td3_bc": "src.rl.models.td3_bc",
     "conservative_q_learning": "src.rl.models.conservative_q_learning",
+    "cvp": "src.rl.models.cvp"
 }
 
 DISTRIBUTIONS = {

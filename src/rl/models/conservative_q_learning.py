@@ -850,6 +850,7 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
 		cql_alpha=hyperparams['cql_alpha'],
 		temp=hyperparams['temp'],
 		num_samples=hyperparams['num_samples'],
+		
 	)
 
 	return trainer

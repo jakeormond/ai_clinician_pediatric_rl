@@ -2,6 +2,17 @@
 # original source: https://github.com/young-geng/CQL/tree/934b0e8354ca431d6c083c4e3a29df88d4b0a24d
 # https://arxiv.org/pdf/2006.04779.pdf
 
+"""
+Some notes from Filippo:
+Working with negative rewards:
+-2 options, set q_min manually or set zero_min_reward to True to automatically shift rewards so that the minimum reward in the dataset is 0.
+    -q_min should be a baseline "bad" value for a random policy essentially, but you can think of it as a hyperparameter
+-you can judge from the learning curves whether your pvp_alpha value is too big or too small
+    -if the value for pvp_alpha is too small then the critic loss explodes and the actor loss goes very negative
+-the general pattern i found, especially for pvp_alpha, is you want to make it as small as possible up to where the losses blow up, 
+    basically reach a critical value where the regularisaiton is small but the training is still stable
+"""
+
 import os
 import math
 import random
@@ -41,7 +52,7 @@ class Actor(nn.Module): # adapted from TanhGaussianPolicy
         log_std_offset: float = -1.0,
         orthogonal_init: bool = False,
         no_tanh: bool = False,
-        #batch_norm: bool = False,
+        batch_norm: bool = False,
     ):
         super().__init__()
         self.observation_dim = state_dim
@@ -60,12 +71,17 @@ class Actor(nn.Module): # adapted from TanhGaussianPolicy
             if dropout > 0:
                 layers.append(nn.Dropout(dropout))
             input_dim = h_dim
+
+        # 2. Add the Final Output Layer
+        # No activation or dropout here—this allows the network to output 
+        # the full range of values required for 2 * action_dim.
+        layers.append(nn.Linear(input_dim, 2 * action_dim))
         
-        self.backbone = nn.Sequential(*layers)
+        self.base_network = nn.Sequential(*layers)
 
         # Initialize weights
         # Initialize backbone for LeakyReLU signal flow
-        for m in self.backbone:
+        for m in self.base_network[:-1]:
             if isinstance(m, nn.Linear):
                 nn.init.kaiming_normal_(
                     m.weight, 
@@ -73,6 +89,18 @@ class Actor(nn.Module): # adapted from TanhGaussianPolicy
                     mode='fan_in',
                     nonlinearity='leaky_relu'
                 )
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+        # Initialize the final output layer differently
+        final_layer = self.base_network[-1]
+        if isinstance(final_layer, nn.Linear):
+            # Xavier/Glorot is the standard for linear outputs
+            nn.init.xavier_normal_(final_layer.weight)
+            if final_layer.bias is not None:
+                # Often helpful to initialize bias to 0 
+                # or a small negative value for log_std
+                nn.init.zeros_(final_layer.bias)
 
         self.log_std_multiplier = Scalar(log_std_multiplier)
         self.log_std_offset = Scalar(log_std_offset)
@@ -165,7 +193,10 @@ class Critic(nn.Module): # FullyConnectedQFunction
         self, 
         state_dim, 
         action_dim, 
+        batch_norm=False,
+        layer_norm=True,    
         dropout=0.1, 
+        orthogonal_init: bool = False,
         hidden_dim=512, 
         negative_slope=0.1,
     ):
@@ -181,44 +212,54 @@ class Critic(nn.Module): # FullyConnectedQFunction
 
         self.negative_slope = negative_slope
 
+        def create_net(self, state_dim, action_dim, batch_norm, layer_norm, dropout):
+            if batch_norm:
+                print("Using batch normalization in critic")
+                q_net = nn.Sequential(
+                    nn.Linear(state_dim + action_dim, self.hidden_dim),
+                    nn.BatchNorm1d(self.hidden_dim), # Normalize internal activations
+                    nn.LeakyReLU(negative_slope=self.negative_slope),
+                    nn.Dropout(p=dropout),
+                    nn.Linear(self.hidden_dim, self.hidden_dim2),
+                    nn.BatchNorm1d(self.hidden_dim2), # Normalize internal activations
+                    nn.LeakyReLU(negative_slope=self.negative_slope),
+                    nn.Dropout(p=dropout),
+                    nn.Linear(self.hidden_dim2, self.hidden_dim3),
+                    nn.BatchNorm1d(self.hidden_dim3), # Normalize internal activations
+                    nn.LeakyReLU(negative_slope=self.negative_slope),
+                    # nn.Dropout(p=dropout),
+                )
+
+            elif layer_norm:     
+                q_net = nn.Sequential(
+                    nn.Linear(state_dim + action_dim, self.hidden_dim),
+                    nn.LayerNorm(self.hidden_dim), # Normalize internal activations
+                    nn.LeakyReLU(negative_slope=self.negative_slope),
+                    nn.Dropout(p=dropout),
+                    
+                    nn.Linear(self.hidden_dim, self.hidden_dim2),
+                    nn.LayerNorm(self.hidden_dim2), # Normalize internal activations
+                    nn.LeakyReLU(negative_slope=self.negative_slope),
+                    nn.Dropout(p=dropout),
+                    
+                    nn.Linear(self.hidden_dim2, self.hidden_dim3),
+                    nn.LayerNorm(self.hidden_dim3), # Normalize internal activations
+                    nn.LeakyReLU(negative_slope=self.negative_slope),
+                    # nn.Dropout(p=dropout),    
+                    
+                    nn.Linear(self.hidden_dim3, 1)
+                )
+            init_module_weights(q_net, orthogonal_init)
+            return q_net
+        
+        # note for layer norm, we may want to apply it only to the state dimensions, 
+        # but for now we can apply it to the concatenated state-action input since 
+        # both are log-min-maxed and should be on a similar scale
 		# Q1 architecture
-        self.q1_net = nn.Sequential(
-			nn.Linear(state_dim + action_dim, self.hidden_dim),
-			nn.LayerNorm(self.hidden_dim), # Normalize internal activations
-			nn.LeakyReLU(negative_slope=self.negative_slope),
-			nn.Dropout(p=dropout),
-			
-			nn.Linear(self.hidden_dim, self.hidden_dim2),
-			nn.LeakyReLU(negative_slope=self.negative_slope),
-			nn.Dropout(p=dropout),
-			
-			nn.Linear(self.hidden_dim2, self.hidden_dim3),
-			nn.LeakyReLU(negative_slope=self.negative_slope),
-			# nn.Dropout(p=dropout),    
-			
-			nn.Linear(self.hidden_dim3, 1)
-		)
+        self.q1_net = create_net(self, state_dim, action_dim, batch_norm, layer_norm, dropout)
+        self.q2_net = create_net(self, state_dim, action_dim, batch_norm, layer_norm, dropout)
 
-		# Q2 architecture
-        self.q2_net = nn.Sequential(
-			nn.Linear(state_dim + action_dim, self.hidden_dim),
-			nn.LayerNorm(self.hidden_dim), # Normalize internal activations 
-			nn.LeakyReLU(negative_slope=self.negative_slope),
-			nn.Dropout(p=dropout),
-			
-			nn.Linear(self.hidden_dim, self.hidden_dim2),
-			nn.LeakyReLU(negative_slope=self.negative_slope),
-			nn.Dropout(p=dropout),
-			
-			nn.Linear(self.hidden_dim2, self.hidden_dim3),
-			nn.LeakyReLU(negative_slope=self.negative_slope),
-			# nn.Dropout(p=dropout),            
-			
-			nn.Linear(self.hidden_dim3, 1)
-		)
-
-        self.apply(self._init_weights)  
-
+        
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -272,6 +313,26 @@ class Scalar(nn.Module):
 
     def forward(self) -> nn.Parameter:
         return self.constant
+
+
+def init_module_weights(module: torch.nn.Sequential, orthogonal_init: bool = False):
+    # Specific orthgonal initialization for inner layers
+    # If orthogonal init is off, we do not change default initialization
+    if orthogonal_init:
+        for submodule in module[:-1]:
+            if isinstance(submodule, nn.Linear):
+                nn.init.orthogonal_(submodule.weight, gain=np.sqrt(2))
+                nn.init.constant_(submodule.bias, 0.0)
+
+    # Lasy layers should be initialzied differently as well
+    if orthogonal_init:
+        nn.init.orthogonal_(module[-1].weight, gain=1e-2)
+    else:
+        nn.init.xavier_uniform_(module[-1].weight, gain=1e-2)
+
+    nn.init.constant_(module[-1].bias, 0.0)
+
+
 
 def soft_update(target: nn.Module, source: nn.Module, tau: float):
     for target_param, source_param in zip(target.parameters(), source.parameters()):
@@ -327,9 +388,6 @@ def extend_and_repeat(tensor: torch.Tensor, dim: int, repeat: int) -> torch.Tens
     return tensor.unsqueeze(dim).repeat_interleave(repeat, dim=dim)
 
 
-
-
-
 class ContinuousPVP:
     def __init__(
         self,
@@ -343,6 +401,11 @@ class ContinuousPVP:
 		critic_optimizer: torch.optim.Optimizer = None,
 		critic_scheduler: torch.optim.lr_scheduler._LRScheduler = None,
         
+        log_alpha: Scalar = None,
+        alpha_optimizer: torch.optim.Optimizer = None,
+
+        device: str = "CUDA" if torch.cuda.is_available() else "CPU",
+
         grad_norm_max_actor = None,
         grad_norm_max_critic = None,
 
@@ -373,7 +436,8 @@ class ContinuousPVP:
         fixed_actor: bool = False,
         ncp_samples: bool = False,
         ood_action_var: float = 0.2,
-        device: str = "cpu",
+
+        reward_scaling: float = 1.0,
     ):
 
         self.max_action = max_action
@@ -384,7 +448,12 @@ class ContinuousPVP:
         
         self.critic = critic
         self.critic_optimizer = critic_optimizer
-        self.critic_scheduler = critic_scheduler        
+        self.critic_scheduler = critic_scheduler  
+
+        self.log_alpha = log_alpha
+        self.alpha_optimizer = alpha_optimizer    
+
+        self.device = device  
         
         self.discount = discount
         self.batch_norm = batch_norm
@@ -394,6 +463,8 @@ class ContinuousPVP:
         self.alpha_multiplier = alpha_multiplier
         self.use_automatic_entropy_tuning = use_automatic_entropy_tuning
         self.backup_entropy = backup_entropy
+
+        self.reward_scaling = reward_scaling
 
         self.alpha_optim = alpha_optim
         self.q_optim = q_optim
@@ -425,21 +496,6 @@ class ContinuousPVP:
         # copy the critic network to create the target critic
         self.critic_target = copy.deepcopy(self.critic)
         self.critic_target.eval()  # Target networks start in eval mode to disable Dropout
-
-        if self.use_automatic_entropy_tuning:
-            self.log_alpha = Scalar(0.0)
-            if self.alpha_optim == "adam":
-                self.alpha_optimizer = torch.optim.Adam(
-                    self.log_alpha.parameters(),
-                    lr=self.alpha_lr, eps=self.adam_eps
-                )
-            elif self.alpha_optim == "sgd":
-                self.alpha_optimizer = torch.optim.SGD(
-                    self.log_alpha.parameters(),
-                    lr=self.alpha_lr,
-                )
-        else:
-            self.log_alpha = None
 
         self.total_it = 0
 
@@ -758,27 +814,35 @@ class ContinuousPVP:
 def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
     learning_rate_critic = float(hyperparams['learning_rate_critic'])
     learning_rate_actor = float(hyperparams['learning_rate_actor'])
-    weight_decay = float(hyperparams.get('weight_decay', 0.01)) # New hyperparam
-    device = config_manager.training_config['device']
-
+    # weight_decay = float(hyperparams.get('weight_decay', 0.01)) # New hyperparam
+    # device = config_manager.training_config['device']
+    adam_eps = 1e-8
+    
     actor = Actor(
         state_dim=state_dim, 
         action_dim=action_dim, 
+        max_action=max_action,
         # hidden_dim=hyperparams['hidden_dim'], 
         log_std_multiplier=hyperparams['policy_log_std_multiplier'],
         orthogonal_init=hyperparams['orthogonal_init'],
         dropout=hyperparams['dropout']
     ).to(config_manager.training_config['device'])
 
-    actor_optimizer = torch.optim.AdamW(
-        actor.parameters(), 
-        lr=learning_rate_actor,
-        weight_decay=weight_decay
+    if hyperparams['actor_optim'] == "adam":
+        actor_optimizer = torch.optim.Adam(
+            actor.parameters(), 
+            lr=learning_rate_actor,
+            eps=adam_eps,
+        )
+    elif hyperparams['actor_optim'] == "sgd":
+        actor_optimizer = torch.optim.SGD(
+            actor.parameters(), 
+            lr=learning_rate_actor,
         )
 
     actor_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         actor_optimizer, 
-        T_max=hyperparams['total_steps']//hyperparams['policy_freq'], # we step the actor scheduler every policy_freq steps, so T_max should be total_steps // policy_freq
+        T_max=hyperparams['total_steps']//hyperparams['target_update_period'], # we step the actor scheduler every policy_freq steps, so T_max should be total_steps // policy_freq
         eta_min=learning_rate_actor * .10
     )
 
@@ -786,14 +850,20 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
         state_dim, 
         action_dim,
         orthogonal_init=hyperparams['orthogonal_init'],        
-        batch_norm=hyperparams['batch_norm']
+        batch_norm=hyperparams['batch_norm'], # - i think I can keep using layer_norm
     ).to(config_manager.training_config['device'])
 
-    critic_optimizer = torch.optim.AdamW(
-        critic.parameters(),
-        lr=learning_rate_critic,
-        weight_decay=weight_decay
-    )
+    if hyperparams['q_optim'] == "adam":
+        critic_optimizer = torch.optim.Adam(
+            critic.parameters(),
+            lr=learning_rate_critic,
+            eps=adam_eps,
+        )
+    elif hyperparams['q_optim'] == "sgd":
+         critic_optimizer = torch.optim.SGD(
+            critic.parameters(),
+            lr=learning_rate_critic,
+        )
 
     critic_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         critic_optimizer, 
@@ -801,20 +871,33 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
         eta_min=learning_rate_critic * .10
     )
 
+    log_alpha = Scalar(0.0)
     
-    alpha_optimizer = torch.optim.AdamW(
-        self.log_alpha.parameters(),
-        lr=self.alpha_lr, eps=self.adam_eps
+    if hyperparams['alpha_optim'] == "adam":
+        alpha_optimizer = torch.optim.AdamW(
+            log_alpha.parameters(),
+            lr=hyperparams['learning_rate_alpha'], 
+            eps=adam_eps
     ) 
+    elif hyperparams['alpha_optim'] == "sgd":
+        alpha_optimizer = torch.optim.SGD(
+            log_alpha.parameters(),
+            lr=hyperparams['learning_rate_alpha'], 
+        )
 
     kwargs = {
+        "device": config_manager.training_config['device'],
+
         "critic": critic,
         "critic_optimizer": critic_optimizer,
+        "critic_scheduler": critic_scheduler,
         "actor": actor,
         "actor_optimizer": actor_optimizer,
-        "alpha_optim": config.alpha_optim,
+        "actor_scheduler": actor_scheduler,
+        "alpha_optimizer": alpha_optimizer,
         "discount": hyperparams['discount'],
-        "soft_target_update_rate": hyperparams['soft_target_update_rate'],
+        "max_action": max_action,
+        "soft_target_update_rate": hyperparams['tau'],
         "device": config_manager.training_config['device'],
         "batch_norm": hyperparams['batch_norm'],
         "zero_min_reward": hyperparams['zero_min_reward'],
@@ -823,24 +906,23 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
         "alpha_multiplier": hyperparams['alpha_multiplier'],
         "use_automatic_entropy_tuning": hyperparams['use_automatic_entropy_tuning'],
         "backup_entropy": hyperparams['backup_entropy'],
-        
-        "policy_lr": config.policy_lr,
-        "qf_lr": config.qf_lr,
-        "alpha_lr": config.alpha_lr,
-        "bc_steps": config.bc_steps,
-        "grad_norm_max_actor": config.grad_norm_max_actor,
-        "grad_norm_max_critic": config.grad_norm_max_critic,
-        "next_state_reg": config.next_state_reg,
-        "target_update_period": config.target_update_period,
-        "pvp_n_actions": config.pvp_n_actions,
-        "pvp_alpha": config.pvp_alpha,
-        "q_min": config.q_min,
-        "fixed_actor": config.fixed_actor
+                
+        "policy_lr": hyperparams['learning_rate_actor'],
+        "qf_lr": hyperparams['learning_rate_critic'],
+        "alpha_lr": hyperparams['learning_rate_alpha'],
+
+        "bc_steps": hyperparams['bc_steps'],
+        "grad_norm_max_actor": hyperparams['grad_norm_max_actor'],
+        "grad_norm_max_critic": hyperparams['grad_norm_max_critic'],
+        "next_state_reg": hyperparams['next_state_reg'],
+        "target_update_period": hyperparams['target_update_period'],
+        "pvp_n_actions": hyperparams['pvp_n_actions'],
+        "pvp_alpha": hyperparams['pvp_alpha'],
+        "q_min": hyperparams['q_min'],
     }
 
     trainer = ContinuousPVP(
         **kwargs,
-        **config_manager.training_config
     )
 
     return trainer

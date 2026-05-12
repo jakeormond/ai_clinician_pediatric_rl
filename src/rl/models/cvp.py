@@ -526,9 +526,11 @@ class ContinuousPVP:
         log_pi: torch.Tensor,
     ) -> torch.Tensor:
         
-        if self.total_it <= self.bc_steps:
+        if self.total_it < self.bc_steps:
+            # this code shouldn't execute yet because we're not using bc_steps
             log_probs = self.actor.log_prob(observations, actions)
             policy_loss = (alpha * log_pi - log_probs).mean()
+            policy_critic_loss = torch.tensor(0.0)        
         else:
             if self.batch_norm:
                 self.critic.eval()

@@ -627,40 +627,36 @@ class ContinuousPVP:
             self.alpha_optimizer.step()
 
         self.actor_optimizer.zero_grad()
-        if not self.fixed_actor:
-            policy_loss.backward()
 
-            total_actor_grad_norm = self._get_grad_norm(self.actor)
-            grad_norm['actor_grad_norm'] = total_actor_grad_norm
+        # policy loss
+        policy_loss.backward()
 
-            grad_norm['actor_was_clipped'] = 1.0 if total_actor_grad_norm > self.grad_clip else 0.0
-            
-            # update the moving average of the clipping binary
-            self.actor_clip_fraction_ema = self.ema_alpha * self.actor_clip_fraction_ema + (1 - self.ema_alpha) * grad_norm['actor_was_clipped']
-            grad_norm['actor_clip_fraction_ema'] = self.actor_clip_fraction_ema
+        total_actor_grad_norm = self._get_grad_norm(self.actor)
+        grad_norm['actor_grad_norm'] = total_actor_grad_norm
+        self.policy_grad_norm = total_actor_grad_norm
+        # self.policy_grad_norm = torch.cat([param.grad.detach().flatten() for param in self.actor.parameters() if param.grad is not None]).norm()
 
-            torch.nn.utils.clip_grad_norm_(
-                self.actor.parameters(), 
-                self.grad_clip
-            )
-            
-            # self.policy_grad_norm = torch.cat([param.grad.detach().flatten() for param in self.actor.parameters() if param.grad is not None]).norm()
-            self.policy_grad_norm = total_actor_grad_norm
+        grad_norm['actor_was_clipped'] = 1.0 if total_actor_grad_norm > self.grad_clip else 0.0
+        
+        # update the moving average of the clipping binary
+        self.actor_clip_fraction_ema = self.ema_alpha * self.actor_clip_fraction_ema + (1 - self.ema_alpha) * grad_norm['actor_was_clipped']
+        grad_norm['actor_clip_fraction_ema'] = self.actor_clip_fraction_ema
 
-            self.actor_optimizer.step()
-            if self.actor_scheduler is not None:
-                self.actor_scheduler.step()
-                log_dict.update(lr_actor=self.actor_optimizer.param_groups[0]['lr'])
+        torch.nn.utils.clip_grad_norm_(
+            self.actor.parameters(), 
+            self.grad_norm_max_actor
+        )
+        
+        
 
-        else:
-            self.policy_grad_norm = torch.tensor(0)
-            policy_loss = 0
+        self.actor_optimizer.step()
+        if self.actor_scheduler is not None:
+            self.actor_scheduler.step()
+            log_dict.update(lr_actor=self.actor_optimizer.param_groups[0]['lr'])
 
+        # critic loss
         self.critic_optimizer.zero_grad()
         qf_loss.backward(retain_graph=True)
-
-
-
 
 
         if self.grad_norm_max_actor is not None:

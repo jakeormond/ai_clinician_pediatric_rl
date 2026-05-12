@@ -590,15 +590,21 @@ class ContinuousPVP:
                 # make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
             done = done * mortality
 		
-        not_done = 1 - done
+        not_done = 1 - done # not done should be ued for calculating Q values - check code, I think Filippo uses not_done
 
         new_actions, log_pi = self.actor(state)
 
+        # alpha loss
         alpha, alpha_loss = self._alpha_and_alpha_loss(state, log_pi)
 
         """ Policy loss """
         policy_loss, policy_critic_loss, policy_entropy_loss = self._policy_loss(
             state, action, new_actions, alpha, log_pi
+        )
+
+        """ Q function loss """
+        qf_loss = self._q_loss(
+            state, action, next_state, reward, done, alpha, log_dict
         )
         
         log_dict = dict(
@@ -608,11 +614,7 @@ class ContinuousPVP:
             policy_entropy_loss=policy_entropy_loss.item(),
             alpha_loss=alpha_loss.item(),
             alpha=alpha.item(),
-        )
-
-        """ Q function loss """
-        qf_loss = self._q_loss(
-            state, action, next_state, reward, done, alpha, log_dict
+            qf_loss=qf_loss.item(),
         )
 
         if self.use_automatic_entropy_tuning:
@@ -641,14 +643,12 @@ class ContinuousPVP:
         # update the moving average of the clipping binary
         self.actor_clip_fraction_ema = self.ema_alpha * self.actor_clip_fraction_ema + (1 - self.ema_alpha) * grad_norm['actor_was_clipped']
         grad_norm['actor_clip_fraction_ema'] = self.actor_clip_fraction_ema
-
-        torch.nn.utils.clip_grad_norm_(
-            self.actor.parameters(), 
-            self.grad_norm_max_actor
-        )
+        if self.grad_norm_max_actor is not None:
+            torch.nn.utils.clip_grad_norm_(
+                self.actor.parameters(), 
+                self.grad_norm_max_actor
+            )
         
-        
-
         self.actor_optimizer.step()
         if self.actor_scheduler is not None:
             self.actor_scheduler.step()
@@ -658,23 +658,19 @@ class ContinuousPVP:
         self.critic_optimizer.zero_grad()
         qf_loss.backward(retain_graph=True)
 
+        total_critic_grad_norm = self._get_grad_norm(self.critic)
+        grad_norm['critic_grad_norm'] = total_critic_grad_norm
+        self.critic_grad_norm = total_critic_grad_norm
 
-        if self.grad_norm_max_actor is not None:
-            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.grad_norm_max_actor)
+        grad_norm['critic_was_clipped'] = 1.0 if total_critic_grad_norm > self.grad_clip else 0.0
+
         if self.grad_norm_max_critic is not None:
             torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.grad_norm_max_critic)
 
         self.critic_optimizer.step()
-        self.critic_grad_norm = torch.cat([param.grad.detach().flatten() for param in self.critic.parameters() if param.grad is not None]).norm()
-
-        log_dict.update(
-            dict(
-                qf1_grad_norm=self.critic1_grad_norm.item(),
-                qf2_grad_norm=self.critic2_grad_norm.item(),
-                alpha_grad_norm=self.alpha_grad_norm.item(),
-                policy_grad_norm=self.policy_grad_norm.item()
-            )
-        )
+        if self.critic_scheduler is not None:
+            self.critic_scheduler.step()
+            log_dict.update(lr_critic=self.critic_optimizer.param_groups[0]['lr'])
 
         if self.total_it % self.target_update_period == 0:
             self.update_target_network(self.soft_target_update_rate)
@@ -701,12 +697,18 @@ class ContinuousPVP:
         with torch.no_grad():
             new_actions, log_pi = self.actor(state)
 
+            # alpha loss
             alpha, alpha_loss = self._alpha_and_alpha_loss(state, log_pi)
 
             """ Policy loss """
             policy_loss, policy_critic_loss, policy_entropy_loss = self._policy_loss(
                 state, action, new_actions, alpha, log_pi
             )
+
+            """ Q function loss """
+            qf_loss = self._q_loss(
+                    state, action, next_state, reward, done, alpha, log_dict
+                )
             
             log_dict = dict(
                 log_pi=log_pi.mean().item(),
@@ -715,32 +717,19 @@ class ContinuousPVP:
                 policy_entropy_loss=policy_entropy_loss.item(),
                 alpha_loss=alpha_loss.item(),
                 alpha=alpha.item(),
-            )
-
-            """ Q function loss """
-            qf_loss = self._q_loss(
-                state, action, next_state, reward, done, alpha, log_dict
-            )
-
-            log_dict.update(
-                dict(
-                    qf_loss=qf_loss.item(),
-                )
+                qf_loss=qf_loss.item(),
             )
         
-        return log_dict
+        return log_dict, action, new_actions
 
 
     def state_dict(self) -> Dict[str, Any]:
         return {
             "actor": self.actor.state_dict(),
-            "critic1": self.critic_1.state_dict(),
-            "critic2": self.critic_2.state_dict(),
-            "critic1_target": self.target_critic_1.state_dict(),
-            "critic2_target": self.target_critic_2.state_dict(),
-            "critic_1_optimizer": self.critic_1_optimizer.state_dict(),
-            "critic_2_optimizer": self.critic_2_optimizer.state_dict(),
-            "actor_optim": self.actor_optimizer.state_dict(),
+            "actor_optimizer": self.actor_optimizer.state_dict(),
+            "critic": self.critic.state_dict(),
+			"critic_optimizer": self.critic_optimizer.state_dict(),
+            "critic_target": self.critic_target.state_dict(),
             "sac_log_alpha": self.log_alpha,
             "sac_log_alpha_optim": self.alpha_optimizer.state_dict(),
             "total_it": self.total_it,
@@ -748,19 +737,14 @@ class ContinuousPVP:
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
         self.actor.load_state_dict(state_dict=state_dict["actor"])
-        self.critic_1.load_state_dict(state_dict=state_dict["critic1"])
-        self.critic_2.load_state_dict(state_dict=state_dict["critic2"])
+        self.critic.load_state_dict(state_dict=state_dict["critic"])
 
-        self.target_critic_1.load_state_dict(state_dict=state_dict["critic1_target"])
-        self.target_critic_2.load_state_dict(state_dict=state_dict["critic2_target"])
+        self.target_critic.load_state_dict(state_dict=state_dict["critic_target"])
 
-        self.critic_1_optimizer.load_state_dict(
-            state_dict=state_dict["critic_1_optimizer"]
+        self.critic_optimizer.load_state_dict(
+            state_dict=state_dict["critic_optimizer"]
         )
-        self.critic_2_optimizer.load_state_dict(
-            state_dict=state_dict["critic_2_optimizer"]
-        )
-        self.actor_optimizer.load_state_dict(state_dict=state_dict["actor_optim"])
+        self.actor_optimizer.load_state_dict(state_dict=state_dict["actor_optimizer"])
 
         self.log_alpha = state_dict["sac_log_alpha"]
         self.alpha_optimizer.load_state_dict(
@@ -770,123 +754,76 @@ class ContinuousPVP:
         self.total_it = state_dict["total_it"]
 
 
-#@pyrallis.wrap()
-def train(config: TrainConfig):
-    env_name = config.env
-    env = gym.make(config.env)
 
-    state_dim = env.observation_space.shape[0]
-    action_dim = env.action_space.shape[0]
+def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
+    learning_rate_critic = float(hyperparams['learning_rate_critic'])
+    learning_rate_actor = float(hyperparams['learning_rate_actor'])
+    weight_decay = float(hyperparams.get('weight_decay', 0.01)) # New hyperparam
+    device = config_manager.training_config['device']
 
-    dataset = d4rl.qlearning_dataset(env)
+    actor = Actor(
+        state_dim=state_dim, 
+        action_dim=action_dim, 
+        # hidden_dim=hyperparams['hidden_dim'], 
+        log_std_multiplier=hyperparams['policy_log_std_multiplier'],
+        orthogonal_init=hyperparams['orthogonal_init'],
+        dropout=hyperparams['dropout']
+    ).to(config_manager.training_config['device'])
 
-    if config.normalize_reward:
-        modify_reward(
-            dataset,
-            config.env,
-            reward_scale=config.reward_scale,
-            reward_bias=config.reward_bias,
+    actor_optimizer = torch.optim.AdamW(
+        actor.parameters(), 
+        lr=learning_rate_actor,
+        weight_decay=weight_decay
         )
 
-    if config.zero_min_reward:
-        dataset["rewards"] -= min(dataset["rewards"])   #this used to be a +=. for very high returns on halfcheetah medium use += and reward norm with scale=5, putting this line BEFORE normalise reward
-
-    if config.normalize:
-        state_mean, state_std = compute_mean_std(dataset["observations"], eps=1e-3)
-    else:
-        state_mean, state_std = 0, 1
-
-    dataset["observations"] = normalize_states(
-        dataset["observations"], state_mean, state_std
+    actor_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        actor_optimizer, 
+        T_max=hyperparams['total_steps']//hyperparams['policy_freq'], # we step the actor scheduler every policy_freq steps, so T_max should be total_steps // policy_freq
+        eta_min=learning_rate_actor * .10
     )
-    dataset["next_observations"] = normalize_states(
-        dataset["next_observations"], state_mean, state_std
-    )
-    env = wrap_env(env, state_mean=state_mean, state_std=state_std)
-    replay_buffer = ReplayBuffer(
-        state_dim,
+
+    critic = Critic(
+        state_dim, 
         action_dim,
-        config.buffer_size,
-        config.device,
+        orthogonal_init=hyperparams['orthogonal_init'],        
+        batch_norm=hyperparams['batch_norm']
+    ).to(config_manager.training_config['device'])
+
+    critic_optimizer = torch.optim.AdamW(
+        critic.parameters(),
+        lr=learning_rate_critic,
+        weight_decay=weight_decay
     )
-    replay_buffer.load_d4rl_dataset(dataset)
 
-    max_action = float(env.action_space.high[0])
-
-    if config.checkpoints_path is not None:
-        print(f"Checkpoints path: {config.checkpoints_path}")
-        os.makedirs(config.checkpoints_path, exist_ok=True)
-        with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
-            pyrallis.dump(config, f)
-
-    # Set seeds
-    seed = config.seed
-    set_seed(seed, env)
-
-    critic_1 = FullyConnectedQFunction(
-        state_dim,
-        action_dim,
-        config.orthogonal_init,
-        config.q_n_hidden_layers,
-        config.batch_norm
-    ).to(config.device)
-    critic_2 = FullyConnectedQFunction(state_dim, action_dim, config.orthogonal_init, config.q_n_hidden_layers, batch_norm=config.batch_norm).to(
-        config.device
+    critic_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        critic_optimizer, 
+        T_max=hyperparams['total_steps'],
+        eta_min=learning_rate_critic * .10
     )
-    if config.q_optim == "adam":
-        critic_1_optimizer = torch.optim.Adam(list(critic_1.parameters()), config.qf_lr, eps=config.adam_eps)
-        critic_2_optimizer = torch.optim.Adam(list(critic_2.parameters()), config.qf_lr, eps=config.adam_eps)
-    elif config.q_optim == "sgd":
-        critic_1_optimizer = torch.optim.SGD(list(critic_1.parameters()), config.qf_lr)
-        critic_2_optimizer = torch.optim.SGD(list(critic_2.parameters()), config.qf_lr)
-    else:
-        raise NotImplementedError("No Q optimiser specified.")
 
-    if config.fixed_actor:
-        actor = FixedActor(
-            state_dim,
-            action_dim,
-            max_action,
-            log_std_multiplier=config.policy_log_std_multiplier,
-            orthogonal_init=config.orthogonal_init,
-            batch_norm=config.batch_norm
-        ).to(config.device)
-    else:
-        actor = TanhGaussianPolicy(
-            state_dim,
-            action_dim,
-            max_action,
-            log_std_multiplier=config.policy_log_std_multiplier,
-            orthogonal_init=config.orthogonal_init,
-            #batch_norm=config.batch_norm
-        ).to(config.device)
-    if config.actor_optim == "adam":
-        actor_optimizer = torch.optim.Adam(actor.parameters(), config.policy_lr, eps=config.adam_eps)
-    elif config.actor_optim == "sgd":
-        actor_optimizer = torch.optim.SGD(actor.parameters(), config.policy_lr)
-    else:
-        raise NotImplementedError
+    
+    alpha_optimizer = torch.optim.AdamW(
+        self.log_alpha.parameters(),
+        lr=self.alpha_lr, eps=self.adam_eps
+    ) 
 
     kwargs = {
-        "critic_1": critic_1,
-        "critic_2": critic_2,
-        "critic_1_optimizer": critic_1_optimizer,
-        "critic_2_optimizer": critic_2_optimizer,
+        "critic": critic,
+        "critic_optimizer": critic_optimizer,
         "actor": actor,
         "actor_optimizer": actor_optimizer,
-        "discount": config.discount,
-        "soft_target_update_rate": config.soft_target_update_rate,
-        "device": config.device,
-        "batch_norm": config.batch_norm,
-        "zero_min_reward": config.zero_min_reward,
-        "importance_sampling": config.importance_sampling,
-        "target_entropy": -np.prod(env.action_space.shape).item(),
-        "alpha_multiplier": config.alpha_multiplier,
-        "use_automatic_entropy_tuning": config.use_automatic_entropy_tuning,
-        "backup_entropy": config.backup_entropy,
-        "q_optim": config.q_optim,
-        "actor_optim": config.actor_optim,
         "alpha_optim": config.alpha_optim,
+        "discount": hyperparams['discount'],
+        "soft_target_update_rate": hyperparams['soft_target_update_rate'],
+        "device": config_manager.training_config['device'],
+        "batch_norm": hyperparams['batch_norm'],
+        "zero_min_reward": hyperparams['zero_min_reward'],
+        "importance_sampling": hyperparams['importance_sampling'],
+        "target_entropy": hyperparams['target_entropy'],  # -np.prod(env.action_space.shape).item(),
+        "alpha_multiplier": hyperparams['alpha_multiplier'],
+        "use_automatic_entropy_tuning": hyperparams['use_automatic_entropy_tuning'],
+        "backup_entropy": hyperparams['backup_entropy'],
+        
         "policy_lr": config.policy_lr,
         "qf_lr": config.qf_lr,
         "alpha_lr": config.alpha_lr,
@@ -901,81 +838,13 @@ def train(config: TrainConfig):
         "fixed_actor": config.fixed_actor
     }
 
-    print("---------------------------------------")
-    print(f"Training PVP, Env: {config.env}, Seed: {seed}")
-    print("---------------------------------------")
+    trainer = ContinuousPVP(
+        **kwargs,
+        **config_manager.training_config
+    )
 
-    # Initialize actor
-    trainer = ContinuousPVP(**kwargs)
+    return trainer
 
-    if config.load_model != "":
-        policy_file = Path(config.load_model)
-        trainer.load_state_dict(torch.load(policy_file))
-        actor = trainer.actor
-    if config.max_timesteps == 0:
-        return
 
-    wandb_init(asdict(config))
 
-    evaluations = []
-    for t in range(int(config.max_timesteps)):
-        batch = replay_buffer.sample(config.batch_size)
-        batch = [b.to(config.device) for b in batch]
-        log_dict = trainer.train(batch)
-        wandb.log(log_dict, step=trainer.total_it)
-        # Evaluate episode
-        if (t + 1) % config.eval_freq == 0 or (t+1) == config.max_timesteps:
-            print(f"Time steps: {t + 1}")
 
-            eval_scores = eval_actor(
-                env,
-                actor,
-                device=config.device,
-                n_episodes=config.n_episodes,
-                seed=config.seed,
-            )
-            eval_score = eval_scores.mean()
-            normalized_eval_score = env.get_normalized_score(eval_score) * 100.0
-            evaluations.append(normalized_eval_score)
-            num_evals = int(config.max_timesteps/config.eval_freq)
-            frac_moving_avgs = [None, None, None]
-            for i, moving_avg_fraction in enumerate([0.2,0.3,0.5]):
-                moving_avg_k = int(num_evals*moving_avg_fraction)
-                if len(evaluations) > moving_avg_k:
-                    frac_moving_avgs[i] = torch.tensor(evaluations)[-moving_avg_k:].mean()
-                else:
-                    frac_moving_avgs[i] = torch.tensor(evaluations).mean()
-            moving_avg_20, moving_avg_30, moving_avg_50 = frac_moving_avgs
-            total_past_avg = torch.tensor(evaluations).mean()
-
-            print("---------------------------------------")
-            print(
-                f"Evaluation over {config.n_episodes} episodes: "
-                f"{eval_score:.3f} , D4RL score: {normalized_eval_score:.3f}"
-            )
-            print("---------------------------------------")
-            if config.checkpoints_path:
-                torch.save(
-                    trainer.state_dict(),
-                    os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
-                )
-            wandb.log(
-                {"d4rl_normalized_score": normalized_eval_score, "unnormalized_score": eval_score, "moving_avg_20": moving_avg_20, "moving_avg_30": moving_avg_30, "moving_avg_50": moving_avg_50, "total_past_avg": total_past_avg},
-                step=trainer.total_it,
-            )
-            if env_name == "MazeContinuous":
-                actor.eval()
-                critic_1.eval()
-                critic_2.eval()
-                env.visualise_policy(actor, save_dir="pvp_vis", save_name=str(t+1))
-                env.visualise_value(critic_1, actor, save_dir="pvp_vis", save_name=str(t+1))
-                critic_1.train()
-                critic_2.train()
-                actor.train()
-
-    wandb.finish()
-
-    return normalized_eval_score
-if __name__ == "__main__":
-    config = TrainConfig()
-    train(config)

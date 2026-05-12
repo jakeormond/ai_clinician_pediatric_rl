@@ -401,7 +401,6 @@ class ContinuousPVP:
 		critic_optimizer: torch.optim.Optimizer = None,
 		critic_scheduler: torch.optim.lr_scheduler._LRScheduler = None,
         
-        log_alpha: Scalar = None,
         alpha_optimizer: torch.optim.Optimizer = None,
 
         device: str = "CUDA" if torch.cuda.is_available() else "CPU",
@@ -449,8 +448,13 @@ class ContinuousPVP:
         self.critic = critic
         self.critic_optimizer = critic_optimizer
         self.critic_scheduler = critic_scheduler  
-
-        self.log_alpha = log_alpha
+        
+        self.use_automatic_entropy_tuning = use_automatic_entropy_tuning
+        if self.use_automatic_entropy_tuning:
+            self.log_alpha = Scalar(0.0)
+        else:
+            self.log_alpha = None
+        
         self.alpha_optimizer = alpha_optimizer    
 
         self.device = device  
@@ -461,7 +465,7 @@ class ContinuousPVP:
         self.pvp_alpha = pvp_alpha
         self.target_entropy = target_entropy
         self.alpha_multiplier = alpha_multiplier
-        self.use_automatic_entropy_tuning = use_automatic_entropy_tuning
+        
         self.backup_entropy = backup_entropy
 
         self.reward_scaling = reward_scaling

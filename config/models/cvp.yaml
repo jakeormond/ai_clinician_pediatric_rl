@@ -48,7 +48,7 @@
     # q_min is now calculated from the minimum reward and discount factor
     # q_min: 0. # if zero_min_reward is False, this should be a baseline "bad" value for a random policy essentially, but you can think of it as a hyperparameter
 
-    pvp_alpha: 10.  # Weighting for PVP penalty
+    pvp_alpha: [2., 5., 10.]  # Weighting for PVP penalty
 
     next_state_reg: True  # Whether to include next state regularization term in critic loss
 

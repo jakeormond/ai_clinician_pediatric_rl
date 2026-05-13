@@ -141,7 +141,8 @@ def create_trainer(train_processor, hyperparams, config_manager):
     state_dim = train_processor.rl_dataset["states"].shape[1]
     action_dim = train_processor.rl_dataset["actions"].shape[1]
     max_action = np.max(np.abs(train_processor.rl_dataset["actions"].cpu().numpy()))
-
+    min_reward = np.min(train_processor.rl_dataset["rewards"].cpu().numpy())
+    
     model_type = config_manager.model_type
     module = importlib.import_module(MODEL_MODULES[model_type])
     
@@ -150,6 +151,7 @@ def create_trainer(train_processor, hyperparams, config_manager):
         state_dim,
         action_dim,
         max_action,
+        min_reward,
         hyperparams
     )
 
@@ -545,7 +547,7 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
 
     # initialize best_val_score
     loss_metric = config_manager.training_config['loss_metric'] 
-    if loss_metric in ['critic_loss'] or loss_metric in ['bellman_loss']:
+    if loss_metric in ['critic_loss'] or loss_metric in ['bellman_loss'] or loss_metric in ['qf_loss']:
         best_val_loss = float('inf')
     else:        
         raise NotImplementedError("Currently only implemented for critic_loss, which is the default loss_metric for basic_q. For other metrics, we need to decide how to calculate an overall validation score across epochs and implement that logic here.")
@@ -803,6 +805,21 @@ def train_with_hyperparameters(
             'training_config': config_manager.training_config,
         }
         torch.save(checkpoint, model_path)
+    
+    elif config_manager.model_type == 'cvp':
+        checkpoint = {
+            'total_it': trainer.total_it,
+            'actor_state_dict': trainer.actor.state_dict(),
+            'critic_state_dict': trainer.critic.state_dict(),
+            'critic_target_state_dict': trainer.target_critic.state_dict(),
+            'actor_optimizer_state_dict': trainer.actor_optimizer.state_dict(),
+            'critic_optimizer_state_dict': trainer.critic_optimizer.state_dict(),
+            'hyperparameters': hyperparams,
+            'training_config': config_manager.training_config,
+        }
+        torch.save(checkpoint, model_path)
+    
+    
     
     else:
         torch.save(trainer.model.state_dict(), model_path)

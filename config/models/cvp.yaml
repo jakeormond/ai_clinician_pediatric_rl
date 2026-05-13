@@ -23,7 +23,7 @@
     
     batch_norm: False  # Whether to use batch normalization
     
-    zero_min_reward: False #translate all rewards to be positive
+    zero_min_reward: True #translate all rewards to be positive
     
     importance_sampling: False # Whether to use importance sampling weights for critic loss
     
@@ -45,11 +45,12 @@
 
     pvp_n_actions: 10  # Number of actions to sample for PVP penalty
 
-    q_min: 0. # if zero_min_reward is False, this should be a baseline "bad" value for a random policy essentially, but you can think of it as a hyperparameter
+    # q_min is now calculated from the minimum reward and discount factor
+    # q_min: 0. # if zero_min_reward is False, this should be a baseline "bad" value for a random policy essentially, but you can think of it as a hyperparameter
 
     pvp_alpha: 10.  # Weighting for PVP penalty
 
-    next_state_reg: False  # Whether to include next state regularization term in critic loss
+    next_state_reg: True  # Whether to include next state regularization term in critic loss
 
     policy_log_std_multiplier: 1.0  # Stochastic policy std multiplier
 
@@ -79,10 +80,10 @@
     min_delta: 0.0001   # Minimum improvement threshold
 
     # evaluation parameters
-    monitor_v0: True  # Whether to monitor V0 during training - specific to TD3-BC
+    monitor_v0: False  # Whether to monitor V0 during training - specific to TD3-BC
 
     # validation loss
-    loss_metric: "bellman_loss"  # Which metric to use for validation loss
+    loss_metric: "qf_loss"  # Which metric to use for validation loss
 
     # changes to reward structure
     make_rewards_positive: False  # Whether to shift rewards to be positive

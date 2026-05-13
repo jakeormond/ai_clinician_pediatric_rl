@@ -11,6 +11,31 @@ Working with negative rewards:
     -if the value for pvp_alpha is too small then the critic loss explodes and the actor loss goes very negative
 -the general pattern i found, especially for pvp_alpha, is you want to make it as small as possible up to where the losses blow up, 
     basically reach a critical value where the regularisaiton is small but the training is still stable
+
+
+From gemini: 
+Actor uses TahhGaussian for forward pass, this makes action distribution bounded 
+between -1 and 1. Note: I've rescaled the actions accordingly, they will need to 
+be rescaled for evaluation!
+    - it also allows for reparameterization, which is important for backprop 
+    through the sampling process
+
+Alpha is a temperature parameter that controls the strength of the entropy regularization in the policy loss.
+It is learned (loss calculated, step is taken), and then alpha is used in policy loss.
+    -alpha loss is designed to keep entropy close to target entropy, which is a hyperparameter that we set.
+
+Policy loss aims to maximize expected Q value of the actions taken by the current policy, while also 
+maximizing entropy (encouraging exploration).
+    -it is the entropy calculation that is scaled by alpha
+
+Q loss provides a standard Temporal Difference (TD) learning signal for the critic, but also includes a 
+regularization term that penalizes the Q-values of out-of-distribution actions (the PVP term).
+    -Calculate TD target using the target critic and the next state and action
+    -If backup_entropy is True, it subtracts alpha * next_log_pi from the target. This ensures 
+    that actions that are both high-reward and high-entropy (uncertain/exploratory) are valued more.
+    -Filippo says to use q_min 0, and zero the rewards. I will do this for now. Alternative would be:    
+    q_min calculated from the minimum reward and discount factor.
+    -He also says use 
 """
 
 import os
@@ -203,7 +228,8 @@ class Critic(nn.Module): # FullyConnectedQFunction
         super(Critic, self).__init__()
 
         # standardize the incoming embeddings
-        self.state_norm = nn.LayerNorm(state_dim + action_dim) # if cql loss stays close to zero, we may
+        # self.state_norm = nn.LayerNorm(state_dim + action_dim) # if cql loss stays close to zero, we may
+        self.state_norm = nn.LayerNorm(state_dim)
         # want to remove action_dim from this normalization, but for now we can keep it since actions are also log-min-maxed and should be on a similar scale to states	
         self.hidden_dim = hidden_dim
 
@@ -294,10 +320,21 @@ class Critic(nn.Module): # FullyConnectedQFunction
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        sa = torch.cat([state, action], 1)
+        multiple_actions = False
+        batch_size = state.shape[0]
+        
+        if action.ndim == 3 and state.ndim == 2:
+            multiple_actions = True
+            state = extend_and_repeat(state, 1, action.shape[1]).reshape(
+                -1, state.shape[-1]
+            )
+            action = action.reshape(-1, action.shape[-1])       
+
+        norm_state = self.state_norm(state) # ai says only apply to state, fix in other algos   
+        sa = torch.cat([norm_state, action], 1)
 
         # normalize states after concatenation
-        sa = self.state_norm(sa)
+        # sa = self.state_norm(sa)
 
         q1 = self.q1_net(sa)
         q2 = self.q2_net(sa)
@@ -429,7 +466,8 @@ class ContinuousPVP:
         bc_steps=0,
         target_update_period: int = 1,
         pvp_n_actions: int = 10,
-        q_min: float = 0.0,
+        q_min: float = 0.0, 
+        min_reward: float = 0.0,
         pvp_alpha: float = 10.0,
         next_state_reg: bool = True,
         fixed_actor: bool = False,
@@ -437,6 +475,8 @@ class ContinuousPVP:
         ood_action_var: float = 0.2,
 
         reward_scaling: float = 1.0,
+
+        ema_alpha: float = 0.99,  # Add ema_alpha argument for moving
     ):
 
         self.max_action = max_action
@@ -461,6 +501,11 @@ class ContinuousPVP:
         
         self.discount = discount
         self.batch_norm = batch_norm
+        
+        # q_min = min_reward / (1 - discount) if zero_min_reward else min_reward
+        self.q_min = q_min
+        self.min_reward = min_reward
+
         self.q_min = q_min
         self.pvp_alpha = pvp_alpha
         self.target_entropy = target_entropy
@@ -491,15 +536,16 @@ class ContinuousPVP:
         self.next_state_reg = next_state_reg
         self.total_it = 0
 
-        self.critic = critic
-
+        self.critic_clip_fraction_ema = 0.0
+        self.actor_clip_fraction_ema = 0.0
+        self.ema_alpha = ema_alpha
         # if self.critic_1 is not None:
         #     self.target_critic_1 = deepcopy(self.critic_1).to(device)
         #     self.target_critic_2 = deepcopy(self.critic_2).to(device)
 
         # copy the critic network to create the target critic
-        self.critic_target = copy.deepcopy(self.critic)
-        self.critic_target.eval()  # Target networks start in eval mode to disable Dropout
+        self.target_critic = copy.deepcopy(self.critic)
+        self.target_critic.eval()  # Target networks start in eval mode to disable Dropout
 
         self.total_it = 0
 
@@ -526,23 +572,18 @@ class ContinuousPVP:
         log_pi: torch.Tensor,
     ) -> torch.Tensor:
         
-        if self.total_it < self.bc_steps:
-            # this code shouldn't execute yet because we're not using bc_steps
-            log_probs = self.actor.log_prob(observations, actions)
-            policy_loss = (alpha * log_pi - log_probs).mean()
-            policy_critic_loss = torch.tensor(0.0)        
-        else:
-            if self.batch_norm:
-                self.critic.eval()
+        # if self.batch_norm:
+        #     self.critic.eval()
+        self.critic.eval()
+        q_new_actions = torch.min(*self.critic(observations, new_actions))
 
-            q_new_actions = torch.min(self.critic(observations, new_actions))
+        # if self.batch_norm:
+        #     self.critic.train()
+        self.critic.train()
 
-            if self.batch_norm:
-                self.critic.train()
-
-            policy_critic_loss = -q_new_actions.mean()
-            policy_entropy_loss = alpha*log_pi.mean()
-            policy_loss = (alpha * log_pi - q_new_actions).mean()
+        policy_critic_loss = -q_new_actions.mean()
+        policy_entropy_loss = alpha*log_pi.mean()
+        policy_loss = (alpha * log_pi - q_new_actions).mean()
         
         return policy_loss, policy_critic_loss, policy_entropy_loss
 
@@ -560,69 +601,50 @@ class ContinuousPVP:
 
         new_next_actions, next_log_pi = self.actor(next_observations)
         target_q_values = torch.min(
-            self.target_critic(next_observations, new_next_actions),
+            *self.target_critic(next_observations, new_next_actions),
         )
 
         if self.backup_entropy:
             target_q_values = target_q_values - alpha * next_log_pi
 
-        target_q_values = target_q_values.unsqueeze(-1)
+        # target_q_values = target_q_values.unsqueeze(-1)
         td_target = rewards + (1.0 - dones) * self.discount * target_q_values.detach()
-        td_target = td_target.squeeze(-1)
+        # td_target = td_target.squeeze(-1)
         qf1_loss = F.mse_loss(q1_predicted, td_target.detach())
         qf2_loss = F.mse_loss(q2_predicted, td_target.detach())
 
         # PVP regularisation term
         batch_size = actions.shape[0]
 
-        if not self.ncp_samples:
-            pvp_ood_actions, pvp_ood_log_pis = self.actor(observations.repeat((self.pvp_n_actions,1)))
-            pvp_ood_actions = pvp_ood_actions.detach().reshape(batch_size, self.pvp_n_actions, -1)
-            if self.importance_sampling:
-                pvp_ood_pis = torch.exp(pvp_ood_log_pis).reshape(batch_size, self.pvp_n_actions).detach()
-
-
-        else:
-            pvp_ood_actions_means = actions.repeat((self.pvp_n_actions,1))
-            epsilons = torch.randn_like(pvp_ood_actions_means)
-            pvp_ood_actions = (pvp_ood_actions_means+epsilons*math.sqrt(self.ood_action_var)).reshape(batch_size, self.pvp_n_actions, -1)
+         # policy-based sampling
+        pvp_ood_actions, pvp_ood_log_pis = self.actor(observations.repeat((self.pvp_n_actions,1)))
+        pvp_ood_actions = pvp_ood_actions.detach().reshape(batch_size, self.pvp_n_actions, -1)
         
         pvp_ood_q1, pvp_ood_q2 = self.critic(observations, pvp_ood_actions)
 
         if not self.next_state_reg:
-            if not self.importance_sampling:
-                pvp_qf1_ood_loss = torch.mean((pvp_ood_q1 - self.q_min)**2, dim=1).mean()
-                pvp_qf2_ood_loss = torch.mean((pvp_ood_q2 - self.q_min)**2, dim=1).mean()
+            pvp_qf1_ood_loss = torch.mean((pvp_ood_q1 - self.q_min)**2, dim=1).mean()
+            pvp_qf2_ood_loss = torch.mean((pvp_ood_q2 - self.q_min)**2, dim=1).mean()
             
-            else: 
-                #print(torch.sum((1/pvp_ood_pis).sum(1,keepdim=True)*(pvp_ood_q1 - self.q_min)**2 / pvp_ood_pis, dim=1).mean())
-                pvp_qf1_ood_loss = torch.sum((1/pvp_ood_pis).sum(1,keepdim=True)*(pvp_ood_q1 - self.q_min)**2 / pvp_ood_pis, dim=1).mean()
-                pvp_qf2_ood_loss = torch.sum((1/pvp_ood_pis).sum(1,keepdim=True)*(pvp_ood_q2 - self.q_min)**2 / pvp_ood_pis, dim=1).mean()
-                #pvp_qf1_ood_loss = torch.mean((pvp_ood_q1 - self.q_min)**2, dim=1).mean()
-                #pvp_qf2_ood_loss = torch.mean((pvp_ood_q2 - self.q_min)**2, dim=1).mean()
-
-        else:
-            pvp_qf1_ood_loss = torch.mean((pvp_ood_q1 - self.q_min)**2, dim=1).mean() + ((self.critic_1(next_observations, new_next_actions.detach())-self.q_min)**2).mean()
-            pvp_qf2_ood_loss = torch.mean((pvp_ood_q2 - self.q_min)**2, dim=1).mean() + ((self.critic_2(next_observations, new_next_actions.detach())-self.q_min)**2).mean()
-        
-
+        else: # Filippo says to use next_state_reg
+            next_q1, next_q2 = self.critic(next_observations, new_next_actions.detach())
+            
+            pvp_qf1_ood_loss = torch.mean((pvp_ood_q1 - self.q_min)**2, dim=1).mean() + ((next_q1-self.q_min)**2).mean()
+            pvp_qf2_ood_loss = torch.mean((pvp_ood_q2 - self.q_min)**2, dim=1).mean() + ((next_q2-self.q_min)**2).mean()
+   
 
         # Total loss
         qf_loss = qf1_loss + qf2_loss + pvp_qf1_ood_loss*self.pvp_alpha + pvp_qf2_ood_loss*self.pvp_alpha
 
         log_dict.update(
             dict(
+                qf_loss=qf_loss.item(),
                 qf1_loss=qf1_loss.item(),
                 qf2_loss=qf2_loss.item(),
                 alpha=alpha.item(),
                 average_qf1=q1_predicted.mean().item(),
                 average_qf2=q2_predicted.mean().item(),
                 average_target_q=target_q_values.mean().item(),
-            )
-        )
-
-        log_dict.update(
-            dict(
                 pvp_ood_q1=pvp_ood_q1.mean().item(),
                 pvp_ood_q2=pvp_ood_q2.mean().item(),
                 pvp_ood_q1_std = pvp_ood_q1.std().item(),
@@ -632,10 +654,16 @@ class ContinuousPVP:
                 pvp_ood_actions=pvp_ood_actions.mean().item()
             )
         )
-
+   
         return qf_loss
 
-           
+    def _get_grad_norm(self, model: nn.Module) -> float:
+        total_norm = 0
+        for p in model.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.detach().data.norm(2)
+                total_norm += param_norm.item() ** 2
+        return total_norm ** 0.5
     
     def train(self, batch: TensorBatch) -> Dict[str, float]:
  
@@ -643,8 +671,15 @@ class ContinuousPVP:
 
         # Sample replay buffer 
         state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
-		
+
+        # zero reward if specified
         reward = reward * self.reward_scaling
+        if self.zero_min_reward:
+            reward = reward - self.min_reward
+
+		# Rescale actions from [0, 1] to [-1, 1]
+        action = 2.0 * action - 1.0
+        next_action = 2.0 * next_action - 1.0
 
         # compute the target Q value
         treat_survival_as_truncated = True
@@ -663,12 +698,6 @@ class ContinuousPVP:
         policy_loss, policy_critic_loss, policy_entropy_loss = self._policy_loss(
             state, action, new_actions, alpha, log_pi
         )
-
-        """ Q function loss """
-        qf_loss = self._q_loss(
-            state, action, next_state, reward, done, alpha, log_dict
-        )
-        
         log_dict = dict(
             log_pi=log_pi.mean().item(),
             policy_loss=policy_loss.item(),
@@ -676,8 +705,12 @@ class ContinuousPVP:
             policy_entropy_loss=policy_entropy_loss.item(),
             alpha_loss=alpha_loss.item(),
             alpha=alpha.item(),
-            qf_loss=qf_loss.item(),
         )
+
+        """ Q function loss """
+        qf_loss = self._q_loss(
+            state, action, next_state, reward, done, alpha, log_dict
+        )        
 
         if self.use_automatic_entropy_tuning:
             self.alpha_optimizer.zero_grad()
@@ -700,7 +733,7 @@ class ContinuousPVP:
         self.policy_grad_norm = total_actor_grad_norm
         # self.policy_grad_norm = torch.cat([param.grad.detach().flatten() for param in self.actor.parameters() if param.grad is not None]).norm()
 
-        grad_norm['actor_was_clipped'] = 1.0 if total_actor_grad_norm > self.grad_clip else 0.0
+        grad_norm['actor_was_clipped'] = 1.0 if total_actor_grad_norm > self.grad_norm_max_actor else 0.0
         
         # update the moving average of the clipping binary
         self.actor_clip_fraction_ema = self.ema_alpha * self.actor_clip_fraction_ema + (1 - self.ema_alpha) * grad_norm['actor_was_clipped']
@@ -724,8 +757,9 @@ class ContinuousPVP:
         grad_norm['critic_grad_norm'] = total_critic_grad_norm
         self.critic_grad_norm = total_critic_grad_norm
 
-        grad_norm['critic_was_clipped'] = 1.0 if total_critic_grad_norm > self.grad_clip else 0.0
-
+        grad_norm['critic_was_clipped'] = 1.0 if total_critic_grad_norm > self.grad_norm_max_critic else 0.0
+        self.critic_clip_fraction_ema = self.ema_alpha * self.critic_clip_fraction_ema + (1 - self.ema_alpha) * grad_norm['critic_was_clipped']
+        grad_norm['critic_clip_fraction_ema'] = self.critic_clip_fraction_ema
         if self.grad_norm_max_critic is not None:
             torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.grad_norm_max_critic)
 
@@ -745,8 +779,16 @@ class ContinuousPVP:
         self.critic.eval()  # Ensure critic is also in eval mode
 
         state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
-		
+        
         reward = reward * self.reward_scaling
+        # zero reward if specified
+        reward = reward.clone()  # Clone to avoid in-place operations   
+        if self.zero_min_reward:
+            reward = reward - self.min_reward
+
+        # Rescale actions from [0, 1] to [-1, 1]
+        action = 2.0 * action - 1.0
+        next_action = 2.0 * next_action - 1.0
 
         # compute the target Q value
         treat_survival_as_truncated = True
@@ -766,12 +808,6 @@ class ContinuousPVP:
             policy_loss, policy_critic_loss, policy_entropy_loss = self._policy_loss(
                 state, action, new_actions, alpha, log_pi
             )
-
-            """ Q function loss """
-            qf_loss = self._q_loss(
-                    state, action, next_state, reward, done, alpha, log_dict
-                )
-            
             log_dict = dict(
                 log_pi=log_pi.mean().item(),
                 policy_loss=policy_loss.item(),
@@ -779,8 +815,12 @@ class ContinuousPVP:
                 policy_entropy_loss=policy_entropy_loss.item(),
                 alpha_loss=alpha_loss.item(),
                 alpha=alpha.item(),
-                qf_loss=qf_loss.item(),
             )
+            """ Q function loss """
+            qf_loss = self._q_loss(
+                state, action, next_state, reward, done, alpha, log_dict
+            )
+            log_dict.update(qf_loss=qf_loss.item())           
         
         return log_dict, action, new_actions
 
@@ -791,7 +831,7 @@ class ContinuousPVP:
             "actor_optimizer": self.actor_optimizer.state_dict(),
             "critic": self.critic.state_dict(),
 			"critic_optimizer": self.critic_optimizer.state_dict(),
-            "critic_target": self.critic_target.state_dict(),
+            "target_critic": self.target_critic.state_dict(),
             "sac_log_alpha": self.log_alpha,
             "sac_log_alpha_optim": self.alpha_optimizer.state_dict(),
             "total_it": self.total_it,
@@ -801,7 +841,7 @@ class ContinuousPVP:
         self.actor.load_state_dict(state_dict=state_dict["actor"])
         self.critic.load_state_dict(state_dict=state_dict["critic"])
 
-        self.target_critic.load_state_dict(state_dict=state_dict["critic_target"])
+        self.target_critic.load_state_dict(state_dict=state_dict["target_critic"])
 
         self.critic_optimizer.load_state_dict(
             state_dict=state_dict["critic_optimizer"]
@@ -817,7 +857,7 @@ class ContinuousPVP:
 
 
 
-def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
+def get_trainer(config_manager, state_dim, action_dim, max_action, min_reward, hyperparams):
     learning_rate_critic = float(hyperparams['learning_rate_critic'])
     learning_rate_actor = float(hyperparams['learning_rate_actor'])
     # weight_decay = float(hyperparams.get('weight_decay', 0.01)) # New hyperparam
@@ -880,7 +920,7 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
     log_alpha = Scalar(0.0)
     
     if hyperparams['alpha_optim'] == "adam":
-        alpha_optimizer = torch.optim.AdamW(
+        alpha_optimizer = torch.optim.Adam(
             log_alpha.parameters(),
             lr=hyperparams['learning_rate_alpha'], 
             eps=adam_eps
@@ -902,11 +942,15 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
         "actor_scheduler": actor_scheduler,
         "alpha_optimizer": alpha_optimizer,
         "discount": hyperparams['discount'],
+
         "max_action": max_action,
+        "min_reward": min_reward,
+        "zero_min_reward": hyperparams['zero_min_reward'],
+
         "soft_target_update_rate": hyperparams['tau'],
         "device": config_manager.training_config['device'],
         "batch_norm": hyperparams['batch_norm'],
-        "zero_min_reward": hyperparams['zero_min_reward'],
+        
         "importance_sampling": hyperparams['importance_sampling'],
         "target_entropy": hyperparams['target_entropy'],  # -np.prod(env.action_space.shape).item(),
         "alpha_multiplier": hyperparams['alpha_multiplier'],
@@ -924,7 +968,7 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
         "target_update_period": hyperparams['target_update_period'],
         "pvp_n_actions": hyperparams['pvp_n_actions'],
         "pvp_alpha": hyperparams['pvp_alpha'],
-        "q_min": hyperparams['q_min'],
+        # "q_min": hyperparams['q_min'],
     }
 
     trainer = ContinuousPVP(

@@ -17,19 +17,20 @@ from scipy import stats
 # rl_models_path = "/home/jake/Documents/AI_Clinician/rl_models/" 
 
 
-def load_sarsa_critic(config_manager, model_path = None):
+def load_sarsa_critic(config_manager = None, model_path = None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if model_path is None:
+    if model_path is None and config_manager is not None:
         model_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.model_type, 
                         f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions, "final_model")
     
         # get folder inside model_path
         model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
-    
-    final_model_path = os.path.join(model_path, model_folder, "final_model.pt")
+        model_path = os.path.join(model_path, model_folder)
+
+    final_model_path = os.path.join(model_path, "final_model.pt")
 
     # load results.json from model_folder, which has state_dim 
-    results_path = os.path.join(model_path, model_folder, "results.json")
+    results_path = os.path.join(model_path, "results.json")
     if os.path.exists(results_path):
         with open(results_path, "r") as f:
             results = json.load(f)

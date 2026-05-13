@@ -39,6 +39,7 @@ from .plotting import plot_losses, plot_Q_by_mortality, plot_gradient_norms
 # from .evaluate_models import load_sarsa_critic, calculate_advantage, plot_advantage
 from .models.shared_components import TrainerUtils
 
+from .evaluate_models import load_sarsa_critic
 
 import logging
 logger = logging.getLogger(__name__)
@@ -137,7 +138,6 @@ def create_buffer(processor, batch_size, shuffle=True, scaler=None, action_names
 
 
 def create_trainer(train_processor, hyperparams, config_manager):
-
     state_dim = train_processor.rl_dataset["states"].shape[1]
     action_dim = train_processor.rl_dataset["actions"].shape[1]
     max_action = np.max(np.abs(train_processor.rl_dataset["actions"].cpu().numpy()))
@@ -154,6 +154,23 @@ def create_trainer(train_processor, hyperparams, config_manager):
         min_reward,
         hyperparams
     )
+
+
+def create_evaluator(train_processor, hyperparams, config_manager):
+    state_dim = train_processor.rl_dataset["states"].shape[1]
+    action_dim = train_processor.rl_dataset["actions"].shape[1]
+    max_action = np.max(np.abs(train_processor.rl_dataset["actions"].cpu().numpy()))
+    min_reward = np.min(train_processor.rl_dataset["rewards"].cpu().numpy())
+    
+    model_path = os.path.join(config_manager.paths['rl_models_dir'], 
+        'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
+        config_manager.actions, 'final_model')
+    model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
+    model_path = os.path.join(model_path, model_folder)
+
+    sarsa_critic = load_sarsa_critic(model_path=model_path)
+   
+    return sarsa_critic
 
 
 def get_early_stopping_config(config_manager):
@@ -320,7 +337,7 @@ def save_results(
     return all_scores
 
 
-def evaluate_during_training(trainer, epoch, val_buffer, batch_size, val_losses):
+def evaluate_during_training(trainer, sarsa_critic, epoch, val_buffer, batch_size, val_losses):
     
     epoch_val_losses = defaultdict(list)
 
@@ -333,6 +350,9 @@ def evaluate_during_training(trainer, epoch, val_buffer, batch_size, val_losses)
         # Automatically append all validation metrics
         for key, value in batch_losses.items():
             epoch_val_losses[key].append(value)
+
+        # evaluation on sarsa_critic
+        pass
                      
     # calculate q value stats if available
     if "mean_Q" in epoch_val_losses:
@@ -356,6 +376,11 @@ def evaluate_during_training(trainer, epoch, val_buffer, batch_size, val_losses)
         prefixed_q_stats = {f"val/{k}": v for k, v in q_stats.items()}
         epoch_val_avg.update(prefixed_q_stats)
         # epoch_val_avg.update(q_stats)
+
+
+    # RUN SARSA EVALUATION
+
+
 
     # --- W&B LOGGING CALL ---
     # This captures the "Baseline" (Epoch 0) and all future epochs
@@ -625,6 +650,9 @@ def train_with_hyperparameters(
 
     # create trainer
     trainer = create_trainer(train_processor, hyperparams, config_manager)
+
+    # create sarsa_evaluator
+    sarsa_critic = create_evaluator(train_processor, hyperparams, config_manager)
         
     # Early stopping configuration 
     early_stopping = get_early_stopping_config(config_manager)

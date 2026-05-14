@@ -77,6 +77,89 @@ def plot_losses(training_scores, val_scores, test_scores, plot_dir):
         plt.close()
 
 
+
+def plot_validation_scores(training_scores, val_scores, test_scores, plot_dir):
+    loss_keys = list(val_scores.keys())
+    new_loss_keys = []
+
+    training_keys = list(training_scores.keys())
+    # drop training_keys from loss_keys
+    for key in loss_keys:
+        key_truncated = key.split('/')[-1]  # get the part after the last '/'
+        if key_truncated not in training_keys:
+            new_loss_keys.append(key)
+    loss_keys = new_loss_keys
+    
+    # drop mean_Q and std_Q if present
+    if 'mean_Q' in loss_keys:
+        loss_keys.remove('mean_Q')
+    if 'std_Q' in loss_keys:
+        loss_keys.remove('std_Q')
+
+    n_subplots = len(loss_keys)
+    n_figures = n_subplots // 3 + int(n_subplots % 3 > 0)
+    n_subplots_per_figure = 3
+
+    subplot_counter = 0
+
+    for fig_idx in range(n_figures):    
+        plt.figure(figsize=(15, 5 * n_subplots_per_figure))
+        
+        for i in range(n_subplots_per_figure):
+            if subplot_counter >= n_subplots:
+                break
+            key = loss_keys[subplot_counter]
+
+            plt.subplot(n_subplots_per_figure, 1, i + 1)
+            epochs_range = np.arange(1, len(val_scores[key]) + 1)
+
+            # check if training_scores[key] is a list of lists (one per fold) or a single list
+            if isinstance(val_scores[key][0], list):
+                val_scores_4plot = [item for sublist in val_scores[key] for item in sublist]
+            else:
+                val_scores_4plot = val_scores[key]
+
+            val_range = np.linspace(epochs_range[0], epochs_range[-1], len(val_scores_4plot) + 1)[:-1]
+
+            plt.plot(val_range, val_scores_4plot, color=plt.cm.Blues(0.9), linewidth=2, label='Validation Score')
+
+            val_epochs = np.array(val_scores['epoch']) + 1
+            val_key = f"val/{key}"
+            if val_key in val_scores:
+                # val_losses = val_scores[val_key]
+
+                # plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      
+                
+                if test_scores is not None and key in test_scores:
+                    val_loss_final = test_scores[key]
+                    # plot val loss as horizontal line
+                    plt.axhline(y=val_loss_final, color='green', linestyle='--', linewidth=2, label='Val Loss final')
+
+            if i == n_subplots_per_figure - 1:
+                plt.xlabel('Epochs')
+            plt.ylabel(key)
+            plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
+            plt.xlim(-0.5, np.max(epochs_range)+0.5)
+            plt.title(f'{key} over Epochs')
+            plt.grid(True)
+            plt.legend(
+                loc='upper right',
+                facecolor='white',  # solid white background
+                framealpha=1,
+                edgecolor='lightgray',
+                bbox_to_anchor=(0.98, 0.98),
+                fontsize=10,
+            )
+
+            subplot_counter += 1
+
+        # Save the plot
+        plot_path = Path(plot_dir) / f"validation_scores_plot_{fig_idx}.png"
+        plt.savefig(plot_path)
+        plt.close()
+
+
+
 def plot_gradient_norms(grad_norms, plot_dir):
     grad_keys = list(grad_norms.keys())
     if 'was_clipped' in grad_keys:

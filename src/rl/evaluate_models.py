@@ -121,7 +121,7 @@ def calculate_advantage(sarsa_critic, states, clinician_actions, rl_actions, dev
     q_clinician = torch.min(q1_clinician, q2_clinician)
     q_rl = torch.min(q1_rl, q2_rl)
 
-    advantage = (q_rl - q_clinician) / 2
+    advantage = q_rl - q_clinician
     mean_advantage = advantage.mean().item()
     print(f"Mean Advantage of RL Actions over Clinician Actions: {mean_advantage:.4f}")
     

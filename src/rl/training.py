@@ -35,7 +35,7 @@ from .models.behavioural_cloning import keep_best_trajectories, keep_positive_tr
 from ..supervised_learning.training import get_hyperparameter_space, select_hyperparameters_randomly, get_fixed_hyperparameters, to_json_safe
 from .models.td3_bc import TD3_BC
 from ..utils.utilities import set_seed
-from .plotting import plot_losses, plot_Q_by_mortality, plot_gradient_norms
+from .plotting import plot_losses, plot_Q_by_mortality, plot_gradient_norms, plot_validation_scores
 # from .evaluate_models import load_sarsa_critic, calculate_advantage, plot_advantage
 from .models.shared_components import TrainerUtils
 
@@ -267,11 +267,41 @@ def calculate_q_stats(losses_dict):
     survival_non_survival_snr = survival_non_survival_diff**2/(0.5*(overall_variance_survival_Q + overall_variance_non_survival_Q))
 
     # advantage using sarsa critic
-    advantage = (losses_dict["rl_Q2"] - losses_dict["clinician_Q"]) / 2
-    mean_advantage_sarsa = np.mean(advantage)
+    mean_advantage = losses_dict["advantage_mean"]
+    variance_advantage = losses_dict["advantage_variance"]
+    
+    overall_mean_advantage = np.mean(mean_advantage)
+    overall_variance_advantage = np.sum(counts_all * (variance_advantage + np.array(mean_advantage - overall_mean_advantage)**2)) / np.sum(counts_all)
 
-    clinician_mean_Q_survival = np.mean(losses_dict["survival_clinician_Q"])
-    clinician_mean_Q_non_survival = np.mean(losses_dict["non_survival_clinician_Q"])
+    # survival advantage
+    mean_advantage_survival = losses_dict["advantage_survival_mean"]
+    variance_advantage_survival = losses_dict["advantage_survival_variance"]
+    
+    # drop nan from mean_advantage_survival and variance_advantage_survival 
+    mean_advantage_survival = [a for a in mean_advantage_survival if not np.isnan(a)]
+    variance_advantage_survival = [v for v in variance_advantage_survival if not np.isnan(v)]
+
+    overall_mean_advantage_survival = np.mean(mean_advantage_survival)
+    overall_variance_advantage_survival = np.sum(counts_survival * (variance_advantage_survival + np.array(mean_advantage_survival - overall_mean_advantage_survival)**2)) / np.sum(counts_survival)
+
+    # non-survival advantage
+    mean_advantage_non_survival = losses_dict["advantage_non_survival_mean"]
+    variance_advantage_non_survival = losses_dict["advantage_non_survival_variance"]
+
+    # drop nan from mean_advantage_non_survival and variance_advantage_non_survival
+    mean_advantage_non_survival = [a for a in mean_advantage_non_survival if not np.isnan(a)]
+    variance_advantage_non_survival = [v for v in variance_advantage_non_survival if not np.isnan(v)]
+
+    overall_mean_advantage_non_survival = np.mean(mean_advantage_non_survival)
+    overall_variance_advantage_non_survival = np.sum(counts_non_survival * (variance_advantage_non_survival + np.array(mean_advantage_non_survival - overall_mean_advantage_non_survival)**2)) / np.sum(counts_non_survival)
+
+    # q_clinician_survival = losses_dict["q_clinician_survival"]
+    mean_q_clinician_survival = np.mean(losses_dict["q_clinician_survival"])
+    mean_q_clinician_non_survival = np.mean(losses_dict["q_clinician_non_survival"])
+
+    mean_q_rl_survival = np.mean(losses_dict["q_rl_survival"])
+    mean_q_rl_non_survival = np.mean(losses_dict["q_rl_non_survival"])
+   
 
     # create a dictionary of these values 
     q_stats = {
@@ -283,9 +313,16 @@ def calculate_q_stats(losses_dict):
         "std_non_survival_Q": overall_std_non_survival_Q,
         "survival_non_survival_diff": survival_non_survival_diff,
         "survival_non_survival_snr": survival_non_survival_snr,
-        "mean_advantage_sarsa": mean_advantage_sarsa,
-        "clinician_mean_Q_survival": clinician_mean_Q_survival,
-        "clinician_mean_Q_non_survival": clinician_mean_Q_non_survival
+        "mean_advantage_sarsa": overall_mean_advantage,
+        "variance_advantage_sarsa": overall_variance_advantage,
+        "mean_advantage_survival": overall_mean_advantage_survival,
+        "variance_advantage_survival": overall_variance_advantage_survival,
+        "mean_advantage_non_survival": overall_mean_advantage_non_survival,
+        "variance_advantage_non_survival": overall_variance_advantage_non_survival,
+        "mean_q_clinician_survival": mean_q_clinician_survival,
+        "mean_q_clinician_non_survival": mean_q_clinician_non_survival,
+        "mean_q_rl_survival": mean_q_rl_survival,
+        "mean_q_rl_non_survival": mean_q_rl_non_survival
     }
 
     # No longer dropping, because we are tracking across iterations
@@ -359,20 +396,22 @@ def evaluate_during_training(trainer, evaluator, epoch, val_buffer, batch_size, 
         mortality = batch[6]  # assuming mortality is the 7th element in the batch tuple
         with torch.no_grad():
             rl_actions = trainer.actor_forward_for_sarsa(batch, rescale=True)
+            
+            advantage_log_dict = evaluator.evaluate_sarsa(batch, mortality, rl_actions)
+        
+        # check that advantage_log_dict['survival_n'] == batch_losses['survival_n'] and advantage_log_dict['non_survival_n'] == batch_losses['non_survival_n'], "Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict"
+        if not (advantage_log_dict['survival_n'] == batch_losses['survival_n'] and advantage_log_dict['non_survival_n'] == batch_losses['non_survival_n']):
+            logger.warning(f"Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict for batch_idx {batch_idx}. batch_losses: {batch_losses}, advantage_log_dict: {advantage_log_dict}")
+        else:
+            # drop the batch_n, survival_n, and non_survival_n keys from advantage_log_dict since they are redundant with batch_losses
+            advantage_log_dict.pop('batch_n', None)
+            advantage_log_dict.pop('survival_n', None)
+            advantage_log_dict.pop('non_survival_n', None)
 
-            # generate q values from clinician actions
-            q_clinician = evaluator(batch)
-            q_clinician_survival = q_clinician[mortality == 0]
-            q_clinician_non_survival = q_clinician[mortality == 1]
-
-            # generate q values from rl actions
-            q_rl = evaluator(batch, rl_actions)
-
-        epoch_val_losses["clinician_Q"].append(q_clinician.cpu().numpy())
-        epoch_val_losses["survival_clinician_Q"].append(q_clinician_survival.cpu().numpy())
-        epoch_val_losses["non_survival_clinician_Q"].append(q_clinician_non_survival.cpu().numpy())
-        epoch_val_losses["rl_Q"].append(q_rl.cpu().numpy())
-                     
+        # append q values to losses 
+        for key, value in advantage_log_dict.items():
+            epoch_val_losses[key].append(value)
+                               
     # calculate q value stats if available
     if "mean_Q" in epoch_val_losses:
         with torch.no_grad():
@@ -434,19 +473,21 @@ def evaluate_final_model(trainer, evaluator, val_buffer, val_processor, model_di
         with torch.no_grad():
             rl_actions = trainer.actor_forward_for_sarsa(batch, rescale=True)
 
-            # generate q values from clinician actions
-            q_clinician = evaluator(batch)
-            q_clinician_survival = q_clinician[mortality == 0]
-            q_clinician_non_survival = q_clinician[mortality == 1]
+            advantage_log_dict = evaluator.evaluate_sarsa(batch, mortality, rl_actions)
 
-            # generate q values from rl actions
-            q_rl = evaluator(batch, rl_actions)
 
-        test_losses["clinician_Q"].append(q_clinician.cpu().numpy())
-        test_losses["survival_clinician_Q"].append(q_clinician_survival.cpu().numpy())
-        test_losses["non_survival_clinician_Q"].append(q_clinician_non_survival.cpu().numpy())
-        test_losses["rl_Q"].append(q_rl.cpu().numpy())
+        # check that advantage_log_dict['survival_n'] == batch_losses['survival_n'] and advantage_log_dict['non_survival_n'] == batch_losses['non_survival_n'], "Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict"
+        if not (advantage_log_dict['survival_n'] == batch_losses['survival_n'] and advantage_log_dict['non_survival_n'] == batch_losses['non_survival_n']):
+            logger.warning(f"Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict for batch_idx {batch_idx}. batch_losses: {batch_losses}, advantage_log_dict: {advantage_log_dict}")
+        else:
+            # drop the batch_n, survival_n, and non_survival_n keys from advantage_log_dict since they are redundant with batch_losses
+            advantage_log_dict.pop('batch_n', None)
+            advantage_log_dict.pop('survival_n', None)
+            advantage_log_dict.pop('non_survival_n', None)
 
+        # append q values to losses 
+        for key, value in advantage_log_dict.items():
+            test_losses[key].append(value)
         
 
     # if config_manager.model_type != "basic_q" and sarsa_critic is not None:
@@ -516,6 +557,9 @@ def evaluate_final_model(trainer, evaluator, val_buffer, val_processor, model_di
 def plot_results(training_losses, val_losses, test_losses, plot_dir, config_manager):
     
     plot_losses(training_losses, val_losses, test_losses, plot_dir)
+
+    if config_manager.model_type != "basic_q":
+        plot_validation_scores(training_losses, val_losses, test_losses, plot_dir)
 
     if config_manager.model_type == "basic_q" or config_manager.model_type == "td3_bc":
         plot_Q_by_mortality(val_losses, test_losses, plot_dir)
@@ -838,7 +882,8 @@ def train_with_hyperparameters(
     # run full evaluation on validation set
     # val_buffer, _ = create_buffer(val_processor, config_manager.training_config['batch_size'], shuffle=False, scaler=scaler, action_names=config_manager.data_config['actions'])
     final_val_losses, _ = evaluate_final_model( # this evaluates on the entire val set (during training we only use a subset for speed)
-        trainer, 
+        trainer,
+        evaluator, 
         val_buffer, 
         val_processor,
         model_dir,

@@ -438,6 +438,8 @@ class ContinuousPVP:
 		critic_optimizer: torch.optim.Optimizer = None,
 		critic_scheduler: torch.optim.lr_scheduler._LRScheduler = None,
         
+        log_alpha: Scalar = None,
+
         alpha_optimizer: torch.optim.Optimizer = None,
 
         device: str = "CUDA" if torch.cuda.is_available() else "CPU",
@@ -490,10 +492,13 @@ class ContinuousPVP:
         self.critic_scheduler = critic_scheduler  
         
         self.use_automatic_entropy_tuning = use_automatic_entropy_tuning
-        if self.use_automatic_entropy_tuning:
-            self.log_alpha = Scalar(0.0)
-        else:
-            self.log_alpha = None
+        
+        self.log_alpha = log_alpha
+        
+        # if self.use_automatic_entropy_tuning:
+        #     self.log_alpha = Scalar(0.0)
+        # else:
+        #     self.log_alpha = None
         
         self.alpha_optimizer = alpha_optimizer    
 
@@ -665,6 +670,66 @@ class ContinuousPVP:
                 total_norm += param_norm.item() ** 2
         return total_norm ** 0.5
     
+    
+    
+    def get_q_stats(self, current_Q1, current_Q2, actor_Q, mortality, log_dict) -> Tuple[float, float]:
+		
+		# create current_Q as the mean of current_Q1 and current_Q2
+        current_Q = (current_Q1 + current_Q2) / 2.0
+        mean_Q = current_Q.mean().item()
+        variance_Q = current_Q.var().item()
+        batch_n = current_Q.shape[0]
+        uncertainty_Q = F.mse_loss(current_Q1, current_Q2).item() # simple measure of uncertainty based on disagreement between the two critics
+
+        # masks and counts
+        survival_mask = (mortality == 0)
+        non_survival_mask = (mortality == 1)
+
+        survival_n = survival_mask.sum().item()
+        non_survival_n = non_survival_mask.sum().item()
+        
+        # only compute subgroup mean/variance together when n > 2
+        if survival_n > 2:
+            survival_vals = current_Q[survival_mask]
+            survival_Q = survival_vals.mean().item()
+            survival_variance_Q = survival_vals.var().item()
+        else:
+            survival_Q = float('nan')
+            survival_variance_Q = float('nan')
+            survival_n = 0
+
+        if non_survival_n > 2:
+            non_survival_vals = current_Q[non_survival_mask]
+            non_survival_Q = non_survival_vals.mean().item()
+            non_survival_variance_Q = non_survival_vals.var().item()
+        else:
+            non_survival_Q = float('nan')
+            non_survival_variance_Q = float('nan')
+            non_survival_n = 0
+
+        log_dict.update({
+            "batch_n": batch_n,
+            "mean_Q": mean_Q,
+            "variance_Q": variance_Q,
+            "uncertainty_Q": uncertainty_Q,
+            "survival_n": survival_n,
+            "survival_Q": survival_Q,
+            "survival_variance_Q": survival_variance_Q,
+            "non_survival_n": non_survival_n,
+            "non_survival_Q": non_survival_Q,
+            "non_survival_variance_Q": non_survival_variance_Q
+        })
+
+        if actor_Q is not None:
+            advantage_Q = (actor_Q - current_Q).mean().item() # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
+            log_dict.update({
+                "actor_Q": actor_Q.mean().item(),
+                "advantage_Q": advantage_Q
+            })
+        return log_dict
+    
+    
+    
     def train(self, batch: TensorBatch) -> Dict[str, float]:
  
         self.total_it += 1
@@ -776,9 +841,10 @@ class ContinuousPVP:
 
     def actor_forward_for_sarsa(self, batch: TensorBatch, rescale=True) -> torch.Tensor:
         state, _, _, _, _, _, _ = TrainerUtils._unpack_batch(batch, self.device)
-               
-        action = 2.0 * action - 1.0
-        new_actions, log_pi = self.actor(state)
+
+        self.actor.eval()  # Set actor to eval mode to disable Dropout
+        with torch.no_grad():
+            new_actions, _ = self.actor(state)
         
         if rescale:
             new_actions = (new_actions / 2.0) + 0.5  # Rescale back to [0, 1]        
@@ -812,7 +878,14 @@ class ContinuousPVP:
         not_done = 1 - done
 
         with torch.no_grad():
+            
+            # Get current Q estimates
+            current_Q1, current_Q2 = self.critic(state, action) 
+            
             new_actions, log_pi = self.actor(state)
+
+            Q_pi_1, Q_pi_2 = self.critic(state, new_actions)
+            Q_pi = torch.min(Q_pi_1, Q_pi_2)
 
             # alpha loss
             alpha, alpha_loss = self._alpha_and_alpha_loss(state, log_pi)
@@ -833,7 +906,9 @@ class ContinuousPVP:
             qf_loss = self._q_loss(
                 state, action, next_state, reward, done, alpha, log_dict
             )
-            log_dict.update(qf_loss=qf_loss.item())           
+            log_dict.update(qf_loss=qf_loss.item())   
+
+            log_dict = self.get_q_stats(current_Q1, current_Q2, Q_pi, mortality, log_dict)        
         
         return log_dict, action, new_actions
 
@@ -953,6 +1028,7 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, min_reward, h
         "actor": actor,
         "actor_optimizer": actor_optimizer,
         "actor_scheduler": actor_scheduler,
+        "log_alpha": log_alpha,
         "alpha_optimizer": alpha_optimizer,
         "discount": hyperparams['discount'],
 

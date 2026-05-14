@@ -774,6 +774,19 @@ class ContinuousPVP:
         return log_dict, grad_norm
 
 
+    def actor_forward_for_sarsa(self, batch: TensorBatch, rescale=True) -> torch.Tensor:
+        state, _, _, _, _, _, _ = TrainerUtils._unpack_batch(batch, self.device)
+               
+        action = 2.0 * action - 1.0
+        new_actions, log_pi = self.actor(state)
+        
+        if rescale:
+            new_actions = (new_actions / 2.0) + 0.5  # Rescale back to [0, 1]        
+        
+        return new_actions
+    
+    
+    
     def evaluate(self, batch: TensorBatch) -> Dict[str, float]:
         self.actor.eval()  # This is correct and important!
         self.critic.eval()  # Ensure critic is also in eval mode

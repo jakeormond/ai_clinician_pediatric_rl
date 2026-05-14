@@ -39,7 +39,6 @@ from .plotting import plot_losses, plot_Q_by_mortality, plot_gradient_norms
 # from .evaluate_models import load_sarsa_critic, calculate_advantage, plot_advantage
 from .models.shared_components import TrainerUtils
 
-from .evaluate_models import load_sarsa_critic
 
 import logging
 logger = logging.getLogger(__name__)
@@ -162,17 +161,12 @@ def create_evaluator(train_processor, hyperparams, config_manager):
     max_action = np.max(np.abs(train_processor.rl_dataset["actions"].cpu().numpy()))
     min_reward = np.min(train_processor.rl_dataset["rewards"].cpu().numpy())
     
-    model_path = os.path.join(config_manager.paths['rl_models_dir'], 
-        'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
-        config_manager.actions, 'final_model')
-    model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
-    model_path = os.path.join(model_path, model_folder)
+    model_type = 'basic_q' 
+    module = importlib.import_module(MODEL_MODULES[model_type])
 
-    sarsa_critic = load_sarsa_critic(model_path=model_path)
+    return module.get_evaluator(config_manager)
+
    
-    return sarsa_critic
-
-
 def get_early_stopping_config(config_manager):
     """Extracts early stopping configuration from config_manager."""
     early_stopping = {
@@ -272,6 +266,13 @@ def calculate_q_stats(losses_dict):
     survival_non_survival_diff = overall_mean_survival_Q - overall_mean_non_survival_Q
     survival_non_survival_snr = survival_non_survival_diff**2/(0.5*(overall_variance_survival_Q + overall_variance_non_survival_Q))
 
+    # advantage using sarsa critic
+    advantage = (losses_dict["rl_Q2"] - losses_dict["clinician_Q"]) / 2
+    mean_advantage_sarsa = np.mean(advantage)
+
+    clinician_mean_Q_survival = np.mean(losses_dict["survival_clinician_Q"])
+    clinician_mean_Q_non_survival = np.mean(losses_dict["non_survival_clinician_Q"])
+
     # create a dictionary of these values 
     q_stats = {
         "mean_Q": overall_mean_Q,
@@ -281,7 +282,10 @@ def calculate_q_stats(losses_dict):
         "mean_non_survival_Q": overall_mean_non_survival_Q,
         "std_non_survival_Q": overall_std_non_survival_Q,
         "survival_non_survival_diff": survival_non_survival_diff,
-        "survival_non_survival_snr": survival_non_survival_snr
+        "survival_non_survival_snr": survival_non_survival_snr,
+        "mean_advantage_sarsa": mean_advantage_sarsa,
+        "clinician_mean_Q_survival": clinician_mean_Q_survival,
+        "clinician_mean_Q_non_survival": clinician_mean_Q_non_survival
     }
 
     # No longer dropping, because we are tracking across iterations
@@ -337,7 +341,7 @@ def save_results(
     return all_scores
 
 
-def evaluate_during_training(trainer, sarsa_critic, epoch, val_buffer, batch_size, val_losses):
+def evaluate_during_training(trainer, evaluator, epoch, val_buffer, batch_size, val_losses):
     
     epoch_val_losses = defaultdict(list)
 
@@ -350,9 +354,24 @@ def evaluate_during_training(trainer, sarsa_critic, epoch, val_buffer, batch_siz
         # Automatically append all validation metrics
         for key, value in batch_losses.items():
             epoch_val_losses[key].append(value)
+        
+        # get q advantage
+        mortality = batch[6]  # assuming mortality is the 7th element in the batch tuple
+        with torch.no_grad():
+            rl_actions = trainer.actor_forward_for_sarsa(batch, rescale=True)
 
-        # evaluation on sarsa_critic
-        pass
+            # generate q values from clinician actions
+            q_clinician = evaluator(batch)
+            q_clinician_survival = q_clinician[mortality == 0]
+            q_clinician_non_survival = q_clinician[mortality == 1]
+
+            # generate q values from rl actions
+            q_rl = evaluator(batch, rl_actions)
+
+        epoch_val_losses["clinician_Q"].append(q_clinician.cpu().numpy())
+        epoch_val_losses["survival_clinician_Q"].append(q_clinician_survival.cpu().numpy())
+        epoch_val_losses["non_survival_clinician_Q"].append(q_clinician_non_survival.cpu().numpy())
+        epoch_val_losses["rl_Q"].append(q_rl.cpu().numpy())
                      
     # calculate q value stats if available
     if "mean_Q" in epoch_val_losses:
@@ -378,10 +397,6 @@ def evaluate_during_training(trainer, sarsa_critic, epoch, val_buffer, batch_siz
         # epoch_val_avg.update(q_stats)
 
 
-    # RUN SARSA EVALUATION
-
-
-
     # --- W&B LOGGING CALL ---
     # This captures the "Baseline" (Epoch 0) and all future epochs
     if wandb.run is not None:
@@ -393,7 +408,7 @@ def evaluate_during_training(trainer, sarsa_critic, epoch, val_buffer, batch_siz
 
 
 
-def evaluate_final_model(trainer, val_buffer, val_processor, model_dir, config_manager):
+def evaluate_final_model(trainer, evaluator, val_buffer, val_processor, model_dir, config_manager):
     test_losses = defaultdict(list)
     all_targets = []
     all_predictions = []
@@ -414,6 +429,25 @@ def evaluate_final_model(trainer, val_buffer, val_processor, model_dir, config_m
         if targets is not None and predictions is not None:
             all_targets.append(targets.cpu())
             all_predictions.append(predictions.cpu())
+
+        mortality = batch[6]  # assuming mortality is the 7th element in the batch tuple
+        with torch.no_grad():
+            rl_actions = trainer.actor_forward_for_sarsa(batch, rescale=True)
+
+            # generate q values from clinician actions
+            q_clinician = evaluator(batch)
+            q_clinician_survival = q_clinician[mortality == 0]
+            q_clinician_non_survival = q_clinician[mortality == 1]
+
+            # generate q values from rl actions
+            q_rl = evaluator(batch, rl_actions)
+
+        test_losses["clinician_Q"].append(q_clinician.cpu().numpy())
+        test_losses["survival_clinician_Q"].append(q_clinician_survival.cpu().numpy())
+        test_losses["non_survival_clinician_Q"].append(q_clinician_non_survival.cpu().numpy())
+        test_losses["rl_Q"].append(q_rl.cpu().numpy())
+
+        
 
     # if config_manager.model_type != "basic_q" and sarsa_critic is not None:
     #     # calculate advantage and add to test_losses
@@ -652,7 +686,7 @@ def train_with_hyperparameters(
     trainer = create_trainer(train_processor, hyperparams, config_manager)
 
     # create sarsa_evaluator
-    sarsa_critic = create_evaluator(train_processor, hyperparams, config_manager)
+    evaluator = create_evaluator(train_processor, hyperparams, config_manager)
         
     # Early stopping configuration 
     early_stopping = get_early_stopping_config(config_manager)
@@ -670,7 +704,7 @@ def train_with_hyperparameters(
     #    val_losses = defaultdict(list)
     val_losses = defaultdict(list)
     # evaluate before any training for epoch 0
-    evaluate_during_training(trainer, -1, val_buffer, batch_size, val_losses)   
+    evaluate_during_training(trainer, evaluator, -1, val_buffer, batch_size, val_losses)   
     current_val_loss = val_losses[f"val/{loss_metric}"][-1]  
     logger.info(f"Epoch {-1}: Val {loss_metric}={current_val_loss:.4f}")
     # optionally, estimate V0 and append to validation losses
@@ -752,7 +786,7 @@ def train_with_hyperparameters(
         # Evaluate periodically
         if epoch % config_manager.training_config['eval_freq'] == 0 \
                                                 or epoch == n_epochs - 1:
-            evaluate_during_training(trainer, epoch, val_buffer, batch_size, val_losses)
+            evaluate_during_training(trainer, evaluator, epoch, val_buffer, batch_size, val_losses)
             
             # Determine validation loss for early stopping
             current_val_loss = val_losses[f"val/{loss_metric}"][-1]            

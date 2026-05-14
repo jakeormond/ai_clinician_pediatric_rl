@@ -5,6 +5,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import os
+import json
 
 from .shared_components import TrainerUtils
 
@@ -157,33 +159,32 @@ class Q_Learner(object):
         tau: float = 0.005,
         grad_clip: float = 1.0,
         reward_scaling: float = 1.0,
-        scheduler: torch.optim.lr_scheduler._LRScheduler = None
+        scheduler: torch.optim.lr_scheduler._LRScheduler = None,
+        evaluator=False
     ):
         
         self.total_it = 0
-
         self.device = device
 
         self.critic = critic.to(self.device)
-        self.critic_optimizer = critic_optimizer
         
-        self.critic_target = copy.deepcopy(self.critic)
-
         self.discount = discount
-
-        self.tau = tau
-
-        self.grad_clip = grad_clip
-
         self.reward_scaling = reward_scaling
-
-        self.critic_optimizer = critic_optimizer
-        self.scheduler = scheduler
         
-        # for calculating moving average of gradient clipping binary
-        self.clip_fraction_ema = 0.0
-        self.ema_alpha = 0.99 # Closer to 1.0 means more smoothing
-		
+        if not evaluator:
+            self.critic_optimizer = critic_optimizer
+            self.critic_target = copy.deepcopy(self.critic)
+            self.grad_clip = grad_clip
+            self.tau = tau
+
+            self.critic_optimizer = critic_optimizer
+            self.scheduler = scheduler
+            
+            # for calculating moving average of gradient clipping binary
+            self.clip_fraction_ema = 0.0
+            self.ema_alpha = 0.99 # Closer to 1.0 means more smoothing
+
+            
     def target_q(self, reward, not_done, next_state, next_action): # need to add next action to replay buffer
         with torch.no_grad():            
             # Compute the target Q value
@@ -312,6 +313,22 @@ class Q_Learner(object):
         return log_dict, grad_norm
     
 
+    def actor_forward_for_sarsa(self, batch: TensorBatch, action: torch.Tensor=None):
+        self.critic.eval()  # Ensure critic is in eval mode
+
+        if action is None:
+            state, action, _, _, _, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
+        else:
+            state, _, _, _, _, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
+
+        with torch.no_grad():
+            current_Q1, current_Q2 = self.critic(state, action)
+        
+        current_Q = torch.min(current_Q1, current_Q2)  # TD3 style: take the minimum of the two critics to mitigate overestimation bias
+
+        return current_Q
+    
+
     def evaluate(self, batch: TensorBatch) -> Dict[str, float]:
         self.critic.eval()  # Ensure critic is also in eval mode
         
@@ -422,3 +439,47 @@ def get_trainer(config_manager, state_dim, action_dim, _, hyperparams):
     )
 
     return trainer
+
+
+def get_evaluator(config_manager):
+    model_path = os.path.join(config_manager.paths['rl_models_dir'], 
+        'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
+        config_manager.actions, 'final_model')
+    model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
+    model_path = os.path.join(model_path, model_folder)
+
+    critic, hyperparams = load_critic(model_path=model_path)
+
+    evaluator = Q_Learner(
+        critic=critic,
+        discount=hyperparams['discount'],
+    )
+
+    return evaluator
+
+def load_critic(config_manager = None, model_path = None):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if model_path is None and config_manager is not None:
+        model_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.model_type, 
+                        f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions, "final_model")
+    
+        # get folder inside model_path
+        model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
+        model_path = os.path.join(model_path, model_folder)
+
+    final_model_path = os.path.join(model_path, "final_model.pt")
+
+    # load results.json from model_folder, which has state_dim 
+    results_path = os.path.join(model_path, "results.json")
+    if os.path.exists(results_path):
+        with open(results_path, "r") as f:
+            results = json.load(f)
+            hidden_dim = results["hyperparameters"]["hidden_dim"]
+
+    critic = Critic(512,2, hidden_dim=hidden_dim).to(device)
+    critic.load_state_dict(torch.load(final_model_path, weights_only=True))
+    critic.eval()
+
+    hyperparameters = results["hyperparameters"]
+
+    return critic, hyperparameters

@@ -558,6 +558,10 @@ class ContinuousPVP:
         soft_update(self.target_critic, self.critic, soft_target_update_rate)
 
     def _alpha_and_alpha_loss(self, observations: torch.Tensor, log_pi: torch.Tensor):
+        # alpha stabilizes when log_pi equals negative target_entropy
+        # if log_pi is too high (low entropy), alpha_loss will be negative, which will increase alpha and 
+        # encourage more exploration; if log_pi is too low (high entropy), alpha_loss will be positive, 
+        # which will decrease alpha and encourage less exploration
         if self.use_automatic_entropy_tuning:
             alpha_loss = -(
                 self.log_alpha() * (log_pi + self.target_entropy).detach()
@@ -756,7 +760,11 @@ class ContinuousPVP:
 
         new_actions, log_pi = self.actor(state)
 
-        # alpha loss
+        """alpha loss - consistent with SAC, we want to adjust alpha to encourage the policy to 
+        # have a certain level of entropy, as measured by log_pi. If log_pi is too high (low entropy), 
+        # we want to increase alpha to encourage more exploration; if log_pi is too low (high entropy), 
+        # we want to decrease alpha to encourage less exploration. The target_entropy is the desired 
+        # level of entropy, and the alpha_loss is designed to push log_pi towards -target_entropy."""
         alpha, alpha_loss = self._alpha_and_alpha_loss(state, log_pi)
 
         """ Policy loss """

@@ -1,4 +1,5 @@
 import os
+import config_manager
 import yaml
 import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -187,9 +188,9 @@ def append_epoch_losses(
     
     # calculate q value stats if available
     q_stats = None
-    if "mean_Q" in epoch_training_losses:
-        with torch.no_grad():
-            q_stats, epoch_training_losses = calculate_q_stats(epoch_training_losses)
+    # if "mean_Q" in epoch_training_losses:
+    #     with torch.no_grad():
+    #         q_stats, epoch_training_losses = calculate_q_stats(epoch_training_losses)
     
     # epoch_avg_losses = {key: np.mean(values) for key, values in epoch_training_losses.items()}
     # Append epoch averages to training_losses
@@ -378,7 +379,15 @@ def save_results(
     return all_scores
 
 
-def evaluate_during_training(trainer, evaluator, epoch, val_buffer, batch_size, val_losses):
+def evaluate_during_training(
+    trainer, 
+    evaluator, 
+    epoch, 
+    val_buffer, 
+    batch_size, 
+    val_losses,
+    config_manager
+    ):
     
     epoch_val_losses = defaultdict(list)
 
@@ -395,7 +404,10 @@ def evaluate_during_training(trainer, evaluator, epoch, val_buffer, batch_size, 
         # get q advantage
         mortality = batch[6]  # assuming mortality is the 7th element in the batch tuple
         with torch.no_grad():
-            rl_actions = trainer.actor_forward_for_sarsa(batch, rescale=True)
+            if config_manager.model_type == "cvp":
+                rl_actions = trainer.actor_forward_for_sarsa(batch, rescale=True)
+            else:
+                rl_actions = trainer.actor_forward_for_sarsa(batch)
             
             advantage_log_dict = evaluator.evaluate_sarsa(batch, mortality, rl_actions)
         
@@ -443,7 +455,8 @@ def evaluate_during_training(trainer, evaluator, epoch, val_buffer, batch_size, 
     
     # Append to val_losses with epoch as key
     for key, value in epoch_val_avg.items():
-        val_losses[key].append(value)  
+        val_losses[key].append(value) 
+
 
 
 
@@ -471,7 +484,10 @@ def evaluate_final_model(trainer, evaluator, val_buffer, val_processor, model_di
 
         mortality = batch[6]  # assuming mortality is the 7th element in the batch tuple
         with torch.no_grad():
-            rl_actions = trainer.actor_forward_for_sarsa(batch, rescale=True)
+            if config_manager.model_type == "cvp":
+                rl_actions = trainer.actor_forward_for_sarsa(batch, rescale=True) 
+            else:
+                rl_actions = trainer.actor_forward_for_sarsa(batch)
 
             advantage_log_dict = evaluator.evaluate_sarsa(batch, mortality, rl_actions)
 
@@ -748,7 +764,7 @@ def train_with_hyperparameters(
     #    val_losses = defaultdict(list)
     val_losses = defaultdict(list)
     # evaluate before any training for epoch 0
-    evaluate_during_training(trainer, evaluator, -1, val_buffer, batch_size, val_losses)   
+    evaluate_during_training(trainer, evaluator, -1, val_buffer, batch_size, val_losses, config_manager)   
     current_val_loss = val_losses[f"val/{loss_metric}"][-1]  
     logger.info(f"Epoch {-1}: Val {loss_metric}={current_val_loss:.4f}")
     # optionally, estimate V0 and append to validation losses
@@ -830,7 +846,7 @@ def train_with_hyperparameters(
         # Evaluate periodically
         if epoch % config_manager.training_config['eval_freq'] == 0 \
                                                 or epoch == n_epochs - 1:
-            evaluate_during_training(trainer, evaluator, epoch, val_buffer, batch_size, val_losses)
+            evaluate_during_training(trainer, evaluator, epoch, val_buffer, batch_size, val_losses, config_manager)
             
             # Determine validation loss for early stopping
             current_val_loss = val_losses[f"val/{loss_metric}"][-1]            

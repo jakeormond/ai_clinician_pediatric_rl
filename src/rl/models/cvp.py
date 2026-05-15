@@ -122,10 +122,20 @@ class Actor(nn.Module): # adapted from TanhGaussianPolicy
         if isinstance(final_layer, nn.Linear):
             # Xavier/Glorot is the standard for linear outputs
             nn.init.xavier_normal_(final_layer.weight)
-            if final_layer.bias is not None:
-                # Often helpful to initialize bias to 0 
-                # or a small negative value for log_std
-                nn.init.zeros_(final_layer.bias)
+            with torch.no_grad():
+                if final_layer.bias is not None:
+                    # # Often helpful to initialize bias to 0 
+                    # # or a small negative value for log_std
+                    # nn.init.zeros_(final_layer.bias)
+
+                    # Index 0: Fluid Mean -> set to 0 or -1 (conservative start)
+                    final_layer.bias[0] = 0. 
+                    
+                    # Index 1: Vasopressor Mean -> set to -3.0 (strong 'zero' default)
+                    final_layer.bias[1] = -2.0 
+                    
+                    # Indices 2 & 3: log_std -> initialize to a stable value like -1.0
+                    final_layer.bias[2:] = .5
 
         self.log_std_multiplier = Scalar(log_std_multiplier)
         self.log_std_offset = Scalar(log_std_offset)
@@ -147,7 +157,7 @@ class Actor(nn.Module): # adapted from TanhGaussianPolicy
         return self.max_action * actions, log_probs
     
 
-    def log_prob(                     # COPILOT SAYING THIS ISN'T PROPER logPI(a|s)
+    def log_prob(                     
         self, state: torch.Tensor, action: torch.Tensor
     ) -> torch.Tensor:
         if action.ndim == 3:
@@ -155,7 +165,8 @@ class Actor(nn.Module): # adapted from TanhGaussianPolicy
         base_network_output = self.base_network(state)
         mean, log_std = torch.split(base_network_output, self.action_dim, dim=-1)
         log_std = self.log_std_multiplier() * log_std + self.log_std_offset()
-        _, log_probs = self.tanh_gaussian(mean, log_std, False)
+        # _, log_probs = self.tanh_gaussian(mean, log_std, False)
+        log_probs = self.tanh_gaussian.log_prob(mean, log_std, action)
         return log_probs
 
 
@@ -189,7 +200,9 @@ class ReparameterizedTanhGaussian(nn.Module):
             action_distribution = TransformedDistribution(
                 Normal(mean, std), TanhTransform(cache_size=1)
             )
-        return torch.sum(action_distribution.log_prob(sample), dim=-1)
+        epsilon = 1e-4 
+        safe_sample = torch.clamp(sample, -1 + epsilon, 1 - epsilon)
+        return torch.sum(action_distribution.log_prob(safe_sample), dim=-1)
 
     def forward(
         self, mean: torch.Tensor, log_std: torch.Tensor, deterministic: bool = False
@@ -459,6 +472,8 @@ class ContinuousPVP:
         use_automatic_entropy_tuning: bool = True,
         backup_entropy: bool = False,
 
+        behaviour_cloning: bool = False,
+
         q_optim: str = "adam",
 
         alpha_optim: str = "sgd",
@@ -493,6 +508,8 @@ class ContinuousPVP:
         self.critic_optimizer = critic_optimizer
         self.critic_scheduler = critic_scheduler  
         
+        self.behaviour_cloning = behaviour_cloning
+
         self.use_automatic_entropy_tuning = use_automatic_entropy_tuning
         
         self.log_alpha = log_alpha
@@ -583,20 +600,26 @@ class ContinuousPVP:
         log_pi: torch.Tensor,
     ) -> torch.Tensor:
         
-        # if self.batch_norm:
-        #     self.critic.eval()
-        self.critic.eval()
-        q_new_actions = torch.min(*self.critic(observations, new_actions))
+        if self.behaviour_cloning:
+            log_probs = self.actor.log_prob(observations, actions)
+            policy_entropy_loss = alpha*log_pi.mean()
+            policy_loss = (alpha * log_pi - log_probs).mean()
+            return policy_loss, torch.tensor(0.), policy_entropy_loss
+        else:
+            # if self.batch_norm:
+            #     self.critic.eval()
+            self.critic.eval()
+            q_new_actions = torch.min(*self.critic(observations, new_actions))
 
-        # if self.batch_norm:
-        #     self.critic.train()
-        self.critic.train()
+            # if self.batch_norm:
+            #     self.critic.train()
+            self.critic.train()
 
-        policy_critic_loss = -q_new_actions.mean()
-        policy_entropy_loss = alpha*log_pi.mean()
-        policy_loss = (alpha * log_pi - q_new_actions).mean()
-        
-        return policy_loss, policy_critic_loss, policy_entropy_loss
+            policy_critic_loss = -q_new_actions.mean()
+            policy_entropy_loss = alpha*log_pi.mean()
+            policy_loss = (alpha * log_pi - q_new_actions).mean()
+            
+            return policy_loss, policy_critic_loss, policy_entropy_loss
 
     def _q_loss(
         self,
@@ -967,6 +990,7 @@ class ContinuousPVP:
 def get_trainer(config_manager, state_dim, action_dim, max_action, min_reward, hyperparams):
     learning_rate_critic = float(hyperparams['learning_rate_critic'])
     learning_rate_actor = float(hyperparams['learning_rate_actor'])
+    learning_rate_alpha = float(hyperparams['learning_rate_alpha'])
     # weight_decay = float(hyperparams.get('weight_decay', 0.01)) # New hyperparam
     # device = config_manager.training_config['device']
     adam_eps = 1e-8
@@ -1035,7 +1059,7 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, min_reward, h
     elif hyperparams['alpha_optim'] == "sgd":
         alpha_optimizer = torch.optim.SGD(
             log_alpha.parameters(),
-            lr=hyperparams['learning_rate_alpha'], 
+            lr=learning_rate_alpha, 
         )
 
     kwargs = {
@@ -1054,6 +1078,8 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, min_reward, h
         "max_action": max_action,
         "min_reward": min_reward,
         "zero_min_reward": hyperparams['zero_min_reward'],
+
+        "behaviour_cloning": hyperparams['behaviour_cloning'],
 
         "soft_target_update_rate": hyperparams['tau'],
         "device": config_manager.training_config['device'],

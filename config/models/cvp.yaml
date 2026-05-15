@@ -2,7 +2,7 @@
     "group": "reinforcement_learning"
     name: "cvp"
     
-    tuning: False
+    tuning: True
     
     n_episodes: 1000  # How many episodes run during evaluation
     # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
@@ -12,14 +12,14 @@
     # max_traj_len: 2000  # Max trajectory length - probably need to change this
     device: "cuda"  # Device (cuda or cpu)
     
-    learning_rate_critic: "loguniform(6e-7, 6e-6)" # "loguniform(1e-4, 1e-3)"   
-    learning_rate_actor: 0. # "loguniform(6e-7, 6e-6)" # "loguniform(1e-4, 1e-3)"   
-    learning_rate_alpha: 0. # "loguniform(6e-7, 6e-6)" # "loguniform(1e-4, 1e-3)"
+    learning_rate_critic: 1e-5 # "loguniform(6e-7, 6e-6)" # "loguniform(1e-4, 1e-3)"   
+    learning_rate_actor: 1e-5 # "loguniform(6e-7, 6e-6)" # "loguniform(1e-4, 1e-3)"   
+    learning_rate_alpha: 5e-5 # "loguniform(6e-7, 6e-6)" # "loguniform(1e-4, 1e-3)"
     
     dropout: 0.1 # "uniform(0.0, 0.5)"
-    tau: [0.01, 0.005] # Target network update rate
+    tau: 0.01 # [0.01, 0.005] # Target network update rate
 
-    reward_scaling_cvp: [.1, 1.] # Scaling factor for rewards
+    reward_scaling_cvp: 0.2 # [.1, 1.] # Scaling factor for rewards
     
     # weight_decay: 1e-4 # L2 regularization strength
     
@@ -37,6 +37,8 @@
 
     backup_entropy: False  # Use backup entropy
 
+    behaviour_cloning: True  # Whether to include behaviour cloning loss term
+
     actor_optim: "adam"
     q_optim: "adam"
     alpha_optim: "sgd"
@@ -50,7 +52,7 @@
     # q_min is now calculated from the minimum reward and discount factor
     # q_min: 0. # if zero_min_reward is False, this should be a baseline "bad" value for a random policy essentially, but you can think of it as a hyperparameter
 
-    pvp_alpha: [.001, .01, 0.1, 1., 10.]  # Weighting for PVP penalty
+    pvp_alpha: 0.01 # [.001, .01, 0.1, 1., 10.]  # Weighting for PVP penalty
 
     next_state_reg: True  # Whether to include next state regularization term in critic loss
 

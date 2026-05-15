@@ -21,8 +21,8 @@
     noise_clip: 0.5 # Range to clip target policy noise
     policy_freq: 2 # Frequency of delayed policy updates
     beta: 0.1 # Weighting for BC loss term
-    cql_alpha: [0.01, 0.05, 0.1] # [0.1, 0.2, 0.5] # [1.0, 5.0, 10.0] # Weighting for CQL penalty term
-    temp: [5.0, 10.0] # [2.0, 5.0] # Temperature for CQL penalty term
+    cql_alpha: [0.1, 0.2, 0.5]  # [0.01, 0.05, 0.1] # [0.1, 0.2, 0.5] # [1.0, 5.0, 10.0] # Weighting for CQL penalty term
+    temp: [1., 2., 5.]  # [5.0, 10.0] # [2.0, 5.0] # Temperature for CQL penalty term
     num_samples: 10 # Number of samples for CQL penalty term
 
     batch_size: 1024 # [256, 512, 1024]  # Batch size for all networks

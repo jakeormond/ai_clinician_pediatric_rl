@@ -648,6 +648,7 @@ class ContinuousPVP:
         if self.total_it <= self.bc_steps:
             log_probs = self.actor.log_prob(observations, actions)
             policy_loss = (alpha * log_pi - log_probs).mean()
+            return policy_loss, torch.tensor(0.), torch.tensor(0.)
         else:
             if self.batch_norm:
                 self.critic_1.eval()
@@ -662,7 +663,7 @@ class ContinuousPVP:
             policy_critic_loss = -q_new_actions.mean()
             policy_entropy_loss = alpha*log_pi.mean()
             policy_loss = (alpha * log_pi - q_new_actions).mean()
-        return policy_loss, policy_critic_loss, policy_entropy_loss
+            return policy_loss, policy_critic_loss, policy_entropy_loss
 
     def _q_loss(
         self,

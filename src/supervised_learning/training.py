@@ -823,9 +823,9 @@ def get_hyperparameter_space(config_manager):
             hyperparameter_space[k] = v
     
     # check if any values are lists or distributions, throw error if not
-    if not any(isinstance(v, list) or (isinstance(v, str) and '(' in v and ')' in v) 
-               for v in config_manager.training_config.values()):
-        raise ValueError("No hyperparameters to optimize. Ensure that config_manager.training_config contains lists of values to search over or distribution strings.")
+    # if not any(isinstance(v, list) or (isinstance(v, str) and '(' in v and ')' in v) 
+    #            for v in config_manager.training_config.values()):
+    #     raise ValueError("No hyperparameters to optimize. Ensure that config_manager.training_config contains lists of values to search over or distribution strings.")
 
     return hyperparameter_space
 

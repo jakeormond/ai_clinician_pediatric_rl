@@ -390,7 +390,8 @@ class CQL:
 
 		# 3. Optional: Add a small L1 penalty to keep the policy sparse
 		# (Only if you find the AI is 'micro-dosing' constantly)
-		l1_sparse = pi.abs().mean() * 1e-3 # this should prevent many small non-zero actions, while still allowing for large actions when clinically indicated. Tune the 1e-3 coefficient as needed.
+		l1_sparse = pi.abs().mean() * 1e-3 # this should prevent many small non-zero actions, while still allowing for 
+										# large actions when clinically indicated. Tune the 1e-3 coefficient as needed.
 		
 		total_bc_loss = weighted_bc_loss + l1_sparse
 
@@ -475,10 +476,15 @@ class CQL:
 		})
 
 		if actor_Q is not None:
-			advantage_Q = (actor_Q - current_Q).mean().item() # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
+			advantage_Q = actor_Q - current_Q # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
+			advantage_Q_mean = (actor_Q - current_Q).mean().item() # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
+			survival_advantage_Q = advantage_Q[survival_mask].mean().item() if survival_n > 0 else float('nan')
+			non_survival_advantage_Q = advantage_Q[non_survival_mask].mean().item() if non_survival_n > 0 else float('nan')
 			log_dict.update({
-				"actor_Q": actor_Q.mean().item(),
-				"advantage_Q": advantage_Q
+                "actor_Q": actor_Q.mean().item(),
+                "advantage_Q": advantage_Q_mean,
+                "survival_advantage_Q": survival_advantage_Q,
+                "non_survival_advantage_Q": non_survival_advantage_Q
 			})
 		return log_dict
 
@@ -603,7 +609,11 @@ class CQL:
 
 		# Delayed policy updates
 		if self.total_it % self.policy_freq != 0:
-			log_dict = self.get_q_stats(current_Q1, current_Q2, None, mortality, log_dict)
+			with torch.no_grad():
+				pi, log_prob = self.actor(state)
+				Q1, Q2 = self.critic(state, pi)
+			Q = torch.min(Q1, Q2)
+			log_dict = self.get_q_stats(current_Q1, current_Q2, Q, mortality, log_dict)
 		else:
 			# Compute actor loss
 			self.actor.train() # Dropout ACTIVE for the network we are updating
@@ -677,6 +687,17 @@ class CQL:
 						
 		return log_dict, grad_norm
 	
+
+	def actor_forward_for_sarsa(self, batch: TensorBatch) -> torch.Tensor:
+		state, _, _, _, _, _, _ = TrainerUtils._unpack_batch(batch, self.device)
+
+		self.actor.eval()  # Set actor to eval mode to disable Dropout
+		with torch.no_grad():
+			new_actions, _ = self.actor(state) 
+		
+		return new_actions
+
+
 	def _get_grad_norm(self, model: nn.Module) -> float:
 		total_norm = 0
 		for p in model.parameters():
@@ -789,7 +810,7 @@ class CQL:
 		self.actor_target = copy.deepcopy(self.actor)
 
 
-def get_trainer(config_manager, state_dim, action_dim, max_action, hyperparams):
+def get_trainer(config_manager, state_dim, action_dim, max_action, min_reward, hyperparams):
 
 	learning_rate_critic = float(hyperparams['learning_rate_critic'])
 	learning_rate_actor = float(hyperparams['learning_rate_actor'])

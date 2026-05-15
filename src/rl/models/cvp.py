@@ -683,8 +683,8 @@ class ContinuousPVP:
     
     def get_q_stats(self, current_Q1, current_Q2, actor_Q, mortality, log_dict) -> Tuple[float, float]:
 		
-		# create current_Q as the mean of current_Q1 and current_Q2
-        current_Q = np.min([current_Q1, current_Q2], axis=0)
+		# create current_Q as the min of current_Q1 and current_Q2
+        current_Q = torch.min(current_Q1, current_Q2)  # take the min of the two critics to be conservative, as in SAC. This is the Q value we use for logging and calculating advantage, but we can also log the individual critic values for analysis.
         mean_Q = current_Q.mean().item()
         variance_Q = current_Q.var().item()
         batch_n = current_Q.shape[0]

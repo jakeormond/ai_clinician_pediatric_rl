@@ -168,6 +168,8 @@ class Actor(nn.Module): # adapted from TanhGaussianPolicy
 
 
 class ReparameterizedTanhGaussian(nn.Module):
+    """ as far as i understand, no_tanh is for when we want unbounded actions,
+    but we are using bounded actions for sepsis."""
     def __init__(
         self, log_std_min: float = -20.0, log_std_max: float = 2.0, no_tanh: bool = False
     ):
@@ -476,7 +478,7 @@ class ContinuousPVP:
         ncp_samples: bool = False,
         ood_action_var: float = 0.2,
 
-        reward_scaling: float = 1.0,
+        reward_scaling_cvp: float = 1.,
 
         ema_alpha: float = 0.99,  # Add ema_alpha argument for moving
     ):
@@ -518,7 +520,7 @@ class ContinuousPVP:
         
         self.backup_entropy = backup_entropy
 
-        self.reward_scaling = reward_scaling
+        self.reward_scaling_cvp = reward_scaling_cvp
 
         self.alpha_optim = alpha_optim
         self.q_optim = q_optim
@@ -558,10 +560,10 @@ class ContinuousPVP:
         soft_update(self.target_critic, self.critic, soft_target_update_rate)
 
     def _alpha_and_alpha_loss(self, observations: torch.Tensor, log_pi: torch.Tensor):
-        # alpha stabilizes when log_pi equals negative target_entropy
+        """ alpha stabilizes when log_pi equals negative target_entropy
         # if log_pi is too high (low entropy), alpha_loss will be negative, which will increase alpha and 
         # encourage more exploration; if log_pi is too low (high entropy), alpha_loss will be positive, 
-        # which will decrease alpha and encourage less exploration
+        # which will decrease alpha and encourage less exploration """
         if self.use_automatic_entropy_tuning:
             alpha_loss = -(
                 self.log_alpha() * (log_pi + self.target_entropy).detach()
@@ -613,14 +615,17 @@ class ContinuousPVP:
             *self.target_critic(next_observations, new_next_actions),
         )
 
-        if self.backup_entropy:
-            target_q_values = target_q_values - alpha * next_log_pi
+        # if self.backup_entropy:
+        #     target_q_values = target_q_values - alpha * next_log_pi
 
         # target_q_values = target_q_values.unsqueeze(-1)
         td_target = rewards + (1.0 - dones) * self.discount * target_q_values.detach()
         # td_target = td_target.squeeze(-1)
-        qf1_loss = F.mse_loss(q1_predicted, td_target.detach())
-        qf2_loss = F.mse_loss(q2_predicted, td_target.detach())
+        # qf1_loss = F.mse_loss(q1_predicted, td_target.detach())
+        # qf2_loss = F.mse_loss(q2_predicted, td_target.detach())
+
+        qf1_loss = F.smooth_l1_loss(q1_predicted, td_target.detach())
+        qf2_loss = F.smooth_l1_loss(q2_predicted, td_target.detach())
 
         # PVP regularisation term
         batch_size = actions.shape[0]
@@ -741,10 +746,10 @@ class ContinuousPVP:
         # Sample replay buffer 
         state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
 
-        # zero reward if specified
-        reward = reward * self.reward_scaling
+        # zero reward if specified        
         if self.zero_min_reward:
             reward = reward - self.min_reward
+        reward = reward * self.reward_scaling_cvp
 
 		# Rescale actions from [0, 1] to [-1, 1]
         action = 2.0 * action - 1.0
@@ -767,7 +772,8 @@ class ContinuousPVP:
         # level of entropy, and the alpha_loss is designed to push log_pi towards -target_entropy."""
         alpha, alpha_loss = self._alpha_and_alpha_loss(state, log_pi)
 
-        """ Policy loss """
+        """ Policy loss - aims to maximize expected Q value of the actions taken by the policy, 
+        while also maximizing entropy (encouraging exploration)."""
         policy_loss, policy_critic_loss, policy_entropy_loss = self._policy_loss(
             state, action, new_actions, alpha, log_pi
         )
@@ -867,11 +873,11 @@ class ContinuousPVP:
 
         state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
         
-        reward = reward * self.reward_scaling
         # zero reward if specified
         reward = reward.clone()  # Clone to avoid in-place operations   
         if self.zero_min_reward:
             reward = reward - self.min_reward
+        reward = reward * self.reward_scaling_cvp
 
         # Rescale actions from [0, 1] to [-1, 1]
         action = 2.0 * action - 1.0
@@ -1053,6 +1059,8 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, min_reward, h
         "alpha_multiplier": hyperparams['alpha_multiplier'],
         "use_automatic_entropy_tuning": hyperparams['use_automatic_entropy_tuning'],
         "backup_entropy": hyperparams['backup_entropy'],
+
+        "reward_scaling_cvp": hyperparams['reward_scaling_cvp'],
                 
         "policy_lr": hyperparams['learning_rate_actor'],
         "qf_lr": hyperparams['learning_rate_critic'],

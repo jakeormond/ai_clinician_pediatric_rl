@@ -275,7 +275,7 @@ def calculate_q_stats(losses_dict):
 
     # survival advantage
     mean_advantage_survival = losses_dict["advantage_survival_mean"]
-    variance_advantage_survival = losses_dict["advantage_survival_variance"]
+    variance_advantage_survival = losses_dict["variance_advantage_survival"]
     
     # drop nan from mean_advantage_survival and variance_advantage_survival 
     mean_advantage_survival = [a for a in mean_advantage_survival if not np.isnan(a)]
@@ -286,7 +286,7 @@ def calculate_q_stats(losses_dict):
 
     # non-survival advantage
     mean_advantage_non_survival = losses_dict["advantage_non_survival_mean"]
-    variance_advantage_non_survival = losses_dict["advantage_non_survival_variance"]
+    variance_advantage_non_survival = losses_dict["variance_advantage_non_survival"]
 
     # drop nan from mean_advantage_non_survival and variance_advantage_non_survival
     mean_advantage_non_survival = [a for a in mean_advantage_non_survival if not np.isnan(a)]
@@ -313,11 +313,11 @@ def calculate_q_stats(losses_dict):
         "std_non_survival_Q": overall_std_non_survival_Q,
         "survival_non_survival_diff": survival_non_survival_diff,
         "survival_non_survival_snr": survival_non_survival_snr,
-        "mean_advantage_sarsa": overall_mean_advantage,
+        "advantage_mean": overall_mean_advantage,
         "variance_advantage_sarsa": overall_variance_advantage,
-        "mean_advantage_survival": overall_mean_advantage_survival,
+        "advantage_survival_mean": overall_mean_advantage_survival,
         "variance_advantage_survival": overall_variance_advantage_survival,
-        "mean_advantage_non_survival": overall_mean_advantage_non_survival,
+        "advantage_non_survival_mean": overall_mean_advantage_non_survival,
         "variance_advantage_non_survival": overall_variance_advantage_non_survival,
         "mean_q_clinician_survival": mean_q_clinician_survival,
         "mean_q_clinician_non_survival": mean_q_clinician_non_survival,

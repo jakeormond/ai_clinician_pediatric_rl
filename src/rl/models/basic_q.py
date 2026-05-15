@@ -263,12 +263,12 @@ class Q_Learner(object):
             q_rl_survival = q_rl[survival_mask].mean().item()
             advantage_survival = advantage[survival_mask]
             advantage_survival_mean = advantage_survival.mean().item()
-            advantage_survival_variance = advantage_survival.var().item()
+            variance_advantage_survival = advantage_survival.var().item()
         else:
             q_clinician_survival = float('nan')
             q_rl_survival = float('nan')
             advantage_survival_mean = float('nan')
-            advantage_survival_variance = float('nan')
+            variance_advantage_survival = float('nan')
             survival_n = 0
 
         if non_survival_n > 2:
@@ -276,12 +276,12 @@ class Q_Learner(object):
             q_rl_non_survival = q_rl[non_survival_mask].mean().item()
             advantage_non_survival = advantage[non_survival_mask]
             advantage_non_survival_mean = advantage_non_survival.mean().item()
-            advantage_non_survival_variance = advantage_non_survival.var().item()
+            variance_advantage_non_survival = advantage_non_survival.var().item()
         else:
             q_clinician_non_survival = float('nan')
             q_rl_non_survival = float('nan')
             advantage_non_survival_mean = float('nan')
-            advantage_non_survival_variance = float('nan')
+            variance_advantage_non_survival = float('nan')
             non_survival_n = 0
 
         advantage_mean = advantage.mean().item()
@@ -294,11 +294,11 @@ class Q_Learner(object):
             "q_clinician_survival": q_clinician_survival,
             "q_rl_survival": q_rl_survival,
             "advantage_survival_mean": advantage_survival_mean,
-            "advantage_survival_variance": advantage_survival_variance,
+            "variance_advantage_survival": variance_advantage_survival,
             "q_clinician_non_survival": q_clinician_non_survival,
             "q_rl_non_survival": q_rl_non_survival,
             "advantage_non_survival_mean": advantage_non_survival_mean,
-            "advantage_non_survival_variance": advantage_non_survival_variance,            
+            "variance_advantage_non_survival": variance_advantage_non_survival,
             "survival_n": survival_n,
             "non_survival_n": non_survival_n
         }

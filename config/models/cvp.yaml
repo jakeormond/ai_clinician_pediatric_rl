@@ -13,8 +13,8 @@
     device: "cuda"  # Device (cuda or cpu)
     
     learning_rate_critic: "loguniform(6e-7, 6e-6)" # "loguniform(1e-4, 1e-3)"   
-    learning_rate_actor: "loguniform(6e-7, 6e-6)" # "loguniform(1e-4, 1e-3)"   
-    learning_rate_alpha: "loguniform(6e-7, 6e-6)" # "loguniform(1e-4, 1e-3)"
+    learning_rate_actor: 0. # "loguniform(6e-7, 6e-6)" # "loguniform(1e-4, 1e-3)"   
+    learning_rate_alpha: 0. # "loguniform(6e-7, 6e-6)" # "loguniform(1e-4, 1e-3)"
     
     dropout: 0.1 # "uniform(0.0, 0.5)"
     tau: [0.01, 0.005] # Target network update rate

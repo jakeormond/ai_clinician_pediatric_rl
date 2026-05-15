@@ -684,7 +684,7 @@ class ContinuousPVP:
     def get_q_stats(self, current_Q1, current_Q2, actor_Q, mortality, log_dict) -> Tuple[float, float]:
 		
 		# create current_Q as the mean of current_Q1 and current_Q2
-        current_Q = (current_Q1 + current_Q2) / 2.0
+        current_Q = np.min([current_Q1, current_Q2], axis=0)
         mean_Q = current_Q.mean().item()
         variance_Q = current_Q.var().item()
         batch_n = current_Q.shape[0]
@@ -731,9 +731,13 @@ class ContinuousPVP:
 
         if actor_Q is not None:
             advantage_Q = (actor_Q - current_Q).mean().item() # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
+            survival_advantage_Q = advantage_Q[survival_mask].mean().item() if survival_n > 0 else float('nan')
+            non_survival_advantage_Q = advantage_Q[non_survival_mask].mean().item() if non_survival_n > 0 else float('nan')
             log_dict.update({
                 "actor_Q": actor_Q.mean().item(),
-                "advantage_Q": advantage_Q
+                "advantage_Q": advantage_Q,
+                "survival_advantage_Q": survival_advantage_Q,
+                "non_survival_advantage_Q": non_survival_advantage_Q
             })
         return log_dict
     

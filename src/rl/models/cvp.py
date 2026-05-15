@@ -730,12 +730,13 @@ class ContinuousPVP:
         })
 
         if actor_Q is not None:
-            advantage_Q = (actor_Q - current_Q).mean().item() # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
+            advantage_Q = actor_Q - current_Q
+            advantage_Q_mean = (actor_Q - current_Q).mean().item() # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
             survival_advantage_Q = advantage_Q[survival_mask].mean().item() if survival_n > 0 else float('nan')
             non_survival_advantage_Q = advantage_Q[non_survival_mask].mean().item() if non_survival_n > 0 else float('nan')
             log_dict.update({
                 "actor_Q": actor_Q.mean().item(),
-                "advantage_Q": advantage_Q,
+                "advantage_Q": advantage_Q_mean,
                 "survival_advantage_Q": survival_advantage_Q,
                 "non_survival_advantage_Q": non_survival_advantage_Q
             })

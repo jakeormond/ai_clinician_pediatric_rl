@@ -1,5 +1,5 @@
 import os
-import config_manager
+from .. import config_manager
 import yaml
 import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union

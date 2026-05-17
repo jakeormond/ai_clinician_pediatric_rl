@@ -440,8 +440,9 @@ def evaluate_multiple_models():
     rl_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.rl_type, 
                     f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions)
     rl_folders = [f for f in os.listdir(rl_path) if os.path.isdir(os.path.join(rl_path, f))]
-    if "final_model" in rl_folders:
+    if "final_model" in rl_folders or "*_run" in rl_folders:
         rl_folders.remove("final_model")
+        rl_folders = [f for f in rl_folders if not f.endswith("_run")]
 
     for rl_folder in rl_folders:
         model_path = os.path.join(rl_path, rl_folder)

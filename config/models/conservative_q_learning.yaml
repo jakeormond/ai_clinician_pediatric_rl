@@ -11,18 +11,18 @@
     # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
     # max_traj_len: 2000  # Max trajectory length - probably need to change this
     device: "cuda"  # Device (cuda or cpu)
-    learning_rate_critic: "loguniform(6e-7, 6e-6)" # "loguniform(1e-4, 1e-3)"   
-    learning_rate_actor: "loguniform(6e-7, 6e-6)" # "loguniform(1e-4, 1e-3)"   
+    learning_rate_critic: "loguniform(1e-6, 1e-5)" # "loguniform(1e-4, 1e-3)"   
+    learning_rate_actor: "loguniform(1e-6, 1e-5)" # "loguniform(1e-4, 1e-3)"   
     dropout: 0.1 # "uniform(0.0, 0.5)"
-    tau: [0.01, 0.005] # Target network update rate
+    tau: [0.001, 0.005, 0.01, 0.025] # Target network update rate
     weight_decay: 1e-4 # L2 regularization strength
     
     policy_noise: 0.2 # Noise added to target policy during critic updates
     noise_clip: 0.5 # Range to clip target policy noise
     policy_freq: 2 # Frequency of delayed policy updates
     beta: 0.1 # Weighting for BC loss term
-    cql_alpha: [0.1, 0.2, 0.5]  # [0.01, 0.05, 0.1] # [0.1, 0.2, 0.5] # [1.0, 5.0, 10.0] # Weighting for CQL penalty term
-    temp: [1., 2., 5.]  # [5.0, 10.0] # [2.0, 5.0] # Temperature for CQL penalty term
+    cql_alpha: [0.08, 0.1]  # [0.01, 0.05, 0.1] # [0.1, 0.2, 0.5] # [1.0, 5.0, 10.0] # Weighting for CQL penalty term
+    temp: [5, 8]  # [1., 2., 5.]  # [5.0, 10.0] # [2.0, 5.0] # Temperature for CQL penalty term
     num_samples: 10 # Number of samples for CQL penalty term
 
     batch_size: 1024 # [256, 512, 1024]  # Batch size for all networks

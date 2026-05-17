@@ -61,7 +61,8 @@ class ShardProcessor:
                 self.shard_dir = os.path.join(shard_dir, 'tuning_set')
             else:
                 self.shard_dir = os.path.join(shard_dir, 'training_set')
-        
+        else:
+            self.shard_dir = os.path.join(shard_dir, 'training_set')
         
         # load processed data if it exists, otherwise process raw shard files and save the processed data for future use
         final_file_name = f"{self.split}_dynamic_deephit_dataset.h5"

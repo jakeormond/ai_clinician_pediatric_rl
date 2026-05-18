@@ -238,6 +238,9 @@ class Critic(nn.Module):
 
 	@torch.no_grad()
 	def get_neuron_stats(self, state, action): # not currently used, make sure to use eval when implemented
+		# Ensure we are in eval mode to avoid Dropout interference
+        self.eval()
+		
 		# Concatenate input
 		x_init = torch.cat([state, action], dim=-1)
 		

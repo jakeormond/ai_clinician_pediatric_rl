@@ -19,7 +19,14 @@ intermediate rewards help learning
 """
 
 class Critic(nn.Module):
-    def __init__(self, state_dim, action_dim, dropout=0.1, hidden_dim=512, negative_slope=0.1):
+    def __init__(
+        self, 
+        state_dim, 
+        action_dim, 
+        dropout=0.1, 
+        hidden_dim=512, 
+        negative_slope=0.1
+    ):
         
         super(Critic, self).__init__()
 
@@ -130,10 +137,15 @@ class Critic(nn.Module):
         for layer in self.q1_net:
             x = layer(x)
             if isinstance(layer, nn.LeakyReLU):
-                # (x <= 0) is 1 for inactive, 0 for active
-                pct_inactive = (x <= 0).float().mean().item() * 100
-                stats[f"inactive_L{leaky_idx}_pct"] = pct_inactive
-                leaky_idx += 1
+                # 1. Percent of inputs utilizing the negative slope in this batch
+                pct_negative = (x < 0).float().mean().item() * 100
+                stats[f"negative_regime_L{leaky_idx}_pct"] = pct_negative
+                
+                # 2. True Inactive/Dead Neurons: Variance across the batch is essentially 0
+                # (dim=0 calculates variance across the batch for each individual neuron)
+                neuron_vars = torch.var(x, dim=0)
+                pct_dead = (neuron_vars < 1e-6).float().mean().item() * 100
+                stats[f"dead_neurons_L{leaky_idx}_pct"] = pct_dead                
                 
         return stats
 
@@ -204,6 +216,7 @@ class Q_Learner(object):
             mean_Q = current_Q.mean().item()
             variance_Q = current_Q.var().item()
             batch_n = current_Q.shape[0]
+            uncertainty_Q = F.mse_loss(current_Q1, current_Q2).item() # simple measure of uncertainty based on disagreement between the two critics
 
             # masks and counts
             survival_mask = (mortality == 0)
@@ -231,10 +244,11 @@ class Q_Learner(object):
                 non_survival_variance_Q = float('nan')
                 non_survival_n = 0
 
-            log_dict.update({
+            q_stats.update({
                 "batch_n": batch_n,
                 "mean_Q": mean_Q,
                 "variance_Q": variance_Q,
+                "uncertainty_Q": uncertainty_Q,                
                 "survival_n": survival_n,
                 "survival_Q": survival_Q,
                 "survival_variance_Q": survival_variance_Q,
@@ -242,12 +256,10 @@ class Q_Learner(object):
                 "non_survival_Q": non_survival_Q,
                 "non_survival_variance_Q": non_survival_variance_Q
             })
-            return log_dict
+            return q_stats
 
 
     def get_q_stats_sarsa(self, q_clinician, q_rl, mortality) -> Dict[str, float]:
-
-        # batch_n = q_clinician.shape[0]
 
         # masks and counts
         survival_mask = (mortality == 0)
@@ -287,22 +299,21 @@ class Q_Learner(object):
         advantage_mean = advantage.mean().item()
         advantage_variance = advantage.var().item()
     
-        log_dict = {
-            # "batch_n": batch_n,
+        q_stats_sarsa = {
             "advantage_mean": advantage_mean,
             "advantage_variance": advantage_variance,
+            "survival_n": survival_n,
+            "advantage_survival_mean": advantage_survival_mean,
+            "variance_advantage_survival": variance_advantage_survival,            
             "q_clinician_survival": q_clinician_survival,
             "q_rl_survival": q_rl_survival,
-            "advantage_survival_mean": advantage_survival_mean,
-            "variance_advantage_survival": variance_advantage_survival,
-            "q_clinician_non_survival": q_clinician_non_survival,
-            "q_rl_non_survival": q_rl_non_survival,
+            "non_survival_n": non_survival_n,
             "advantage_non_survival_mean": advantage_non_survival_mean,
             "variance_advantage_non_survival": variance_advantage_non_survival,
-            "survival_n": survival_n,
-            "non_survival_n": non_survival_n
+            "q_clinician_non_survival": q_clinician_non_survival,
+            "q_rl_non_survival": q_rl_non_survival,            
         }
-        return log_dict
+        return q_stats_sarsa
 
 
     def train(self, batch: TensorBatch):
@@ -316,7 +327,7 @@ class Q_Learner(object):
         # compute the target Q value
         treat_survival_as_truncated = True
         if treat_survival_as_truncated:
-             # make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
+            # make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
             done = done * mortality
         
         not_done = 1 - done
@@ -337,7 +348,7 @@ class Q_Learner(object):
         log_dict = {"critic_loss": critic_loss.item()}
 
         # get Q statistics
-        log_dict = self.get_q_stats(current_Q1, current_Q2, mortality, log_dict)
+        q_stats = self.get_q_stats(current_Q1, current_Q2, mortality, log_dict)
 
         # Optimize the critic
         self.critic_optimizer.zero_grad()
@@ -349,7 +360,6 @@ class Q_Learner(object):
         # determine whether to clip gradients based on grad_clip value
         grad_norm['was_clipped'] = 1.0 if (self.grad_clip and grad_norm['raw_grad_norm'] > self.grad_clip) else 0.0
 
-       
         # update the moving average of the clipping binary
         self.clip_fraction_ema = self.ema_alpha * self.clip_fraction_ema + (1 - self.ema_alpha) * grad_norm['was_clipped']
         grad_norm['clip_fraction_ema'] = self.clip_fraction_ema
@@ -370,7 +380,7 @@ class Q_Learner(object):
             for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-        return log_dict, grad_norm
+        return log_dict, q_stats, grad_norm
     
 
     def critic_forward_for_sarsa(self, batch: TensorBatch, action: torch.Tensor=None):
@@ -423,9 +433,9 @@ class Q_Learner(object):
             log_dict.update(neuron_stats)
 
             # get Q statistics
-            log_dict = self.get_q_stats(current_Q1, current_Q2, mortality, log_dict)
+            q_stats = self.get_q_stats(current_Q1, current_Q2, mortality, log_dict)
         
-        return log_dict, None, None
+        return log_dict, q_stats, None
 	
 
     def evaluate_sarsa(self, batch: TensorBatch, mortality: torch.Tensor, rl_actions: torch.Tensor) -> Dict[str, float]:
@@ -437,9 +447,9 @@ class Q_Learner(object):
             # generate q values from rl actions
             q_rl = self.critic_forward_for_sarsa(batch, rl_actions)
         
-        log_dict = self.get_q_stats_sarsa(q_clinician, q_rl, mortality)
+        q_stats_sarsa = self.get_q_stats_sarsa(q_clinician, q_rl, mortality)
 
-        return log_dict
+        return q_stats_sarsa
 
 
     

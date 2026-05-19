@@ -70,7 +70,7 @@ def get_keys(training_metrics):
     # remove 'val/' prefix from neuron_stat_keys if present
     new_neuron_stat_keys = []
     for key in neuron_stat_keys:
-        key_truncated = key.split('/val_')[-1]  # get the part after the last '/'
+        key_truncated = key.split('val/')[-1]  # get the part after the last '/'
         new_neuron_stat_keys.append(key_truncated)
     #remove 'epoch' from new_neuron_stat_keys if present
     if 'epoch' in new_neuron_stat_keys:

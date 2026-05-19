@@ -21,7 +21,7 @@ from .models.behavioural_cloning import keep_best_trajectories, keep_positive_tr
 from ..supervised_learning.training import get_hyperparameter_space, select_hyperparameters_randomly, get_fixed_hyperparameters, to_json_safe
 from .models.td3_bc import TD3_BC
 from ..utils.utilities import set_seed
-from .plotting import plot_results, plot_losses, plot_advantages, plot_q_stats, plot_neuron_stats, plot_Q_by_mortality, plot_gradient_norms, plot_validation_scores
+from .plotting import plot_results
 from .models.shared_components import TrainerUtils
 
 

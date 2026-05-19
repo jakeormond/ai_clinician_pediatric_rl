@@ -39,7 +39,7 @@ from ..data.data_processor_for_shards import ShardProcessor
 from ..rl.replay_buffer import DynamicDeepHit_Lazy, worker_init_fn, DynamicDeepHit_InMemory, DynamicDeepHitTransformerDataset
 
 from ..utils.utilities import set_seed
-from ..rl.plotting import plot_losses,plot_losses_cv, plot_c_and_brier_over_time, plot_auroc_prc_curves, plot_gradient_norms
+from ..rl.plotting import plot_c_and_brier_over_time, plot_auroc_prc_curves
 from .dynamic_deephit_evaluation import compute_survival_metrics
 
 import logging

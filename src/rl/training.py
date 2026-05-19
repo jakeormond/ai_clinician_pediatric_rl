@@ -21,7 +21,7 @@ from .models.behavioural_cloning import keep_best_trajectories, keep_positive_tr
 from ..supervised_learning.training import get_hyperparameter_space, select_hyperparameters_randomly, get_fixed_hyperparameters, to_json_safe
 from .models.td3_bc import TD3_BC
 from ..utils.utilities import set_seed
-from .plotting import plot_losses, plot_Q_by_mortality, plot_gradient_norms, plot_validation_scores
+from .plotting import plot_results, plot_losses, plot_advantages, plot_q_stats, plot_neuron_stats, plot_Q_by_mortality, plot_gradient_norms, plot_validation_scores
 from .models.shared_components import TrainerUtils
 
 
@@ -151,8 +151,8 @@ class TrainingMetrics:
             "final_val_q_stats",
             "val_advantages",
             "final_val_advantages",
-            "batch_grad_norms",
-            "epoch_grad_norms",
+            "batch_training_grad_norms",
+            "epoch_training_grad_norms",
             "val_neuron_stats",
             "final_val_neuron_stats",
         ]
@@ -197,8 +197,8 @@ class TrainingMetrics:
             return None
 
     def get_current_epoch_grad_norm(self):
-        if self.epoch_grad_norms:
-            return {key: values[-1] for key, values in self.epoch_grad_norms.items()}
+        if self.epoch_training_grad_norms:
+            return {key: values[-1] for key, values in self.epoch_training_grad_norms.items()}
         else:
             return None
     
@@ -434,24 +434,6 @@ def evaluate_final_model(trainer, evaluator, val_buffer, val_processor, model_di
     return test_losses, results_df
 
 
-def plot_results(training_metrics, plot_dir, config_manager):
-    
-    plot_losses(training_metrics, plot_dir)
-
-    plot_q_stats(training_metrics, plot_dir)
-
-    plot_neuron_stats(training_metrics, plot_dir)
-
-    plot_gradient_norms(training_metrics, plot_dir)
-
-    if config_manager.model_type != "basic_q":
-        plot_validation_scores(training_losses, val_losses, test_losses, plot_dir)
-
-    if config_manager.model_type == "basic_q" or config_manager.model_type == "td3_bc":
-        plot_Q_by_mortality(val_losses, test_losses, plot_dir)
-
-
-
 def check_improvement(best_val_loss, current_val_loss, early_stopping):
     improvement = best_val_loss - current_val_loss
     if improvement > early_stopping['min_delta']:
@@ -634,7 +616,7 @@ def train_with_hyperparameters(
         val_losses=val_losses,
         val_q_stats=val_q_stats,
         val_advantages=val_advantages,
-        neuron_stats=val_neuron_stats        
+        val_neuron_stats=val_neuron_stats        
     )
 
     current_val_loss = np.mean(training_metrics.get_current_epoch_val_loss(loss_metric))
@@ -707,7 +689,7 @@ def train_with_hyperparameters(
         training_metrics.append_epoch_metrics(
             batch_training_losses=epoch_training_losses,
             batch_training_q_stats=epoch_training_q_stats,
-            batch_grad_norms=epoch_grad_norm  
+            batch_training_grad_norms=epoch_grad_norm  
         )    
 
         # calculate epoch averages and log to W&B
@@ -736,7 +718,7 @@ def train_with_hyperparameters(
         
             # 3. Add the structural tracking tokens to the dictionary
             epoch_dict["epoch"] = epoch       # Will be 0 on your first pass
-            epoch_dict["global_step"] = global_step
+            epoch_dict["global_step"] = global_step - 1
         
             # 4. Send the epoch summary point to W&B
             if wandb.run is not None:
@@ -746,7 +728,7 @@ def train_with_hyperparameters(
         training_metrics.append_epoch_metrics(
             epoch_training_losses=epoch_training_losses,
             epoch_training_q_stats=epoch_training_q_stats,
-            epoch_grad_norms=epoch_grad_norm  
+            epoch_training_grad_norms=epoch_grad_norm  
         )
         
         epoch_loss = training_metrics.get_current_epoch_train_loss(loss_metric)
@@ -772,7 +754,7 @@ def train_with_hyperparameters(
                 val_losses=val_losses,
                 val_q_stats=val_q_stats,
                 val_advantages=val_advantages,
-                neuron_stats=neuron_stats        
+                val_neuron_stats=neuron_stats        
             )
             
             current_val_loss = training_metrics.get_current_epoch_val_loss(loss_metric)
@@ -873,9 +855,6 @@ def train_with_hyperparameters(
 
     # plot losses
     plot_results(training_metrics, model_dir, config_manager)
-
-    # # plot gradient norms 
-    # plot_gradient_norms(grad_norms, model_dir)
 
     # save results
     all_scores = save_results(

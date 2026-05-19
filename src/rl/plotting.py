@@ -8,119 +8,135 @@ from pathlib import Path
 
 
 
-def plot_losses(training_metrics, plot_dir):
-    loss_keys = list(training_metrics.batch_training_losses.keys())
+def plot_results(training_metrics, plot_dir, config_manager):
+    
+    training_epochs = training_metrics.epoch_training_losses['epoch']
+    global_step = training_metrics.epoch_training_losses['global_step']
+    global_step_diff_mid = ((global_step[1]-1)-global_step[0])/2
+    train_epochs_to_global_step = [g - global_step_diff_mid for g in global_step]
+    train_global_steps = np.arange(0, global_step[-1] + 1)
+    
+    val_global_step_indices = training_metrics.val_losses['epoch']
+    if val_global_step_indices[0] != -1:
+        raise ValueError("Expected the first epoch index for validation losses to be -1, indicating it was logged at the end of the first epoch. Found: " + str(val_global_step_indices[0]))
+    val_epochs_to_global_step = [-1] + [global_step[i] for i in val_global_step_indices[1:]]
 
-    # remove the 'train/' prefix from loss_keys if present
+    x_axes = {
+        'train/batch': train_global_steps,
+        'train/epoch': train_epochs_to_global_step,
+        'val/batch': val_epochs_to_global_step,
+        'val/epoch': val_global_step_indices
+    }
+
+    all_keys = get_keys(training_metrics)
+    
+    plot_data(training_metrics, x_axes, all_keys, 'losses', plot_dir)
+    plot_data(training_metrics, x_axes, all_keys, 'q_stats', plot_dir)
+    plot_data(training_metrics, x_axes, all_keys, 'advantages', plot_dir)
+    plot_data(training_metrics, x_axes, all_keys, 'neuron_stats', plot_dir)
+    plot_data(training_metrics, x_axes, all_keys, 'grad_norms', plot_dir)
+
+    pass
+
+
+
+def get_keys(training_metrics):
+    all_keys = {}
+    
+    # loss keys
+    loss_keys = list(training_metrics.batch_training_losses.keys())
     new_loss_keys = []
     for key in loss_keys:
         key_truncated = key.split('/batch_')[-1]  # get the part after the last '/'
         new_loss_keys.append(key_truncated)
+   
+    all_keys['losses'] = new_loss_keys
 
-    n_subplots = len(new_loss_keys)
-    n_figures = n_subplots // 3 + int(n_subplots % 3 > 0)
-    n_subplots_per_figure = 3
+    # q_stat keys
+    q_stat_keys = list(training_metrics.batch_training_q_stats.keys())
+    new_q_stat_keys = []
+    for key in q_stat_keys:
+        key_truncated = key.split('/batch_')[-1]  # get the part after the last '/'
+        new_q_stat_keys.append(key_truncated)
+   
+    # drop batch_n from new_q_stat_keys if present
+    if 'batch_n' in new_q_stat_keys:
+        new_q_stat_keys.remove('batch_n')
 
-    subplot_counter = 0
+    all_keys['q_stats'] = new_q_stat_keys
 
-    for fig_idx in range(n_figures):    
-        plt.figure(figsize=(15, 5 * n_subplots_per_figure))
-        
-        for i in range(n_subplots_per_figure):
-            if subplot_counter >= n_subplots:
-                break
-            key = new_loss_keys[subplot_counter]
+    # neuron_stat_keys
+    neuron_stat_keys = list(training_metrics.val_neuron_stats.keys())
+    # remove 'val/' prefix from neuron_stat_keys if present
+    new_neuron_stat_keys = []
+    for key in neuron_stat_keys:
+        key_truncated = key.split('/val_')[-1]  # get the part after the last '/'
+        new_neuron_stat_keys.append(key_truncated)
+    #remove 'epoch' from new_neuron_stat_keys if present
+    if 'epoch' in new_neuron_stat_keys:
+        new_neuron_stat_keys.remove('epoch')
 
-            # if 'loss' in key:
-            losses = {}           
-            if 'loss' in key:
-                losses['batch_train'] = training_metrics.batch_training_losses[f'train/batch_{key}']
-                losses['epoch_train'] = training_metrics.epoch_training_losses[f'train/epoch_{key}']
-                losses['val'] = training_metrics.val_losses[f'val/{key}']
-                losses['final_val'] = training_metrics.final_val_losses[f'val/{key}']
+    all_keys['neuron_stats'] = new_neuron_stat_keys
 
-            elif 'lr' in key:
-                losses['batch_train'] = training_metrics.batch_training_losses[f'train/batch_{key}']
-                losses['epoch_train'] = training_metrics.epoch_training_losses[f'train/epoch_{key}']
+    # grad_norm_keys
+    grad_norm_keys = list(training_metrics.batch_training_grad_norms.keys())
+    new_grad_norm_keys = []
+    for key in grad_norm_keys:
+        key_truncated = key.split('/batch_')[-1]  # get the part after the last '/'
+        new_grad_norm_keys.append(key_truncated)
 
-            else:
-                logger.warning(f"Key {key} not recognized as loss or learning rate. Skipping.")
-                continue
+    all_keys['grad_norms'] = new_grad_norm_keys
 
-            epochs = training_metrics.epoch_training_losses['epoch']
-            global_step = training_metrics.epoch_training_losses['global_step']
-            global_step_diff_mid = np.diff(global_step)[0] / 2
-            epochs_to_global_step = [g - global_step_diff_mid for g in global_step]
-            epochs_to_global_step_diff = np.diff(epochs_to_global_step)[0]
-            global_steps = np.arange(1, global_step[-1] + 1)
-           
-            plt.subplot(n_subplots_per_figure, 1, i + 1)
+    # advantage_keys
+    # check if training_metrics.val_advantages has keys that start with 'val/' and if so, remove the prefix for the advantage keys
+    advantage_keys = list(training_metrics.val_advantages.keys())
+    if len(advantage_keys) > 0:
+        advantage_keys = [key.split('/val_')[-1] for key in advantage_keys]
 
-            # batch losses are a list lists, we need to concatenate them for plotting
-            batch_losses = [item for sublist in losses['batch_train'] for item in sublist]
-            # plot against global steps, which are more fine-grained than epochs in light red
-            plt.plot(global_steps, batch_losses, color=plt.cm.Reds(0.6), linewidth=1, label='Batch Training Loss')
-
-            # epoch losses are already averaged per epoch, so we can plot them directly against epochs in dark red
-            epoch_losses = losses['epoch_train']
-            plt.plot(epochs_to_global_step, epoch_losses, color=plt.cm.Reds(0.9), linewidth=2, label='Epoch Training Loss')
-
-            if 'val' in losses:
-                epochs = training_metrics.val_losses['epoch']
-                epochs_to_global_step_val = [-1] + global_step
-                 
-                val_losses = losses['val']
-                plt.plot(epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      
-                
-                if 'final_val' in losses:                    
-                    val_loss_final = losses['final_val']
-                    # plot val loss as horizontal line
-                    plt.axhline(y=val_loss_final, color='green', linestyle='--', linewidth=2, label='Val Loss final')
-
-            if i == n_subplots_per_figure - 1:
-                plt.xlabel('Epochs')
-            plt.ylabel(key)
-            plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
-            plt.xlim(-0.5, np.max(epochs_range)+0.5)
-            plt.title(f'{key} over Epochs')
-            plt.grid(True)
-            plt.legend(
-                loc='upper right',
-                facecolor='white',  # solid white background
-                framealpha=1,
-                edgecolor='lightgray',
-                bbox_to_anchor=(0.98, 0.98),
-                fontsize=10,
-            )
-
-            subplot_counter += 1
-
-        # Save the plot
-        plot_path = Path(plot_dir) / f"loss_plot_{fig_idx}.png"
-        plt.savefig(plot_path)
-        plt.close()
-
-
-
-def plot_validation_scores(training_scores, val_scores, test_scores, plot_dir):
-    loss_keys = list(val_scores.keys())
-    new_loss_keys = []
-
-    training_keys = list(training_scores.keys())
-    # drop training_keys from loss_keys
-    for key in loss_keys:
-        key_truncated = key.split('/')[-1]  # get the part after the last '/'
-        if key_truncated not in training_keys:
-            new_loss_keys.append(key)
-    loss_keys = new_loss_keys
+        all_keys['advantage_keys'] = advantage_keys
     
-    # drop mean_Q and std_Q if present
-    if 'mean_Q' in loss_keys:
-        loss_keys.remove('mean_Q')
-    if 'std_Q' in loss_keys:
-        loss_keys.remove('std_Q')
+    return all_keys
 
-    n_subplots = len(loss_keys)
+
+
+def plot_data(training_metrics, x_axes, all_keys, group, plot_dir):
+    if group not in all_keys:
+        logger.warning(f"No keys found for group {group}. Skipping plotting for this group.")
+        return
+    keys = all_keys[group]
+
+    if group == 'losses':
+        batch_training_data = training_metrics.batch_training_losses
+        epoch_training_data = training_metrics.epoch_training_losses
+        val_data = training_metrics.val_losses
+        final_val_data = training_metrics.final_val_losses
+
+    elif group == 'q_stats':
+        batch_training_data = training_metrics.batch_training_q_stats
+        epoch_training_data = training_metrics.epoch_training_q_stats
+        val_data = training_metrics.val_q_stats
+        final_val_data = training_metrics.final_val_q_stats
+
+    elif group == 'neuron_stats':
+        batch_training_data = None
+        epoch_training_data = None
+        val_data = training_metrics.val_neuron_stats
+        final_val_data = training_metrics.final_val_neuron_stats
+
+    elif group == 'grad_norms':
+        batch_training_data = training_metrics.batch_training_grad_norms
+        epoch_training_data = training_metrics.epoch_training_grad_norms
+        val_data = None
+        final_val_data = None
+    
+    elif group == 'advantages':
+        batch_training_data = None
+        epoch_training_data = None
+        val_data = training_metrics.val_advantages
+        final_val_data = training_metrics.final_val_advantages
+
+
+    n_subplots = len(keys)
     n_figures = n_subplots // 3 + int(n_subplots % 3 > 0)
     n_subplots_per_figure = 3
 
@@ -128,43 +144,53 @@ def plot_validation_scores(training_scores, val_scores, test_scores, plot_dir):
 
     for fig_idx in range(n_figures):    
         plt.figure(figsize=(15, 5 * n_subplots_per_figure))
-        
+
         for i in range(n_subplots_per_figure):
             if subplot_counter >= n_subplots:
                 break
-            key = loss_keys[subplot_counter]
+            key = keys[subplot_counter]
+            x_axis_label = 'Epochs' if batch_training_data is None else 'Global Steps'
 
             plt.subplot(n_subplots_per_figure, 1, i + 1)
-            epochs_range = np.arange(1, len(val_scores[key]) + 1)
 
-            # check if training_scores[key] is a list of lists (one per fold) or a single list
-            if isinstance(val_scores[key][0], list):
-                val_scores_4plot = [item for sublist in val_scores[key] for item in sublist]
-            else:
-                val_scores_4plot = val_scores[key]
+            # check if batch_training data exists
+            if batch_training_data is not None:
+                batch_key = f'train/batch_{key}'
+                if batch_key in batch_training_data:
+                    batch_data = [item for sublist in batch_training_data[batch_key] for item in sublist]
+                    plt.plot(x_axes['train/batch'], batch_data, color=plt.cm.Reds(0.6), linewidth=1, label='Batch Training')
+            
+            # check if epoch_training data exists
+            if epoch_training_data is not None:
+                epoch_key = f'train/epoch_{key}'
+                if epoch_key in epoch_training_data:
+                    epoch_data = epoch_training_data[epoch_key]
+                    plt.plot(x_axes['train/epoch'], epoch_data, color=plt.cm.Reds(0.9), linewidth=2, label='Epoch Training')
 
-            val_range = np.linspace(epochs_range[0], epochs_range[-1], len(val_scores_4plot) + 1)[:-1]
-
-            plt.plot(val_range, val_scores_4plot, color=plt.cm.Blues(0.9), linewidth=2, label='Validation Score')
-
-            val_epochs = np.array(val_scores['epoch']) + 1
-            val_key = f"val/{key}"
-            if val_key in val_scores:
-                # val_losses = val_scores[val_key]
-
-                # plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      
+            # check if val data exists
+            if val_data is not None:
+                val_key = f'val/{key}'
+                if val_key in val_data:
+                    if batch_training_data is None:
+                        x_axis_data = x_axes['val/epoch']
+                    else: 
+                        x_axis_data = x_axes['val/batch']
+                    val_data_to_plot = val_data[val_key]
+                    plt.plot(x_axis_data, val_data_to_plot, color=plt.cm.Blues(0.9), linewidth=2, label='Validation')      
                 
-                if test_scores is not None and key in test_scores:
-                    val_loss_final = test_scores[key]
-                    # plot val loss as horizontal line
-                    plt.axhline(y=val_loss_final, color='green', linestyle='--', linewidth=2, label='Val Loss final')
-
-            if i == n_subplots_per_figure - 1:
-                plt.xlabel('Epochs')
+                
+                if final_val_data is not None:
+                    final_val_key = f'val/{key}'
+                    if final_val_key in final_val_data:
+                        val_final = final_val_data[final_val_key]
+                        plt.axhline(y=val_final, color='blue', linestyle='--', linewidth=2, label='Val final')
+    
+        
+            plt.xlabel(x_axis_label)
             plt.ylabel(key)
-            plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
-            plt.xlim(-0.5, np.max(epochs_range)+0.5)
-            plt.title(f'{key} over Epochs')
+            # plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
+            # plt.xlim(-1, x_axes['val/'][-1] + 1)
+            plt.title(f'{key} over {x_axis_label}')
             plt.grid(True)
             plt.legend(
                 loc='upper right',
@@ -178,52 +204,352 @@ def plot_validation_scores(training_scores, val_scores, test_scores, plot_dir):
             subplot_counter += 1
 
         # Save the plot
-        plot_path = Path(plot_dir) / f"validation_scores_plot_{fig_idx}.png"
+        plot_path = Path(plot_dir) / f"{group}_{fig_idx}.png"
         plt.savefig(plot_path)
         plt.close()
 
 
 
-def plot_gradient_norms(grad_norms, plot_dir):
-    grad_keys = list(grad_norms.keys())
-    if 'was_clipped' in grad_keys:
-        grad_keys.remove('was_clipped')
 
-    n_subplots = len(grad_keys)
-    plt.figure(figsize=(15, 5 * n_subplots))
 
-    for i, key in enumerate(grad_keys):
-        plt.subplot(n_subplots, 1, i + 1)
-        epochs_range = np.arange(1, len(grad_norms[key]) + 1)
 
-        if isinstance(grad_norms[key][0], list):
-            grad_norms_4plot = [item for sublist in grad_norms[key] for item in sublist]
-        else:
-            grad_norms_4plot = grad_norms[key]
 
-        training_range = np.linspace(epochs_range[0], epochs_range[-1], len(grad_norms_4plot) + 1)[:-1]
-        plt.plot(training_range, grad_norms_4plot, color=plt.cm.viridis(0.9), linewidth=2, label=key)
+# def plot_advantages(training_metrics, plot_dir):
+#     loss_keys = list(training_metrics.batch_training_losses.keys())
 
-        if i == len(grad_keys) - 1:
-            plt.xlabel('Epochs')
-        plt.ylabel('Gradient Norm')
-        plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
-        plt.xlim(-0.5, np.max(epochs_range)+0.5)
-        plt.title(f'{key} over Epochs')
-        plt.grid(True)
-        plt.legend(
-            loc='upper right',
-            facecolor='white',  # solid white background
-            framealpha=1,
-            edgecolor='lightgray',
-            bbox_to_anchor=(0.98, 0.98),
-            fontsize=10,
-        )
+#     # remove the 'train/' prefix from loss_keys if present
+#     new_loss_keys = []
+#     for key in loss_keys:
+#         key_truncated = key.split('/batch_')[-1]  # get the part after the last '/'
+#         new_loss_keys.append(key_truncated)
 
-     # Save the plot
-    plot_path = Path(plot_dir) / f"gradient_norms_plot.png"
-    plt.savefig(plot_path)
-    plt.close()
+#     n_subplots = len(new_loss_keys)
+#     n_figures = n_subplots // 3 + int(n_subplots % 3 > 0)
+#     n_subplots_per_figure = 3
+
+#     subplot_counter = 0
+
+#     for fig_idx in range(n_figures):    
+#         plt.figure(figsize=(15, 5 * n_subplots_per_figure))
+        
+#         for i in range(n_subplots_per_figure):
+#             if subplot_counter >= n_subplots:
+#                 break
+#             key = new_loss_keys[subplot_counter]
+
+#             # if 'loss' in key:
+#             losses = {}           
+#             if 'loss' in key:
+#                 losses['batch_train'] = training_metrics.batch_training_losses[f'train/batch_{key}']
+#                 losses['epoch_train'] = training_metrics.epoch_training_losses[f'train/epoch_{key}']
+#                 losses['val'] = training_metrics.val_losses[f'val/{key}']
+#                 losses['final_val'] = training_metrics.final_val_losses[f'val/{key}']
+
+#             elif 'lr' in key:
+#                 losses['batch_train'] = training_metrics.batch_training_losses[f'train/batch_{key}']
+#                 losses['epoch_train'] = training_metrics.epoch_training_losses[f'train/epoch_{key}']
+
+#             else:
+#                 logger.warning(f"Key {key} not recognized as loss or learning rate. Skipping.")
+#                 continue
+
+#             epochs = training_metrics.epoch_training_losses['epoch']
+#             global_step = training_metrics.epoch_training_losses['global_step']
+#             global_step_diff_mid = ((global_step[1]-1)-global_step[0])/2
+#             epochs_to_global_step = [g - global_step_diff_mid for g in global_step]
+#             global_steps = np.arange(0, global_step[-1] + 1)
+           
+#             plt.subplot(n_subplots_per_figure, 1, i + 1)
+
+#             # batch losses are a list lists, we need to concatenate them for plotting
+#             batch_losses = [item for sublist in losses['batch_train'] for item in sublist]
+#             # plot against global steps, which are more fine-grained than epochs in light red
+#             plt.plot(global_steps, batch_losses, color=plt.cm.Reds(0.6), linewidth=1, label='Batch Training Loss')
+
+#             # epoch losses are already averaged per epoch, so we can plot them directly against epochs in dark red
+#             epoch_losses = losses['epoch_train']
+#             plt.plot(epochs_to_global_step, epoch_losses, color=plt.cm.Reds(0.9), linewidth=2, label='Epoch Training Loss')
+
+#             if 'val' in losses:
+#                 global_step_indices = training_metrics.val_losses['epoch']
+#                 if global_step_indices[0] != -1:
+#                     raise ValueError("Expected the first epoch index for validation losses to be -1, indicating it was logged at the end of the first epoch. Found: " + str(global_step_indices[0]))
+#                 epochs_to_global_step = [-1] + [global_step[i] for i in global_step_indices[1:]]
+
+                 
+#                 val_losses = losses['val']
+#                 plt.plot(epochs_to_global_step, val_losses, color=plt.cm.Blues(0.9), linewidth=2, label='Validation Loss')      
+                
+#                 if 'final_val' in losses:                    
+#                     val_loss_final = losses['final_val']
+#                     # plot val loss as horizontal line
+#                     plt.axhline(y=val_loss_final, color='blue', linestyle='--', linewidth=2, label='Val Loss final')
+
+#             if i == n_subplots_per_figure - 1:
+#                 plt.xlabel('Epochs')
+#             plt.ylabel(key)
+#             # plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
+#             plt.xlim(-1, global_step[-1] + 1)
+#             plt.title(f'{key} over Epochs')
+#             plt.grid(True)
+#             plt.legend(
+#                 loc='upper right',
+#                 facecolor='white',  # solid white background
+#                 framealpha=1,
+#                 edgecolor='lightgray',
+#                 bbox_to_anchor=(0.98, 0.98),
+#                 fontsize=10,
+#             )
+
+#             subplot_counter += 1
+
+#         # Save the plot
+#         plot_path = Path(plot_dir) / f"loss_plot_{fig_idx}.png"
+#         plt.savefig(plot_path)
+#         plt.close()
+
+
+
+
+
+# def plot_neuron_stats(training_metrics, plot_dir):
+#     loss_keys = list(training_metrics.batch_training_losses.keys())
+
+#     # remove the 'train/' prefix from loss_keys if present
+#     new_loss_keys = []
+#     for key in loss_keys:
+#         key_truncated = key.split('/batch_')[-1]  # get the part after the last '/'
+#         new_loss_keys.append(key_truncated)
+
+#     n_subplots = len(new_loss_keys)
+#     n_figures = n_subplots // 3 + int(n_subplots % 3 > 0)
+#     n_subplots_per_figure = 3
+
+#     subplot_counter = 0
+
+#     for fig_idx in range(n_figures):    
+#         plt.figure(figsize=(15, 5 * n_subplots_per_figure))
+        
+#         for i in range(n_subplots_per_figure):
+#             if subplot_counter >= n_subplots:
+#                 break
+#             key = new_loss_keys[subplot_counter]
+
+#             # if 'loss' in key:
+#             losses = {}           
+#             if 'loss' in key:
+#                 losses['batch_train'] = training_metrics.batch_training_losses[f'train/batch_{key}']
+#                 losses['epoch_train'] = training_metrics.epoch_training_losses[f'train/epoch_{key}']
+#                 losses['val'] = training_metrics.val_losses[f'val/{key}']
+#                 losses['final_val'] = training_metrics.final_val_losses[f'val/{key}']
+
+#             elif 'lr' in key:
+#                 losses['batch_train'] = training_metrics.batch_training_losses[f'train/batch_{key}']
+#                 losses['epoch_train'] = training_metrics.epoch_training_losses[f'train/epoch_{key}']
+
+#             else:
+#                 logger.warning(f"Key {key} not recognized as loss or learning rate. Skipping.")
+#                 continue
+
+#             epochs = training_metrics.epoch_training_losses['epoch']
+#             global_step = training_metrics.epoch_training_losses['global_step']
+#             global_step_diff_mid = ((global_step[1]-1)-global_step[0])/2
+#             epochs_to_global_step = [g - global_step_diff_mid for g in global_step]
+#             global_steps = np.arange(0, global_step[-1] + 1)
+           
+#             plt.subplot(n_subplots_per_figure, 1, i + 1)
+
+#             # batch losses are a list lists, we need to concatenate them for plotting
+#             batch_losses = [item for sublist in losses['batch_train'] for item in sublist]
+#             # plot against global steps, which are more fine-grained than epochs in light red
+#             plt.plot(global_steps, batch_losses, color=plt.cm.Reds(0.6), linewidth=1, label='Batch Training Loss')
+
+#             # epoch losses are already averaged per epoch, so we can plot them directly against epochs in dark red
+#             epoch_losses = losses['epoch_train']
+#             plt.plot(epochs_to_global_step, epoch_losses, color=plt.cm.Reds(0.9), linewidth=2, label='Epoch Training Loss')
+
+#             if 'val' in losses:
+#                 global_step_indices = training_metrics.val_losses['epoch']
+#                 if global_step_indices[0] != -1:
+#                     raise ValueError("Expected the first epoch index for validation losses to be -1, indicating it was logged at the end of the first epoch. Found: " + str(global_step_indices[0]))
+#                 epochs_to_global_step = [-1] + [global_step[i] for i in global_step_indices[1:]]
+
+                 
+#                 val_losses = losses['val']
+#                 plt.plot(epochs_to_global_step, val_losses, color=plt.cm.Blues(0.9), linewidth=2, label='Validation Loss')      
+                
+#                 if 'final_val' in losses:                    
+#                     val_loss_final = losses['final_val']
+#                     # plot val loss as horizontal line
+#                     plt.axhline(y=val_loss_final, color='blue', linestyle='--', linewidth=2, label='Val Loss final')
+
+#             if i == n_subplots_per_figure - 1:
+#                 plt.xlabel('Epochs')
+#             plt.ylabel(key)
+#             # plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
+#             plt.xlim(-1, global_step[-1] + 1)
+#             plt.title(f'{key} over Epochs')
+#             plt.grid(True)
+#             plt.legend(
+#                 loc='upper right',
+#                 facecolor='white',  # solid white background
+#                 framealpha=1,
+#                 edgecolor='lightgray',
+#                 bbox_to_anchor=(0.98, 0.98),
+#                 fontsize=10,
+#             )
+
+#             subplot_counter += 1
+
+#         # Save the plot
+#         plot_path = Path(plot_dir) / f"loss_plot_{fig_idx}.png"
+#         plt.savefig(plot_path)
+#         plt.close()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# def plot_validation_scores(training_scores, val_scores, test_scores, plot_dir):
+#     loss_keys = list(val_scores.keys())
+#     new_loss_keys = []
+
+#     training_keys = list(training_scores.keys())
+#     # drop training_keys from loss_keys
+#     for key in loss_keys:
+#         key_truncated = key.split('/')[-1]  # get the part after the last '/'
+#         if key_truncated not in training_keys:
+#             new_loss_keys.append(key)
+#     loss_keys = new_loss_keys
+    
+#     # drop mean_Q and std_Q if present
+#     if 'mean_Q' in loss_keys:
+#         loss_keys.remove('mean_Q')
+#     if 'std_Q' in loss_keys:
+#         loss_keys.remove('std_Q')
+
+#     n_subplots = len(loss_keys)
+#     n_figures = n_subplots // 3 + int(n_subplots % 3 > 0)
+#     n_subplots_per_figure = 3
+
+#     subplot_counter = 0
+
+#     for fig_idx in range(n_figures):    
+#         plt.figure(figsize=(15, 5 * n_subplots_per_figure))
+        
+#         for i in range(n_subplots_per_figure):
+#             if subplot_counter >= n_subplots:
+#                 break
+#             key = loss_keys[subplot_counter]
+
+#             plt.subplot(n_subplots_per_figure, 1, i + 1)
+#             epochs_range = np.arange(1, len(val_scores[key]) + 1)
+
+#             # check if training_scores[key] is a list of lists (one per fold) or a single list
+#             if isinstance(val_scores[key][0], list):
+#                 val_scores_4plot = [item for sublist in val_scores[key] for item in sublist]
+#             else:
+#                 val_scores_4plot = val_scores[key]
+
+#             val_range = np.linspace(epochs_range[0], epochs_range[-1], len(val_scores_4plot) + 1)[:-1]
+
+#             plt.plot(val_range, val_scores_4plot, color=plt.cm.Blues(0.9), linewidth=2, label='Validation Score')
+
+#             val_epochs = np.array(val_scores['epoch']) + 1
+#             val_key = f"val/{key}"
+#             if val_key in val_scores:
+#                 # val_losses = val_scores[val_key]
+
+#                 # plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      
+                
+#                 if test_scores is not None and key in test_scores:
+#                     val_loss_final = test_scores[key]
+#                     # plot val loss as horizontal line
+#                     plt.axhline(y=val_loss_final, color='green', linestyle='--', linewidth=2, label='Val Loss final')
+
+#             if i == n_subplots_per_figure - 1:
+#                 plt.xlabel('Epochs')
+#             plt.ylabel(key)
+#             plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
+#             plt.xlim(-0.5, np.max(epochs_range)+0.5)
+#             plt.title(f'{key} over Epochs')
+#             plt.grid(True)
+#             plt.legend(
+#                 loc='upper right',
+#                 facecolor='white',  # solid white background
+#                 framealpha=1,
+#                 edgecolor='lightgray',
+#                 bbox_to_anchor=(0.98, 0.98),
+#                 fontsize=10,
+#             )
+
+#             subplot_counter += 1
+
+#         # Save the plot
+#         plot_path = Path(plot_dir) / f"validation_scores_plot_{fig_idx}.png"
+#         plt.savefig(plot_path)
+#         plt.close()
+
+
+
+# def plot_gradient_norms(grad_norms, plot_dir):
+#     grad_keys = list(grad_norms.keys())
+#     if 'was_clipped' in grad_keys:
+#         grad_keys.remove('was_clipped')
+
+#     n_subplots = len(grad_keys)
+#     plt.figure(figsize=(15, 5 * n_subplots))
+
+#     for i, key in enumerate(grad_keys):
+#         plt.subplot(n_subplots, 1, i + 1)
+#         epochs_range = np.arange(1, len(grad_norms[key]) + 1)
+
+#         if isinstance(grad_norms[key][0], list):
+#             grad_norms_4plot = [item for sublist in grad_norms[key] for item in sublist]
+#         else:
+#             grad_norms_4plot = grad_norms[key]
+
+#         training_range = np.linspace(epochs_range[0], epochs_range[-1], len(grad_norms_4plot) + 1)[:-1]
+#         plt.plot(training_range, grad_norms_4plot, color=plt.cm.viridis(0.9), linewidth=2, label=key)
+
+#         if i == len(grad_keys) - 1:
+#             plt.xlabel('Epochs')
+#         plt.ylabel('Gradient Norm')
+#         plt.xticks(np.arange(0, epochs_range[-1] + 1, step=5))
+#         plt.xlim(-0.5, np.max(epochs_range)+0.5)
+#         plt.title(f'{key} over Epochs')
+#         plt.grid(True)
+#         plt.legend(
+#             loc='upper right',
+#             facecolor='white',  # solid white background
+#             framealpha=1,
+#             edgecolor='lightgray',
+#             bbox_to_anchor=(0.98, 0.98),
+#             fontsize=10,
+#         )
+
+#      # Save the plot
+#     plot_path = Path(plot_dir) / f"gradient_norms_plot.png"
+#     plt.savefig(plot_path)
+#     plt.close()
     
 
 def plot_c_and_brier_over_time(test_scores, config_manager):

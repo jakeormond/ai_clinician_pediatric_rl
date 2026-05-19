@@ -296,7 +296,6 @@ class Q_Learner(object):
             self.reward_scaling = reward_scaling
 
             self.critic_optimizer = critic_optimizer
-            
             self.critic_target = copy.deepcopy(self.critic)
             self.grad_clip = grad_clip
             self.tau = tau

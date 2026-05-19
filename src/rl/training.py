@@ -42,46 +42,6 @@ DISTRIBUTIONS = {
     "uniform": uniform,
 }
 
-# def parse_distribution(dist_str):
-#     # Example: "loguniform(1e-5, 1e-2)"
-#     name, args = dist_str.split("(", 1)
-#     args = args.rstrip(")")
-#     args = [float(x) for x in args.split(",")]
-#     return DISTRIBUTIONS[name](*args)
-
-
-# def average_dicts(list_of_dicts):
-#     """Averages values for each key across a list of dictionaries.
-#     Using this for evaluation metrics.    
-#     """
-
-#     from collections import defaultdict
-
-#     # Collect all values for each key
-#     values = defaultdict(list)
-#     for d in list_of_dicts:
-#         for k, v in d.items():
-#             values[k].append(v)
-
-#     # Compute averages
-#     averages = {k: sum(v_list) / len(v_list) for k, v_list in values.items()}
-#     return averages
-
-
-# def create_processors(dataset, train_id, val_id, config_manager):
-#     """Creates training and validation DataProcessors with shared normalization."""
-    
-#     train_dataset = dataset.create_subset(dataset.encounter_ids()[train_id])     
-#     val_dataset = dataset.create_subset(dataset.encounter_ids()[val_id])
-    
-#     train_processor = DataProcessor(train_dataset, config_manager)
-#     norm_params = train_processor.get_normalization_params()
-#     val_processor = DataProcessor(val_dataset, config_manager, 
-#                                  norm_params=norm_params)
-    
-#     return train_processor, val_processor, norm_params
-
-
 def select_best_trajectories(processor, config_manager):
     """Keeps only the best trajectories based on config_manager.frac."""
     if config_manager.frac <= 0. or config_manager.frac > 1.:
@@ -178,203 +138,67 @@ def append_epoch_losses(
             training_losses[key].append(value)
     
 
-def estimate_v0(trainer, starting_states, batch_size, losses_dict, prefix=None):
-    # we store the estimates in losses_dict
-    # optionally, estimate V0 and append to training losses
-        v0_mean, v0_sem = trainer.estimate_v0(starting_states, batch_size = batch_size)
-        # print(f"Epoch {epoch}: Train mean start state values: {train_v0_mean:.4f} ± {train_v0_sem:.4f}")
-        if prefix:
-            losses_dict[f'{prefix}/v0_mean'].append(float(v0_mean))
-            losses_dict[f'{prefix}/v0_sem'].append(float(v0_sem))
-        else:
-            losses_dict['v0_mean'].append(float(v0_mean))
-            losses_dict['v0_sem'].append(float(v0_sem))
-
-
-def append_grad_norms(epoch_grad_norm, grad_norms):
-    """Calculates average gradient norms for the epoch and appends to grad_norms."""
-    # epoch_avg_grad_norm = {key: np.mean(values) for key, values in epoch_grad_norm.items()}
-    # Append epoch averages to grad_norms
-    # for key, value in epoch_avg_grad_norm.items():
-    for key, value in epoch_grad_norm.items():
-        grad_norms[key].append(value)
-
-
-def calculate_q_stats(losses_dict):
-    # calculate q value stats if available
-    mean_Qs = losses_dict["mean_Q"]
-    variance_Qs = losses_dict["variance_Q"]
-    counts_all = losses_dict["batch_n"]
-
-    overall_mean_Q = np.sum(np.array(mean_Qs) * np.array(counts_all)) / np.sum(counts_all)
-    overall_variance_Q = np.sum(counts_all * (variance_Qs + np.array(mean_Qs - overall_mean_Q)**2)) / np.sum(counts_all)
-    overall_std_Q = np.sqrt(overall_variance_Q)
-
-    # survival Qs
-    mean_survival_Qs = losses_dict["survival_Q"]
-    variance_survival_Qs = losses_dict["survival_variance_Q"]
-    counts_survival = losses_dict["survival_n"]
-
-    # drop nan values from mean_survival_Qs and variance_survival_Qs and zeros from counts_survival
-    mean_survival_Qs = [q for q in mean_survival_Qs if not np.isnan(q)]
-    variance_survival_Qs = [v for v in variance_survival_Qs if not np.isnan(v)]
-    counts_survival = [c for c in counts_survival if c > 1]
-
-    overall_mean_survival_Q = np.sum(np.array(mean_survival_Qs) * np.array(counts_survival)) / np.sum(counts_survival)
-    overall_variance_survival_Q = np.sum(counts_survival * (variance_survival_Qs + np.array(mean_survival_Qs - overall_mean_survival_Q)**2)) / np.sum(counts_survival)
-    overall_std_survival_Q = np.sqrt(overall_variance_survival_Q)
-
-    # non-survival Qs
-    mean_non_survival_Qs = losses_dict["non_survival_Q"]
-    variance_non_survival_Qs = losses_dict["non_survival_variance_Q"]
-    counts_non_survival = losses_dict["non_survival_n"]
-
-    # drop nan values from mean_non_survival_Qs and variance_non_survival_Qs and zeros from counts_non_survival
-    mean_non_survival_Qs = [q for q in mean_non_survival_Qs if not np.isnan(q)]
-    variance_non_survival_Qs = [v for v in variance_non_survival_Qs if not np.isnan(v)]
-    counts_non_survival = [c for c in counts_non_survival if c > 0]
-
-    overall_mean_non_survival_Q = np.sum(np.array(mean_non_survival_Qs) * np.array(counts_non_survival)) / np.sum(counts_non_survival)
-    overall_variance_non_survival_Q = np.sum(counts_non_survival * (variance_non_survival_Qs + np.array(mean_non_survival_Qs - overall_mean_non_survival_Q)**2)) / np.sum(counts_non_survival)
-    overall_std_non_survival_Q = np.sqrt(overall_variance_non_survival_Q)
-
-    survival_non_survival_diff = overall_mean_survival_Q - overall_mean_non_survival_Q
-    survival_non_survival_snr = survival_non_survival_diff**2/(0.5*(overall_variance_survival_Q + overall_variance_non_survival_Q))
-
-    # advantage using sarsa critic
-    mean_advantage = losses_dict["advantage_mean"]
-    variance_advantage = losses_dict["advantage_variance"]
-    
-    overall_mean_advantage = np.mean(mean_advantage)
-    overall_variance_advantage = np.sum(counts_all * (variance_advantage + np.array(mean_advantage - overall_mean_advantage)**2)) / np.sum(counts_all)
-
-    # survival advantage
-    mean_advantage_survival = losses_dict["advantage_survival_mean"]
-    variance_advantage_survival = losses_dict["variance_advantage_survival"]
-    
-    # drop nan from mean_advantage_survival and variance_advantage_survival 
-    mean_advantage_survival = [a for a in mean_advantage_survival if not np.isnan(a)]
-    variance_advantage_survival = [v for v in variance_advantage_survival if not np.isnan(v)]
-
-    overall_mean_advantage_survival = np.mean(mean_advantage_survival)
-    overall_variance_advantage_survival = np.sum(counts_survival * (variance_advantage_survival + np.array(mean_advantage_survival - overall_mean_advantage_survival)**2)) / np.sum(counts_survival)
-
-    # non-survival advantage
-    mean_advantage_non_survival = losses_dict["advantage_non_survival_mean"]
-    variance_advantage_non_survival = losses_dict["variance_advantage_non_survival"]
-
-    # drop nan from mean_advantage_non_survival and variance_advantage_non_survival
-    mean_advantage_non_survival = [a for a in mean_advantage_non_survival if not np.isnan(a)]
-    variance_advantage_non_survival = [v for v in variance_advantage_non_survival if not np.isnan(v)]
-
-    overall_mean_advantage_non_survival = np.mean(mean_advantage_non_survival)
-    overall_variance_advantage_non_survival = np.sum(counts_non_survival * (variance_advantage_non_survival + np.array(mean_advantage_non_survival - overall_mean_advantage_non_survival)**2)) / np.sum(counts_non_survival)
-
-    # q_clinician_survival = losses_dict["q_clinician_survival"]
-    mean_q_clinician_survival = np.mean(losses_dict["q_clinician_survival"])
-    mean_q_clinician_non_survival = np.mean(losses_dict["q_clinician_non_survival"])
-
-    mean_q_rl_survival = np.mean(losses_dict["q_rl_survival"])
-    mean_q_rl_non_survival = np.mean(losses_dict["q_rl_non_survival"])
-   
-
-    # create a dictionary of these values 
-    q_stats = {
-        "mean_Q": overall_mean_Q,
-        "std_Q": overall_std_Q,
-        "mean_survival_Q": overall_mean_survival_Q,
-        "std_survival_Q": overall_std_survival_Q,
-        "mean_non_survival_Q": overall_mean_non_survival_Q,
-        "std_non_survival_Q": overall_std_non_survival_Q,
-        "survival_non_survival_diff": survival_non_survival_diff,
-        "survival_non_survival_snr": survival_non_survival_snr,
-        "advantage_mean": overall_mean_advantage,
-        "variance_advantage_sarsa": overall_variance_advantage,
-        "advantage_survival_mean": overall_mean_advantage_survival,
-        "variance_advantage_survival": overall_variance_advantage_survival,
-        "advantage_non_survival_mean": overall_mean_advantage_non_survival,
-        "variance_advantage_non_survival": overall_variance_advantage_non_survival,
-        "mean_q_clinician_survival": mean_q_clinician_survival,
-        "mean_q_clinician_non_survival": mean_q_clinician_non_survival,
-        "mean_q_rl_survival": mean_q_rl_survival,
-        "mean_q_rl_non_survival": mean_q_rl_non_survival
-    }
-
-    # No longer dropping, because we are tracking across iterations
-    # drop q keys from losses
-    # for key in ["mean_Q", "variance_Q", "batch_n",
-    #             "survival_Q", "survival_variance_Q", "survival_n",
-    #             "non_survival_Q", "non_survival_variance_Q", "non_survival_n"]:
-    #     losses_dict.pop(key, None)
-
-
-    return q_stats, losses_dict
-
-
-
 class TrainingMetrics:
     def __init__(self):
-        self.training_losses = defaultdict(list)
-        self.val_losses = defaultdict(list)
-        self.training_q_stats = defaultdict(list)
-        self.val_q_stats = defaultdict(list)
-        self.grad_norms = defaultdict(list)
-        self.neuron_stats = defaultdict(list)
-        self.training_advantages = defaultdict(list())
-        self.val_advantages = defaultdict(list())
+        self._metric_keys = [
+            "batch_training_losses",
+            "epoch_training_losses",
+            "val_losses",
+            "final_val_losses",
+            "batch_training_q_stats",
+            "epoch_training_q_stats",
+            "val_q_stats",
+            "final_val_q_stats",
+            "val_advantages",
+            "final_val_advantages",
+            "batch_grad_norms",
+            "epoch_grad_norms",
+            "val_neuron_stats",
+            "final_val_neuron_stats",
+        ]
 
-    def append_epoch_metrics(
-        self, 
-        epoch_training_losses=None, 
-        epoch_val_losses=None, 
-        epoch_training_q_stats=None,
-        epoch_val_q_stats=None, 
-        epoch_training_advantages=None,
-        epoch_val_advantages=None,
-        epoch_grad_norms=None,    
-        epoch_neuron_stats=None
-        ):
-        if epoch_training_losses is not None:
-            for key, value in epoch_training_losses.items():
-                self.training_losses[key].append(value)
-        if epoch_val_losses is not None:
-            for key, value in epoch_val_losses.items():
-                self.val_losses[key].append(value)
-        if epoch_training_q_stats is not None:
-            for key, value in epoch_training_q_stats.items():
-                self.training_q_stats[key].append(value)
-        if epoch_val_q_stats is not None:
-            for key, value in epoch_val_q_stats.items():
-                self.val_q_stats[key].append(value)
-        if epoch_training_advantages is not None:
-            for key, value in epoch_training_advantages.items():
-                self.training_advantages[key].append(value)
-        if epoch_val_advantages is not None:
-            for key, value in epoch_val_advantages.items():
-                self.val_advantages[key].append(value)
-        if epoch_grad_norms is not None:
-            for key, value in epoch_grad_norms.items():
-                self.grad_norms[key].append(value)        
-        if epoch_neuron_stats is not None:
-            for key, value in epoch_neuron_stats.items():
-                self.neuron_stats[key].append(value)
-        
+        # 2. Dynamically initialize them as empty defaultdicts
+        for key in self._metric_keys:
+            setattr(self, key, defaultdict(list))
+
+    def append_epoch_metrics(self, **kwargs) -> None:
+        """Accepts any metrics container as a keyword argument
+        and dynamically appends its contents to the matching attribute.
+        """
+        for container_name, incoming_dict in kwargs.items():
+            # Check if this is a container we manage and that it actually contains data
+            if incoming_dict is None or container_name not in self._metric_keys:
+                continue
+
+            # Safety check specifically for the 'advantages' edge case
+            # (Checking if the dictionary is empty or has uninitialized keys)
+            if "advantages" in container_name and (
+                not incoming_dict or len(list(incoming_dict.values())[0]) == 0
+            ):
+                continue
+
+            # Target the matching internal defaultdict attribute
+            target_storage = getattr(self, container_name)
+
+            # Append all values cleanly
+            for key, value in incoming_dict.items():
+                target_storage[key].append(value)
 
     def get_current_epoch_val_loss(self, loss_key):
-        if self.val_losses[loss_key]:
-            return self.val_losses[loss_key][-1]
+        if self.val_losses[f"val/{loss_key}"]:
+            return self.val_losses[f"val/{loss_key}"][-1]
         else:
             return None
 
     def get_current_epoch_train_loss(self, loss_key):
-        if self.training_losses[loss_key]:
-            return self.training_losses[loss_key][-1]
+        if self.epoch_training_losses[f"train/epoch_{loss_key}"]:
+            return self.epoch_training_losses[f"train/epoch_{loss_key}"][-1]
         else:
             return None
 
-    def get_current_grad_norm(self):
-        if self.grad_norms:
-            return {key: values[-1] for key, values in self.grad_norms.items()}
+    def get_current_epoch_grad_norm(self):
+        if self.epoch_grad_norms:
+            return {key: values[-1] for key, values in self.epoch_grad_norms.items()}
         else:
             return None
     
@@ -425,16 +249,18 @@ def evaluate_during_training(
     epoch, 
     val_buffer, 
     batch_size, 
+    final=False
     ):
     
-    epoch_val_losses = defaultdict(list)
-    epoch_val_q_stats = defaultdict(list)
-    epoch_val_neuron_stats = defaultdict(list)
-    epoch_val_advantages = defaultdict(list)
+    val_losses = defaultdict(list)
+    val_q_stats = defaultdict(list)
+    val_neuron_stats = defaultdict(list)
+    val_advantages = defaultdict(list)
 
     for batch_idx, batch in enumerate(val_buffer):      
-        if batch_idx * batch_size >= 50000:  # Limit validation to 5000 samples for speed, make this a variable
-            break
+        if not final:
+            if batch_idx * batch_size >= 50000:  # Limit validation to 5000 samples for speed, make this a variable
+                break
        
         batch_losses, q_stats, neuron_stats = trainer.evaluate(batch)
         
@@ -454,59 +280,48 @@ def evaluate_during_training(
         else:
             advantages = None        
                 
-        # Automatically append all validation metrics
-        for key, value in batch_losses.items():
-            new_key = f"val/{key}"
-            epoch_val_losses[new_key].append(value)
+        # Create pairs of (incoming_batch_data, target_epoch_container)
+        metric_pairs = [
+            (batch_losses, val_losses),
+            (q_stats, val_q_stats),
+            (neuron_stats, val_neuron_stats),
+        ]
 
-        for key, value in q_stats.items():
-            new_key = f"val/{key}"
-            epoch_val_q_stats[new_key].append(value)
-
-        for key, value in neuron_stats.items():
-            new_key = f"val/{key}"
-            epoch_val_neuron_stats[new_key].append(value)
-
+        # Dynamically add advantages to the processing list if it exists
         if advantages is not None:
-            for key, value in advantages.items():
+            metric_pairs.append((advantages, val_advantages))
+                
+        # Clean, single loop to add the prefix and append values
+        for batch_dict, epoch_dict in metric_pairs:
+            for key, value in batch_dict.items():
                 new_key = f"val/{key}"
-                epoch_val_advantages[new_key].append(value)
+                
+                # If your container uses a standard dict, initialize the list if it's new
+                if new_key not in epoch_dict:
+                    epoch_dict[new_key] = []
+                    
+                epoch_dict[new_key].append(value)
+
+    # A list of your actual dictionary variables to process in place
+    val_containers = [val_losses, val_q_stats, val_neuron_stats]
+    if advantages is not None:
+        val_containers.append(val_advantages)
+
+    for epoch_dict in val_containers:
+        # 1. Overwrite the lists of batch values with their single calculated mean
+        for key, list_of_values in epoch_dict.items():
+            epoch_dict[key] = float(np.mean([
+                v.item() if hasattr(v, "item") else v 
+                for v in list_of_values
+            ]))
+            
+        # 2. Add the epoch marker directly to this specific dictionary
+        epoch_dict["epoch"] = epoch
         
-    # Calculate average validation losses for this epoch
-    epoch_val_avg = {f"val/{key}": np.mean(values) for key, values in epoch_val_losses.items()}
-    # if len(epoch_val_avg) > 1:
-    logger.info(f"Epoch {epoch}: Validation metrics: {epoch_val_avg}")
-
-    # Add metadata for tracking
-    epoch_val_losses.update({
-        "epoch": epoch,
-        "total_it": trainer.total_it
-    })
-
-    epoch_val_q_stats.update({
-        "epoch": epoch,
-        "total_it": trainer.total_it
-    })
-
-    epoch_val_neuron_stats.update({
-        "epoch": epoch,
-        "total_it": trainer.total_it
-    })
-
-    epoch_val_advantages.update({
-        "epoch": epoch,
-        "total_it": trainer.total_it
-    })
+        # 3. Log it immediately to W&B
+        wandb.log(epoch_dict)
     
-    # --- W&B LOGGING CALL ---
-    # This captures the "Baseline" (Epoch 0) and all future epochs  
-    if wandb.run is not None:
-        wandb.log(epoch_val_losses)
-        wandb.log(epoch_val_q_stats)
-        wandb.log(epoch_val_neuron_stats)
-        wandb.log(epoch_val_advantages)
-
-    return epoch_val_losses, epoch_val_q_stats, epoch_val_neuron_stats, epoch_val_advantages
+    return val_losses, val_q_stats, val_neuron_stats, val_advantages
 
 
 def evaluate_final_model(trainer, evaluator, val_buffer, val_processor, model_dir, config_manager):
@@ -619,9 +434,15 @@ def evaluate_final_model(trainer, evaluator, val_buffer, val_processor, model_di
     return test_losses, results_df
 
 
-def plot_results(training_losses, val_losses, test_losses, plot_dir, config_manager):
+def plot_results(training_metrics, plot_dir, config_manager):
     
-    plot_losses(training_losses, val_losses, test_losses, plot_dir)
+    plot_losses(training_metrics, plot_dir)
+
+    plot_q_stats(training_metrics, plot_dir)
+
+    plot_neuron_stats(training_metrics, plot_dir)
+
+    plot_gradient_norms(training_metrics, plot_dir)
 
     if config_manager.model_type != "basic_q":
         plot_validation_scores(training_losses, val_losses, test_losses, plot_dir)
@@ -778,11 +599,6 @@ def train_with_hyperparameters(
     # get total number of steps for scheduler if needed
     hyperparams['total_steps'] = n_epochs * len(training_buffer)
     
-    # get starting state distribution for V0 estimation if we're doing TD3-BC
-    if config_manager.training_config['monitor_v0']:
-        training_starting_states = train_processor.get_start_states()
-        val_starting_states = val_processor.get_start_states()
-
     # create trainer
     trainer = create_trainer(train_processor, hyperparams, config_manager)
 
@@ -806,7 +622,7 @@ def train_with_hyperparameters(
 
     """ evaluate before any training for epoch 0 - the generated values are calculated 
     per batch and concatenated onto the defaultdict lists """
-    epoch_val_losses, epoch_val_q_stats, epoch_neuron_stats, epoch_val_advantages = evaluate_during_training(
+    val_losses, val_q_stats, val_neuron_stats, val_advantages = evaluate_during_training(
         trainer, 
         evaluator, 
         -1, 
@@ -815,13 +631,13 @@ def train_with_hyperparameters(
     )
 
     training_metrics.append_epoch_metrics(
-        epoch_val_losses=epoch_val_losses,
-        epoch_val_q_stats=epoch_val_q_stats,
-        epoch_val_advantages=epoch_val_advantages,
-        epoch_neuron_stats=epoch_neuron_stats        
+        val_losses=val_losses,
+        val_q_stats=val_q_stats,
+        val_advantages=val_advantages,
+        neuron_stats=val_neuron_stats        
     )
 
-    current_val_loss = training_metrics.get_current_epoch_loss
+    current_val_loss = np.mean(training_metrics.get_current_epoch_val_loss(loss_metric))
     logger.info(f"Epoch {-1}: Val {loss_metric}={current_val_loss:.4f}")
     
     # # optionally, estimate V0 and append to validation losses
@@ -836,6 +652,7 @@ def train_with_hyperparameters(
     
     torch.cuda.empty_cache()
 
+    global_step = 0
     for epoch in range(n_epochs):
         # print epoch
         logger.info(f"Epoch {epoch+1}/{n_epochs}")  
@@ -845,74 +662,105 @@ def train_with_hyperparameters(
         epoch_grad_norm = defaultdict(list)
 
         for batch_idx, batch in enumerate(training_buffer):
-            batch_losses, q_stats, grad_norm = trainer.train(batch)
+            batch_losses, q_stats, grad_norm = trainer.train(batch)            
 
-            for key, value in batch_losses.items():
-                new_key = f"train/{key}"
-                epoch_training_losses[new_key].append(value)
-            epoch_training_losses.update({
-                "epoch": epoch,
-                "total_it": trainer.total_it
-            })
+            # 1. Prepare a lightweight dictionary for W&B for THIS specific iteration
+            batch_payload = {
+                "epoch": epoch,  # Keep your tracking matched to your logger display
+                "iteration": global_step,
+            }
 
-            for key in q_stats:
-                new_key = f"train/{key}"
-                epoch_training_q_stats[new_key].append(q_stats[key])
-            epoch_training_q_stats.update({
-                "epoch": epoch,
-                "total_it": trainer.total_it
-            })
+            # 2. Process and map your dictionaries into the payload and your aggregators
+            # Pairing (incoming_batch_dict, target_epoch_aggregator)
+            metric_pairs = [
+                (batch_losses, epoch_training_losses),
+                (q_stats, epoch_training_q_stats),
+                (grad_norm, epoch_grad_norm),
+            ]
 
-            for key in grad_norm:
-                new_key = f"train/{key}"
-                epoch_grad_norm[new_key].append(grad_norm[key])
-            epoch_grad_norm.update({
-                "epoch": epoch,
-                "total_it": trainer.total_it
-            })
-           
-        # 3. Log to W&B
-        if wandb.run is not None:
-            wandb.log(epoch_training_losses)
-            wandb.log(epoch_training_q_stats)
-            wandb.log(epoch_grad_norm)
+            for batch_dict, epoch_container in metric_pairs:
+                for key, value in batch_dict.items():
+                    # Extract raw numerical value if it is a PyTorch tensor
+                    scalar_val = value.item() if hasattr(value, "item") else value
+
+                    # Apply the specific prefix we defined in wandb_init
+                    new_key = f"train/batch_{key}"
+
+                    # Store the scalar in the payload for W&B
+                    batch_payload[new_key] = scalar_val
+
+                    # Append to your aggregator so we can compute epoch means later
+                    epoch_container[new_key].append(scalar_val)
+            
+            # 3. Stream the single-batch iteration metrics directly to W&B
+            if wandb.run is not None:
+                wandb.log(batch_payload)        
+
+            global_step += 1
+
+            # check if we are simply testing the training loop, in which case we break after 100 batches
+            if batch_idx >= 10 and testing:
+                logger.info(" Testing mode: breaking after 10 batches.")
+                break
+
+        # log the batch values to the TrainingMetrics object for later epoch-level processing
+        training_metrics.append_epoch_metrics(
+            batch_training_losses=epoch_training_losses,
+            batch_training_q_stats=epoch_training_q_stats,
+            batch_grad_norms=epoch_grad_norm  
+        )    
+
+        # calculate epoch averages and log to W&B
+        # 1. Gather your training containers to process them in place
+        train_epoch_containers = [
+            epoch_training_losses, 
+            epoch_training_q_stats, 
+            epoch_grad_norm
+        ]
+
+        for epoch_dict in train_epoch_containers:
+            # 2. Overwrite the lists of batch values with their single calculated mean
+            # We use list(epoch_dict.keys()) so we can safely modify the dict while looping
+            for batch_key in list(epoch_dict.keys()):
+                list_of_values = epoch_dict[batch_key]
+                
+                # Compute the average
+                mean_value = float(np.mean(list_of_values)) if list_of_values else 0.0
+                
+                # Transform the key name from 'train/batch_loss' to 'train/epoch_loss'
+                epoch_key = batch_key.replace("train/batch_", "train/epoch_")
+                
+                # Store the average under the new key, and clean up the old batch-list key
+                epoch_dict[epoch_key] = mean_value
+                del epoch_dict[batch_key]
         
+            # 3. Add the structural tracking tokens to the dictionary
+            epoch_dict["epoch"] = epoch       # Will be 0 on your first pass
+            epoch_dict["global_step"] = global_step
+        
+            # 4. Send the epoch summary point to W&B
+            if wandb.run is not None:
+                wandb.log(epoch_dict)
+        
+        # log the epoch values to the TrainingMetrics instance
         training_metrics.append_epoch_metrics(
             epoch_training_losses=epoch_training_losses,
             epoch_training_q_stats=epoch_training_q_stats,
-            epoch_grad_norms=epoch_grad_norm
+            epoch_grad_norms=epoch_grad_norm  
         )
         
-        # check if we are simply testing the training loop, in which case we break after 100 batches
-        if batch_idx >= 10 and testing:
-            logger.info(" Testing mode: breaking after 10 batches.")
-            break
-               
         epoch_loss = training_metrics.get_current_epoch_train_loss(loss_metric)
         logger.info(f"Epoch {epoch}: Train {loss_metric}={epoch_loss:.4f}")
-        epoch_grad_norm = training_metrics.get_current_grad_norm()
+        epoch_grad_norm = training_metrics.get_current_epoch_grad_norm()
         if epoch_grad_norm is not None:
             logger.info(f"Epoch {epoch}: Gradient norms: {epoch_grad_norm}")
-        
-
-        # # optionally, estimate V0 and append to training losses
-        # if config_manager.training_config['monitor_v0']:
-        #     estimate_v0(trainer, training_starting_states, batch_size, training_losses)
-        #     log_dict = {
-        #         "train/v0_mean": training_losses['v0_mean'][-1],
-        #         "train/v0_sem": training_losses['v0_sem'][-1],
-        #         "epoch": epoch
-        #     }
-        #     if wandb.run is not None:
-        #         wandb.log(log_dict)
-        #     logger.info(f"Epoch {epoch}: Train mean start state values: {training_losses['v0_mean'][-1]:.4f} ± {training_losses['v0_sem'][-1]:.4f}")
-
+                
         #################### Evaluate ####################
         # Evaluate periodically
         if epoch % config_manager.training_config['eval_freq'] == 0 \
                                                 or epoch == n_epochs - 1:
             
-            epoch_val_losses, epoch_val_q_stats, epoch_neuron_stats, epoch_val_advantages = evaluate_during_training(
+            val_losses, val_q_stats, neuron_stats, val_advantages = evaluate_during_training(
                 trainer, 
                 evaluator, 
                 epoch, 
@@ -921,28 +769,15 @@ def train_with_hyperparameters(
             )
 
             training_metrics.append_epoch_metrics(
-                epoch_val_losses=epoch_val_losses,
-                epoch_val_q_stats=epoch_val_q_stats,
-                epoch_val_advantages=epoch_val_advantages,
-                epoch_neuron_stats=epoch_neuron_stats        
+                val_losses=val_losses,
+                val_q_stats=val_q_stats,
+                val_advantages=val_advantages,
+                neuron_stats=neuron_stats        
             )
             
-            current_val_loss = training_metrics.get_current_epoch_loss
+            current_val_loss = training_metrics.get_current_epoch_val_loss(loss_metric)
             logger.info(f"Epoch {-1}: Val {loss_metric}={current_val_loss:.4f}")
-            
-            # # optionally, estimate V0 and append to validation losses
-            # if config_manager.training_config['monitor_v0']:
-            #     estimate_v0(trainer, val_starting_states, batch_size, val_losses, prefix='val')
-            #     log_dict = {
-            #         "val/v0_mean": val_losses['val/v0_mean'][-1],
-            #         "val/v0_sem": val_losses['val/v0_sem'][-1],
-            #         "epoch": epoch
-            #     }
-            # if wandb.run is not None:
-            #     wandb.log(log_dict)
-            
-            # logger.info(f"Epoch {epoch}: Val mean start state values: {val_losses['val/v0_mean'][-1]:.4f} ± {val_losses['val/v0_sem'][-1]:.4f}")                 
-                    
+                                 
             # Check for improvement and copy model parameters if best, only if early stopping is enabled
             if early_stopping['flag']:
                 improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)
@@ -972,20 +807,27 @@ def train_with_hyperparameters(
     model_dir.mkdir(parents=True, exist_ok=True)    
 
     # run full evaluation on validation set
-    # val_buffer, _ = create_buffer(val_processor, config_manager.training_config['batch_size'], shuffle=False, scaler=scaler, action_names=config_manager.data_config['actions'])
-    final_val_losses, _ = evaluate_final_model( # this evaluates on the entire val set (during training we only use a subset for speed)
-        trainer,
+    final_losses, final_q_stats, final_neuron_stats, final_val_advantages = evaluate_during_training(
+        trainer, 
         evaluator, 
+        epoch, 
         val_buffer, 
-        val_processor,
-        model_dir,
-        config_manager
+        batch_size,
+        final=True
     )
 
-    logger.info(f"Final val metrics: {final_val_losses}")
+    training_metrics.append_epoch_metrics(
+        final_val_losses=final_losses,
+        final_val_q_stats=final_q_stats,
+        final_val_advantages=final_val_advantages,
+        final_val_neuron_stats=final_neuron_stats        
+    )
+    
+    # print key value pairs from training_metrics.final_val_losses to logger
+    logger.info("Final val metrics:")
+    for key, value in training_metrics.final_val_losses.items():
+        logger.info(f" {key}: {value[-1]:.4f}")
 
-    
-    
     model_path = Path(model_dir / "final_model.pt")
     
     if config_manager.model_type in ['basic_q']:
@@ -1024,8 +866,6 @@ def train_with_hyperparameters(
             'training_config': config_manager.training_config,
         }
         torch.save(checkpoint, model_path)
-    
-    
     
     else:
         torch.save(trainer.model.state_dict(), model_path)

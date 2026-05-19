@@ -1,3 +1,5 @@
+from venv import logger
+
 import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
@@ -6,15 +8,16 @@ from pathlib import Path
 
 
 
-def plot_losses(training_scores, val_scores, test_scores, plot_dir):
-    loss_keys = list(training_scores.keys())
-    # drop mean_Q and std_Q if present
-    if 'mean_Q' in loss_keys:
-        loss_keys.remove('mean_Q')
-    if 'std_Q' in loss_keys:
-        loss_keys.remove('std_Q')
+def plot_losses(training_metrics, plot_dir):
+    loss_keys = list(training_metrics.batch_training_losses.keys())
 
-    n_subplots = len(loss_keys)
+    # remove the 'train/' prefix from loss_keys if present
+    new_loss_keys = []
+    for key in loss_keys:
+        key_truncated = key.split('/batch_')[-1]  # get the part after the last '/'
+        new_loss_keys.append(key_truncated)
+
+    n_subplots = len(new_loss_keys)
     n_figures = n_subplots // 3 + int(n_subplots % 3 > 0)
     n_subplots_per_figure = 3
 
@@ -26,30 +29,51 @@ def plot_losses(training_scores, val_scores, test_scores, plot_dir):
         for i in range(n_subplots_per_figure):
             if subplot_counter >= n_subplots:
                 break
-            key = loss_keys[subplot_counter]
+            key = new_loss_keys[subplot_counter]
 
-            plt.subplot(n_subplots_per_figure, 1, i + 1)
-            epochs_range = np.arange(1, len(training_scores[key]) + 1)
+            # if 'loss' in key:
+            losses = {}           
+            if 'loss' in key:
+                losses['batch_train'] = training_metrics.batch_training_losses[f'train/batch_{key}']
+                losses['epoch_train'] = training_metrics.epoch_training_losses[f'train/epoch_{key}']
+                losses['val'] = training_metrics.val_losses[f'val/{key}']
+                losses['final_val'] = training_metrics.final_val_losses[f'val/{key}']
 
-            # check if training_scores[key] is a list of lists (one per fold) or a single list
-            if isinstance(training_scores[key][0], list):
-                training_scores_4plot = [item for sublist in training_scores[key] for item in sublist]
+            elif 'lr' in key:
+                losses['batch_train'] = training_metrics.batch_training_losses[f'train/batch_{key}']
+                losses['epoch_train'] = training_metrics.epoch_training_losses[f'train/epoch_{key}']
+
             else:
-                training_scores_4plot = training_scores[key]
+                logger.warning(f"Key {key} not recognized as loss or learning rate. Skipping.")
+                continue
 
-            training_range = np.linspace(epochs_range[0], epochs_range[-1], len(training_scores_4plot) + 1)[:-1]
+            epochs = training_metrics.epoch_training_losses['epoch']
+            global_step = training_metrics.epoch_training_losses['global_step']
+            global_step_diff_mid = np.diff(global_step)[0] / 2
+            epochs_to_global_step = [g - global_step_diff_mid for g in global_step]
+            epochs_to_global_step_diff = np.diff(epochs_to_global_step)[0]
+            global_steps = np.arange(1, global_step[-1] + 1)
+           
+            plt.subplot(n_subplots_per_figure, 1, i + 1)
 
-            plt.plot(training_range, training_scores_4plot, color=plt.cm.Blues(0.9), linewidth=2, label='Training Loss')
+            # batch losses are a list lists, we need to concatenate them for plotting
+            batch_losses = [item for sublist in losses['batch_train'] for item in sublist]
+            # plot against global steps, which are more fine-grained than epochs in light red
+            plt.plot(global_steps, batch_losses, color=plt.cm.Reds(0.6), linewidth=1, label='Batch Training Loss')
 
-            val_epochs = np.array(val_scores['epoch']) + 1
-            val_key = f"val/{key}"
-            if val_key in val_scores:
-                val_losses = val_scores[val_key]
+            # epoch losses are already averaged per epoch, so we can plot them directly against epochs in dark red
+            epoch_losses = losses['epoch_train']
+            plt.plot(epochs_to_global_step, epoch_losses, color=plt.cm.Reds(0.9), linewidth=2, label='Epoch Training Loss')
 
-                plt.plot(val_epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      
+            if 'val' in losses:
+                epochs = training_metrics.val_losses['epoch']
+                epochs_to_global_step_val = [-1] + global_step
+                 
+                val_losses = losses['val']
+                plt.plot(epochs, val_losses, color=plt.cm.Oranges(0.9), linewidth=2, label='Validation Loss')      
                 
-                if test_scores is not None and key in test_scores:
-                    val_loss_final = test_scores[key]
+                if 'final_val' in losses:                    
+                    val_loss_final = losses['final_val']
                     # plot val loss as horizontal line
                     plt.axhline(y=val_loss_final, color='green', linestyle='--', linewidth=2, label='Val Loss final')
 

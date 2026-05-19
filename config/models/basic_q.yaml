@@ -1,6 +1,6 @@
 # this is for basic SARSA Q-learning model
     project: "AI_Clininician"
-    "group": "reinforcement_learning"
+    group: "reinforcement_learning"
     name: "basic_q"
 
     tuning: True

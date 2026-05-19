@@ -60,4 +60,17 @@ def wandb_init(hyperparams: dict, job_id: str) -> None:
         id=f"{job_id}_{str(uuid.uuid4())[:8]}",
         reinit='finish_previous'
     )
+
+    # 2. Define custom X-axes directly on the run object
+    run.define_metric("global_step")
+    run.define_metric("epoch")
+
+    # 3. Bind your metric prefixes to their respective X-axes
+    # High-frequency training metrics follow the step-by-step iteration axis
+    run.define_metric("train/batch_*", step_metric="iteration")
+
+    # Low-frequency macro trends follow the clean epoch axis
+    run.define_metric("train/epoch_*", step_metric="epoch")
+    run.define_metric("val/*", step_metric="epoch")
+
     return run

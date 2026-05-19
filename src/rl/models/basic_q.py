@@ -161,6 +161,117 @@ class Critic(nn.Module):
 
 
 
+
+def get_q_stats(current_Q1, current_Q2, mortality) -> Dict[str, float]:
+    
+    # create current_Q as the mean of current_Q1 and current_Q2
+    current_Q = (current_Q1 + current_Q2) / 2.0
+    mean_Q = current_Q.mean().item()
+    variance_Q = current_Q.var().item()
+    batch_n = current_Q.shape[0]
+    uncertainty_Q = F.mse_loss(current_Q1, current_Q2).item() # simple measure of uncertainty based on disagreement between the two critics
+
+    # masks and counts
+    survival_mask = (mortality == 0)
+    non_survival_mask = (mortality == 1)
+
+    survival_n = survival_mask.sum().item()
+    non_survival_n = non_survival_mask.sum().item()
+    
+    # only compute subgroup mean/variance together when n > 2
+    if survival_n > 2:
+        survival_vals = current_Q[survival_mask]
+        survival_Q = survival_vals.mean().item()
+        survival_variance_Q = survival_vals.var().item()
+    else:
+        survival_Q = float('nan')
+        survival_variance_Q = float('nan')
+        survival_n = 0
+
+    if non_survival_n > 2:
+        non_survival_vals = current_Q[non_survival_mask]
+        non_survival_Q = non_survival_vals.mean().item()
+        non_survival_variance_Q = non_survival_vals.var().item()
+    else:
+        non_survival_Q = float('nan')
+        non_survival_variance_Q = float('nan')
+        non_survival_n = 0
+
+    q_stats = {
+        "batch_n": batch_n,
+        "mean_Q": mean_Q,
+        "variance_Q": variance_Q,
+        "uncertainty_Q": uncertainty_Q,                
+        "survival_n": survival_n,
+        "survival_Q": survival_Q,
+        "survival_variance_Q": survival_variance_Q,
+        "non_survival_n": non_survival_n,
+        "non_survival_Q": non_survival_Q,
+        "non_survival_variance_Q": non_survival_variance_Q
+    }
+    return q_stats
+
+
+def get_q_stats_sarsa(q_clinician, q_rl, mortality) -> Dict[str, float]:
+
+    # masks and counts
+    survival_mask = (mortality == 0)
+    non_survival_mask = (mortality == 1)
+
+    batch_n = q_clinician.shape[0]
+    survival_n = survival_mask.sum().item()
+    non_survival_n = non_survival_mask.sum().item()
+
+    advantage = q_rl - q_clinician
+
+    if survival_n > 2:
+        q_clinician_survival = q_clinician[survival_mask].mean().item()
+        q_rl_survival = q_rl[survival_mask].mean().item()
+        advantage_survival = advantage[survival_mask]
+        advantage_survival_mean = advantage_survival.mean().item()
+        variance_advantage_survival = advantage_survival.var().item()
+    else:
+        q_clinician_survival = float('nan')
+        q_rl_survival = float('nan')
+        advantage_survival_mean = float('nan')
+        variance_advantage_survival = float('nan')
+        survival_n = 0
+
+    if non_survival_n > 2:
+        q_clinician_non_survival = q_clinician[non_survival_mask].mean().item()
+        q_rl_non_survival = q_rl[non_survival_mask].mean().item()
+        advantage_non_survival = advantage[non_survival_mask]
+        advantage_non_survival_mean = advantage_non_survival.mean().item()
+        variance_advantage_non_survival = advantage_non_survival.var().item()
+    else:
+        q_clinician_non_survival = float('nan')
+        q_rl_non_survival = float('nan')
+        advantage_non_survival_mean = float('nan')
+        variance_advantage_non_survival = float('nan')
+        non_survival_n = 0
+
+    advantage_mean = advantage.mean().item()
+    advantage_variance = advantage.var().item()
+
+    q_stats_sarsa = {
+        "batch_n": batch_n,
+        "advantage_mean": advantage_mean,
+        "advantage_variance": advantage_variance,
+        "survival_n": survival_n,
+        "advantage_survival_mean": advantage_survival_mean,
+        "variance_advantage_survival": variance_advantage_survival,            
+        "q_clinician_survival": q_clinician_survival,
+        "q_rl_survival": q_rl_survival,
+        "non_survival_n": non_survival_n,
+        "advantage_non_survival_mean": advantage_non_survival_mean,
+        "variance_advantage_non_survival": variance_advantage_non_survival,
+        "q_clinician_non_survival": q_clinician_non_survival,
+        "q_rl_non_survival": q_rl_non_survival,            
+    }
+    return q_stats_sarsa
+
+
+
 class Q_Learner(object):
     def __init__(
         self,
@@ -185,6 +296,7 @@ class Q_Learner(object):
             self.reward_scaling = reward_scaling
 
             self.critic_optimizer = critic_optimizer
+            
             self.critic_target = copy.deepcopy(self.critic)
             self.grad_clip = grad_clip
             self.tau = tau
@@ -207,114 +319,6 @@ class Q_Learner(object):
 
         return target_Q
     
-
-
-    def get_q_stats(self, current_Q1, current_Q2, mortality, log_dict) -> Dict[str, float]:
-         
-            # create current_Q as the mean of current_Q1 and current_Q2
-            current_Q = (current_Q1 + current_Q2) / 2.0
-            mean_Q = current_Q.mean().item()
-            variance_Q = current_Q.var().item()
-            batch_n = current_Q.shape[0]
-            uncertainty_Q = F.mse_loss(current_Q1, current_Q2).item() # simple measure of uncertainty based on disagreement between the two critics
-
-            # masks and counts
-            survival_mask = (mortality == 0)
-            non_survival_mask = (mortality == 1)
-
-            survival_n = survival_mask.sum().item()
-            non_survival_n = non_survival_mask.sum().item()
-            
-            # only compute subgroup mean/variance together when n > 2
-            if survival_n > 2:
-                survival_vals = current_Q[survival_mask]
-                survival_Q = survival_vals.mean().item()
-                survival_variance_Q = survival_vals.var().item()
-            else:
-                survival_Q = float('nan')
-                survival_variance_Q = float('nan')
-                survival_n = 0
-
-            if non_survival_n > 2:
-                non_survival_vals = current_Q[non_survival_mask]
-                non_survival_Q = non_survival_vals.mean().item()
-                non_survival_variance_Q = non_survival_vals.var().item()
-            else:
-                non_survival_Q = float('nan')
-                non_survival_variance_Q = float('nan')
-                non_survival_n = 0
-
-            q_stats.update({
-                "batch_n": batch_n,
-                "mean_Q": mean_Q,
-                "variance_Q": variance_Q,
-                "uncertainty_Q": uncertainty_Q,                
-                "survival_n": survival_n,
-                "survival_Q": survival_Q,
-                "survival_variance_Q": survival_variance_Q,
-                "non_survival_n": non_survival_n,
-                "non_survival_Q": non_survival_Q,
-                "non_survival_variance_Q": non_survival_variance_Q
-            })
-            return q_stats
-
-
-    def get_q_stats_sarsa(self, q_clinician, q_rl, mortality) -> Dict[str, float]:
-
-        # masks and counts
-        survival_mask = (mortality == 0)
-        non_survival_mask = (mortality == 1)
-
-        survival_n = survival_mask.sum().item()
-        non_survival_n = non_survival_mask.sum().item()
-
-        advantage = q_rl - q_clinician
-
-        if survival_n > 2:
-            q_clinician_survival = q_clinician[survival_mask].mean().item()
-            q_rl_survival = q_rl[survival_mask].mean().item()
-            advantage_survival = advantage[survival_mask]
-            advantage_survival_mean = advantage_survival.mean().item()
-            variance_advantage_survival = advantage_survival.var().item()
-        else:
-            q_clinician_survival = float('nan')
-            q_rl_survival = float('nan')
-            advantage_survival_mean = float('nan')
-            variance_advantage_survival = float('nan')
-            survival_n = 0
-
-        if non_survival_n > 2:
-            q_clinician_non_survival = q_clinician[non_survival_mask].mean().item()
-            q_rl_non_survival = q_rl[non_survival_mask].mean().item()
-            advantage_non_survival = advantage[non_survival_mask]
-            advantage_non_survival_mean = advantage_non_survival.mean().item()
-            variance_advantage_non_survival = advantage_non_survival.var().item()
-        else:
-            q_clinician_non_survival = float('nan')
-            q_rl_non_survival = float('nan')
-            advantage_non_survival_mean = float('nan')
-            variance_advantage_non_survival = float('nan')
-            non_survival_n = 0
-
-        advantage_mean = advantage.mean().item()
-        advantage_variance = advantage.var().item()
-    
-        q_stats_sarsa = {
-            "advantage_mean": advantage_mean,
-            "advantage_variance": advantage_variance,
-            "survival_n": survival_n,
-            "advantage_survival_mean": advantage_survival_mean,
-            "variance_advantage_survival": variance_advantage_survival,            
-            "q_clinician_survival": q_clinician_survival,
-            "q_rl_survival": q_rl_survival,
-            "non_survival_n": non_survival_n,
-            "advantage_non_survival_mean": advantage_non_survival_mean,
-            "variance_advantage_non_survival": variance_advantage_non_survival,
-            "q_clinician_non_survival": q_clinician_non_survival,
-            "q_rl_non_survival": q_rl_non_survival,            
-        }
-        return q_stats_sarsa
-
 
     def train(self, batch: TensorBatch):
         self.total_it += 1
@@ -345,10 +349,10 @@ class Q_Learner(object):
         # use Huber loss instead
         critic_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
         
-        log_dict = {"critic_loss": critic_loss.item()}
+        losses = {"critic_loss": critic_loss.item()}
 
         # get Q statistics
-        q_stats = self.get_q_stats(current_Q1, current_Q2, mortality, log_dict)
+        q_stats = get_q_stats(current_Q1, current_Q2, mortality)
 
         # Optimize the critic
         self.critic_optimizer.zero_grad()
@@ -374,30 +378,14 @@ class Q_Learner(object):
         self.critic_optimizer.step()
         if self.scheduler is not None:
             self.scheduler.step()
-            log_dict.update(lr_critic=self.critic_optimizer.param_groups[0]['lr'])
+            losses.update(lr_critic=self.critic_optimizer.param_groups[0]['lr'])
 
         with torch.no_grad():
             for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-        return log_dict, q_stats, grad_norm
-    
-
-    def critic_forward_for_sarsa(self, batch: TensorBatch, action: torch.Tensor=None):
-        self.critic.eval()  # Ensure critic is in eval mode
-
-        if action is None:
-            state, action, _, _, _, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
-        else:
-            state, _, _, _, _, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
-
-        with torch.no_grad():
-            current_Q1, current_Q2 = self.critic(state, action)
+        return losses, q_stats, grad_norm
         
-        current_Q = torch.min(current_Q1, current_Q2)  # TD3 style: take the minimum of the two critics to mitigate overestimation bias
-
-        return current_Q
-    
 
     def evaluate(self, batch: TensorBatch) -> Dict[str, float]:
         self.critic.eval()  # Ensure critic is also in eval mode
@@ -425,18 +413,32 @@ class Q_Learner(object):
             # use Huber loss instead
             critic_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
             
-            log_dict = {"critic_loss": critic_loss.item()}
+            losses = {"critic_loss": critic_loss.item()}
             
             # ADD THIS LINE:
             neuron_stats = self.critic.get_neuron_stats(state, action)
-            # Merge stats into your log_dict
-            log_dict.update(neuron_stats)
 
             # get Q statistics
-            q_stats = self.get_q_stats(current_Q1, current_Q2, mortality, log_dict)
+            q_stats = get_q_stats(current_Q1, current_Q2, mortality)
         
-        return log_dict, q_stats, None
+        return losses, q_stats, neuron_stats
 	
+
+    def critic_forward_for_sarsa(self, batch: TensorBatch, action: torch.Tensor=None):
+        self.critic.eval()  # Ensure critic is in eval mode
+
+        if action is None:
+            state, action, _, _, _, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
+        else:
+            state, _, _, _, _, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
+
+        with torch.no_grad():
+            current_Q1, current_Q2 = self.critic(state, action)
+        
+        current_Q = torch.min(current_Q1, current_Q2)  # TD3 style: take the minimum of the two critics to mitigate overestimation bias
+
+        return current_Q
+
 
     def evaluate_sarsa(self, batch: TensorBatch, mortality: torch.Tensor, rl_actions: torch.Tensor) -> Dict[str, float]:
         
@@ -447,18 +449,17 @@ class Q_Learner(object):
             # generate q values from rl actions
             q_rl = self.critic_forward_for_sarsa(batch, rl_actions)
         
-        q_stats_sarsa = self.get_q_stats_sarsa(q_clinician, q_rl, mortality)
+        q_stats_sarsa = get_q_stats_sarsa(q_clinician, q_rl, mortality)
 
         return q_stats_sarsa
 
 
-    
-    def state_dict(self) -> Dict[str, torch.Tensor]:
-        return {
-            "critic": self.critic.state_dict(),
-            "critic_optimizer": self.critic_optimizer.state_dict(),
-            "critic_target": self.critic_target.state_dict(),
-        }
+    # def state_dict(self) -> Dict[str, torch.Tensor]:
+    #     return {
+    #         "critic": self.critic.state_dict(),
+    #         "critic_optimizer": self.critic_optimizer.state_dict(),
+    #         "critic_target": self.critic_target.state_dict(),
+    #     }
     
 
 def get_adamw_optimizer(model, lr, weight_decay):
@@ -488,7 +489,7 @@ def get_adamw_optimizer(model, lr, weight_decay):
     return torch.optim.AdamW(optim_groups, lr=lr)
 
 
-def get_trainer(config_manager, state_dim, action_dim, _, hyperparams):
+def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 
     learning_rate = float(hyperparams['learning_rate'])
     weight_decay = float(hyperparams.get('weight_decay', 0.01)) # New hyperparam

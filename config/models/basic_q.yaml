@@ -5,6 +5,10 @@
 
     tuning: True
 
+    # Early stopping parameters (fixed for all combinations)    
+    use_early_stopping: False
+    patience: 200       # Stop if no improvement for 15 evaluations
+
     window_length: 72 # 72 hours, same as dynamic deephit - we want to use same state representation, but we can simply use
     # transformer ouput from dynamic deephit - set by use_raw_states
     use_raw_states: False # if true, will use the raw features as states,
@@ -26,8 +30,7 @@
     batch_size: 1024  # Batch size for all networks
     hidden_dim: [512, 1024]  # Hidden dimension for all networks [128, 256, 256]] 
 
-    # Early stopping parameters (fixed for all combinations)
-    patience: 200       # Stop if no improvement for 15 evaluations
+
     eval_freq: 1        # Evaluate every 20 epochs  
     min_delta: 0.0001   # Minimum improvement threshold
 

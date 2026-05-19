@@ -239,7 +239,7 @@ class Critic(nn.Module):
 	@torch.no_grad()
 	def get_neuron_stats(self, state, action): # not currently used, make sure to use eval when implemented
 		# Ensure we are in eval mode to avoid Dropout interference
-        self.eval()
+		self.eval()
 		
 		# Concatenate input
 		x_init = torch.cat([state, action], dim=-1)
@@ -295,7 +295,6 @@ class Critic(nn.Module):
 class CQL:
 	def __init__(
 		self,
-		max_action: np.ndarray,
 		actor: nn.Module = None,
 		actor_optimizer: torch.optim.Optimizer = None,
 		actor_scheduler: torch.optim.lr_scheduler._LRScheduler = None,
@@ -322,7 +321,6 @@ class CQL:
 		reward_scaling: float = 1.0,
 	):
 		
-		self.max_action = max_action
 		self.actor = actor
 		self.actor_optimizer = actor_optimizer
 		self.actor_scheduler = actor_scheduler
@@ -430,7 +428,7 @@ class CQL:
 			return target_Q
 
 
-	def get_q_stats(self, current_Q1, current_Q2, actor_Q, mortality, log_dict) -> Tuple[float, float]:
+	def get_q_stats(self, current_Q1, current_Q2, actor_Q, mortality, log_dict) -> Dict[str, float]:
 		
 		# create current_Q as the mean of current_Q1 and current_Q2
 		current_Q = (current_Q1 + current_Q2) / 2.0
@@ -813,7 +811,7 @@ class CQL:
 		self.actor_target = copy.deepcopy(self.actor)
 
 
-def get_trainer(config_manager, state_dim, action_dim, max_action, min_reward, hyperparams):
+def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 
 	learning_rate_critic = float(hyperparams['learning_rate_critic'])
 	learning_rate_actor = float(hyperparams['learning_rate_actor'])
@@ -855,7 +853,6 @@ def get_trainer(config_manager, state_dim, action_dim, max_action, min_reward, h
 	)
 
 	trainer = CQL(               # LIST OF PARAMETERS NEEDS TO BE UPDATED
-		max_action=max_action,
 		actor=actor,
 		actor_optimizer=actor_optimizer,
 		actor_scheduler=actor_scheduler,

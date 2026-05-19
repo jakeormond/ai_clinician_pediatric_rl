@@ -1,43 +1,27 @@
-import os
-from .. import config_manager
-import yaml
 import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 from collections import defaultdict
 from dataclasses import asdict
 from pathlib import Path
 import json
-import random
-import itertools
-import joblib
-import glob
-import copy
 import numpy as np
 import pandas as pd
 import pickle
-import shap
 import wandb
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import KFold, GridSearchCV, GroupKFold, RandomizedSearchCV
-from scipy.stats import uniform, randint, loguniform
+from scipy.stats import uniform, loguniform
 import xgboost as xgb
 import torch
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
-# from .evaluation import calculate_metrics
-# from .plotting import create_all_plots, create_aggregated_shap_plots
 from ..utils.logging_utilities import wandb_init, generate_run_seed, get_job_id
 from ..data.data_processor import DataProcessor
 from ..data.data_processor_for_shards import ShardProcessor
-# from .dataset import Dataset
 from .replay_buffer import RLDataset
 from .models.behavioural_cloning import keep_best_trajectories, keep_positive_trajectories
 from ..supervised_learning.training import get_hyperparameter_space, select_hyperparameters_randomly, get_fixed_hyperparameters, to_json_safe
 from .models.td3_bc import TD3_BC
 from ..utils.utilities import set_seed
 from .plotting import plot_losses, plot_Q_by_mortality, plot_gradient_norms, plot_validation_scores
-# from .evaluate_models import load_sarsa_critic, calculate_advantage, plot_advantage
 from .models.shared_components import TrainerUtils
 
 
@@ -58,44 +42,44 @@ DISTRIBUTIONS = {
     "uniform": uniform,
 }
 
-def parse_distribution(dist_str):
-    # Example: "loguniform(1e-5, 1e-2)"
-    name, args = dist_str.split("(", 1)
-    args = args.rstrip(")")
-    args = [float(x) for x in args.split(",")]
-    return DISTRIBUTIONS[name](*args)
+# def parse_distribution(dist_str):
+#     # Example: "loguniform(1e-5, 1e-2)"
+#     name, args = dist_str.split("(", 1)
+#     args = args.rstrip(")")
+#     args = [float(x) for x in args.split(",")]
+#     return DISTRIBUTIONS[name](*args)
 
 
-def average_dicts(list_of_dicts):
-    """Averages values for each key across a list of dictionaries.
-    Using this for evaluation metrics.    
-    """
+# def average_dicts(list_of_dicts):
+#     """Averages values for each key across a list of dictionaries.
+#     Using this for evaluation metrics.    
+#     """
 
-    from collections import defaultdict
+#     from collections import defaultdict
 
-    # Collect all values for each key
-    values = defaultdict(list)
-    for d in list_of_dicts:
-        for k, v in d.items():
-            values[k].append(v)
+#     # Collect all values for each key
+#     values = defaultdict(list)
+#     for d in list_of_dicts:
+#         for k, v in d.items():
+#             values[k].append(v)
 
-    # Compute averages
-    averages = {k: sum(v_list) / len(v_list) for k, v_list in values.items()}
-    return averages
+#     # Compute averages
+#     averages = {k: sum(v_list) / len(v_list) for k, v_list in values.items()}
+#     return averages
 
 
-def create_processors(dataset, train_id, val_id, config_manager):
-    """Creates training and validation DataProcessors with shared normalization."""
+# def create_processors(dataset, train_id, val_id, config_manager):
+#     """Creates training and validation DataProcessors with shared normalization."""
     
-    train_dataset = dataset.create_subset(dataset.encounter_ids()[train_id])     
-    val_dataset = dataset.create_subset(dataset.encounter_ids()[val_id])
+#     train_dataset = dataset.create_subset(dataset.encounter_ids()[train_id])     
+#     val_dataset = dataset.create_subset(dataset.encounter_ids()[val_id])
     
-    train_processor = DataProcessor(train_dataset, config_manager)
-    norm_params = train_processor.get_normalization_params()
-    val_processor = DataProcessor(val_dataset, config_manager, 
-                                 norm_params=norm_params)
+#     train_processor = DataProcessor(train_dataset, config_manager)
+#     norm_params = train_processor.get_normalization_params()
+#     val_processor = DataProcessor(val_dataset, config_manager, 
+#                                  norm_params=norm_params)
     
-    return train_processor, val_processor, norm_params
+#     return train_processor, val_processor, norm_params
 
 
 def select_best_trajectories(processor, config_manager):
@@ -140,8 +124,6 @@ def create_buffer(processor, batch_size, shuffle=True, scaler=None, action_names
 def create_trainer(train_processor, hyperparams, config_manager):
     state_dim = train_processor.rl_dataset["states"].shape[1]
     action_dim = train_processor.rl_dataset["actions"].shape[1]
-    max_action = np.max(np.abs(train_processor.rl_dataset["actions"].cpu().numpy()))
-    min_reward = np.min(train_processor.rl_dataset["rewards"].cpu().numpy())
     
     model_type = config_manager.model_type
     module = importlib.import_module(MODEL_MODULES[model_type])
@@ -150,21 +132,13 @@ def create_trainer(train_processor, hyperparams, config_manager):
         config_manager,
         state_dim,
         action_dim,
-        max_action,
-        min_reward,
         hyperparams
     )
 
 
-def create_evaluator(train_processor, hyperparams, config_manager):
-    state_dim = train_processor.rl_dataset["states"].shape[1]
-    action_dim = train_processor.rl_dataset["actions"].shape[1]
-    max_action = np.max(np.abs(train_processor.rl_dataset["actions"].cpu().numpy()))
-    min_reward = np.min(train_processor.rl_dataset["rewards"].cpu().numpy())
-    
-    model_type = 'basic_q' 
-    module = importlib.import_module(MODEL_MODULES[model_type])
-
+def create_evaluator(config_manager):   
+    # evaluator is the sarsa critic 
+    module = importlib.import_module(MODEL_MODULES['basic_q'])
     return module.get_evaluator(config_manager)
 
    
@@ -337,10 +311,76 @@ def calculate_q_stats(losses_dict):
     return q_stats, losses_dict
 
 
+
+class TrainingMetrics:
+    def __init__(self):
+        self.training_losses = defaultdict(list)
+        self.val_losses = defaultdict(list)
+        self.training_q_stats = defaultdict(list)
+        self.val_q_stats = defaultdict(list)
+        self.grad_norms = defaultdict(list)
+        self.neuron_stats = defaultdict(list)
+        self.training_advantages = defaultdict(list())
+        self.val_advantages = defaultdict(list())
+
+    def append_epoch_metrics(
+        self, 
+        epoch_training_losses=None, 
+        epoch_val_losses=None, 
+        epoch_training_q_stats=None,
+        epoch_val_q_stats=None, 
+        epoch_training_advantages=None,
+        epoch_val_advantages=None,
+        epoch_grad_norms=None,    
+        epoch_neuron_stats=None
+        ):
+        if epoch_training_losses is not None:
+            for key, value in epoch_training_losses.items():
+                self.training_losses[key].append(value)
+        if epoch_val_losses is not None:
+            for key, value in epoch_val_losses.items():
+                self.val_losses[key].append(value)
+        if epoch_training_q_stats is not None:
+            for key, value in epoch_training_q_stats.items():
+                self.training_q_stats[key].append(value)
+        if epoch_val_q_stats is not None:
+            for key, value in epoch_val_q_stats.items():
+                self.val_q_stats[key].append(value)
+        if epoch_training_advantages is not None:
+            for key, value in epoch_training_advantages.items():
+                self.training_advantages[key].append(value)
+        if epoch_val_advantages is not None:
+            for key, value in epoch_val_advantages.items():
+                self.val_advantages[key].append(value)
+        if epoch_grad_norms is not None:
+            for key, value in epoch_grad_norms.items():
+                self.grad_norms[key].append(value)        
+        if epoch_neuron_stats is not None:
+            for key, value in epoch_neuron_stats.items():
+                self.neuron_stats[key].append(value)
+        
+
+    def get_current_epoch_val_loss(self, loss_key):
+        if self.val_losses[loss_key]:
+            return self.val_losses[loss_key][-1]
+        else:
+            return None
+
+    def get_current_epoch_train_loss(self, loss_key):
+        if self.training_losses[loss_key]:
+            return self.training_losses[loss_key][-1]
+        else:
+            return None
+
+    def get_current_grad_norm(self):
+        if self.grad_norms:
+            return {key: values[-1] for key, values in self.grad_norms.items()}
+        else:
+            return None
+    
+
 def save_results(
-        training_scores,
-        val_scores,
-        final_val_scores, 
+        training_metrics,
         hyperparameters,
         n_epochs,
         run_dir,
@@ -385,79 +425,88 @@ def evaluate_during_training(
     epoch, 
     val_buffer, 
     batch_size, 
-    val_losses,
-    config_manager
     ):
     
     epoch_val_losses = defaultdict(list)
+    epoch_val_q_stats = defaultdict(list)
+    epoch_val_neuron_stats = defaultdict(list)
+    epoch_val_advantages = defaultdict(list)
 
     for batch_idx, batch in enumerate(val_buffer):      
         if batch_idx * batch_size >= 50000:  # Limit validation to 5000 samples for speed, make this a variable
             break
        
-        batch_losses, _, _ = trainer.evaluate(batch)
+        batch_losses, q_stats, neuron_stats = trainer.evaluate(batch)
         
+        # run SARSA evaluation if not basic_q model - 
+        if evaluator is not None: # we set evaluator to None for basic_q model since we are not calculating advantage during training for that model, but for the other models we want to calculate advantage during training to track how the learned policy is improving compared to the clinician policy
+            # get q advantage
+            mortality = batch[6]  # assuming mortality is the 7th element in the batch tuple
+            with torch.no_grad():
+                rl_actions = trainer.actor_forward_for_sarsa(batch)
+                
+                advantages = evaluator.evaluate_sarsa(batch, mortality, rl_actions)
+            
+            # check that advantages['survival_n'] == batch_losses['survival_n'] and advantages['non_survival_n'] == batch_losses['non_survival_n'], "Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict"
+            if not (advantages['survival_n'] == batch_losses['survival_n'] and advantages['non_survival_n'] == batch_losses['non_survival_n']):
+                logger.warning(f"Mismatch in survival/non-survival counts between batch_losses and advantages for batch_idx {batch_idx}. batch_losses: {batch_losses}, advantages: {advantages}")
+
+        else:
+            advantages = None        
+                
         # Automatically append all validation metrics
         for key, value in batch_losses.items():
-            epoch_val_losses[key].append(value)
-        
-        # get q advantage
-        mortality = batch[6]  # assuming mortality is the 7th element in the batch tuple
-        with torch.no_grad():
-            if config_manager.model_type == "cvp":
-                rl_actions = trainer.actor_forward_for_sarsa(batch, rescale=True)
-            else:
-                rl_actions = trainer.actor_forward_for_sarsa(batch)
-            
-            advantage_log_dict = evaluator.evaluate_sarsa(batch, mortality, rl_actions)
-        
-        # check that advantage_log_dict['survival_n'] == batch_losses['survival_n'] and advantage_log_dict['non_survival_n'] == batch_losses['non_survival_n'], "Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict"
-        if not (advantage_log_dict['survival_n'] == batch_losses['survival_n'] and advantage_log_dict['non_survival_n'] == batch_losses['non_survival_n']):
-            logger.warning(f"Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict for batch_idx {batch_idx}. batch_losses: {batch_losses}, advantage_log_dict: {advantage_log_dict}")
-        else:
-            # drop the batch_n, survival_n, and non_survival_n keys from advantage_log_dict since they are redundant with batch_losses
-            advantage_log_dict.pop('batch_n', None)
-            advantage_log_dict.pop('survival_n', None)
-            advantage_log_dict.pop('non_survival_n', None)
+            new_key = f"val/{key}"
+            epoch_val_losses[new_key].append(value)
 
-        # append q values to losses 
-        for key, value in advantage_log_dict.items():
-            epoch_val_losses[key].append(value)
-                               
-    # calculate q value stats if available
-    if "mean_Q" in epoch_val_losses:
-        with torch.no_grad():
-            q_stats, epoch_val_losses = calculate_q_stats(epoch_val_losses)
+        for key, value in q_stats.items():
+            new_key = f"val/{key}"
+            epoch_val_q_stats[new_key].append(value)
 
+        for key, value in neuron_stats.items():
+            new_key = f"val/{key}"
+            epoch_val_neuron_stats[new_key].append(value)
+
+        if advantages is not None:
+            for key, value in advantages.items():
+                new_key = f"val/{key}"
+                epoch_val_advantages[new_key].append(value)
+        
     # Calculate average validation losses for this epoch
     epoch_val_avg = {f"val/{key}": np.mean(values) for key, values in epoch_val_losses.items()}
     # if len(epoch_val_avg) > 1:
     logger.info(f"Epoch {epoch}: Validation metrics: {epoch_val_avg}")
 
     # Add metadata for tracking
-    epoch_val_avg.update({
+    epoch_val_losses.update({
         "epoch": epoch,
         "total_it": trainer.total_it
     })
 
-    # add q stats if available
-    if 'q_stats' in locals():
-        # Prefix q_stats too so they show up under 'val/' in W&B
-        prefixed_q_stats = {f"val/{k}": v for k, v in q_stats.items()}
-        epoch_val_avg.update(prefixed_q_stats)
-        # epoch_val_avg.update(q_stats)
+    epoch_val_q_stats.update({
+        "epoch": epoch,
+        "total_it": trainer.total_it
+    })
 
+    epoch_val_neuron_stats.update({
+        "epoch": epoch,
+        "total_it": trainer.total_it
+    })
 
-    # --- W&B LOGGING CALL ---
-    # This captures the "Baseline" (Epoch 0) and all future epochs
-    if wandb.run is not None:
-        wandb.log(epoch_val_avg)
+    epoch_val_advantages.update({
+        "epoch": epoch,
+        "total_it": trainer.total_it
+    })
     
-    # Append to val_losses with epoch as key
-    for key, value in epoch_val_avg.items():
-        val_losses[key].append(value) 
+    # --- W&B LOGGING CALL ---
+    # This captures the "Baseline" (Epoch 0) and all future epochs  
+    if wandb.run is not None:
+        wandb.log(epoch_val_losses)
+        wandb.log(epoch_val_q_stats)
+        wandb.log(epoch_val_neuron_stats)
+        wandb.log(epoch_val_advantages)
 
-
+    return epoch_val_losses, epoch_val_q_stats, epoch_val_neuron_stats, epoch_val_advantages
 
 
 def evaluate_final_model(trainer, evaluator, val_buffer, val_processor, model_dir, config_manager):
@@ -627,12 +676,12 @@ def single_split_training(config_manager):
 
     # create processors
     # NEED TO ADD CONFIGURATION OPTION TO USE THE FEATURE DATA OR THE TRANSFORMER OUTPUT FROM DYNAMIC DEEPHIT MODEL
+    # NEED TO ADD REWARD PROCESSING HERE
     train_processor, val_processor, test_processor = create_processor_from_shards(
         config_manager, 
         normalize=True
         )
 
-    # if config_manager.training_config['tuning'] and config_manager.n_search_iterations > 0:
     if config_manager.search_variant == 'random_search':
         logger.info(" Hyperparameter tuning mode enabled.")
 
@@ -664,13 +713,6 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
     # create hyperparameter space
     hyperparameter_space = get_hyperparameter_space(config_manager)
 
-    # initialize best_val_score
-    loss_metric = config_manager.training_config['loss_metric'] 
-    if loss_metric in ['critic_loss'] or loss_metric in ['bellman_loss'] or loss_metric in ['qf_loss']:
-        best_val_loss = float('inf')
-    else:        
-        raise NotImplementedError("Currently only implemented for critic_loss, which is the default loss_metric for basic_q. For other metrics, we need to decide how to calculate an overall validation score across epochs and implement that logic here.")
-    
     # Keep only best trajectories if a fraction to keep is specified
     if config_manager.model_type == "any_percent_bc":
         logger.info(f"    Selecting best trajectories (frac={config_manager.frac})")
@@ -702,8 +744,7 @@ def train_with_hyperparameters(
         val_processor, 
         config_manager, 
         hyperparams, 
-        n_epochs = None, 
-        search_iteration=None
+        search_iteration=None,
     ):
     """Train model with specific hyperparameters and return validation score."""
     
@@ -711,8 +752,8 @@ def train_with_hyperparameters(
     train_processor.process_reward(config_manager, hyperparams)
     val_processor.process_reward(config_manager, hyperparams)
     
-    if n_epochs is None:
-        n_epochs = config_manager.n_epochs
+    
+    n_epochs = config_manager.n_epochs
 
     batch_size = hyperparams['batch_size']
     loss_metric = config_manager.training_config['loss_metric']   
@@ -745,8 +786,11 @@ def train_with_hyperparameters(
     # create trainer
     trainer = create_trainer(train_processor, hyperparams, config_manager)
 
-    # create sarsa_evaluator
-    evaluator = create_evaluator(train_processor, hyperparams, config_manager)
+    # create sarsa_evaluator if model_type is not basic_q, since we want to evaluate the advantage of the learned policy compared to the clinician policy during training
+    if config_manager.model_type != "basic_q":
+        evaluator = create_evaluator(config_manager)
+    else:
+        evaluator = None
         
     # Early stopping configuration 
     early_stopping = get_early_stopping_config(config_manager)
@@ -756,20 +800,33 @@ def train_with_hyperparameters(
 
     logger.info(f"Training with early stopping (patience={early_stopping['patience']}, eval_freq={early_stopping['eval_freq']}, min_delta={early_stopping['min_delta']})")
     
+
     # Use defaultdict to automatically create new keys
-    training_losses = defaultdict(list) 
-    grad_norms = defaultdict(list)
-    
-    # if not final_model:
-    #    val_losses = defaultdict(list)
-    val_losses = defaultdict(list)
-    # evaluate before any training for epoch 0
-    evaluate_during_training(trainer, evaluator, -1, val_buffer, batch_size, val_losses, config_manager)   
-    current_val_loss = val_losses[f"val/{loss_metric}"][-1]  
+    training_metrics = TrainingMetrics()
+
+    """ evaluate before any training for epoch 0 - the generated values are calculated 
+    per batch and concatenated onto the defaultdict lists """
+    epoch_val_losses, epoch_val_q_stats, epoch_neuron_stats, epoch_val_advantages = evaluate_during_training(
+        trainer, 
+        evaluator, 
+        -1, 
+        val_buffer, 
+        batch_size
+    )
+
+    training_metrics.append_epoch_metrics(
+        epoch_val_losses=epoch_val_losses,
+        epoch_val_q_stats=epoch_val_q_stats,
+        epoch_val_advantages=epoch_val_advantages,
+        epoch_neuron_stats=epoch_neuron_stats        
+    )
+
+    current_val_loss = training_metrics.get_current_epoch_loss
     logger.info(f"Epoch {-1}: Val {loss_metric}={current_val_loss:.4f}")
-    # optionally, estimate V0 and append to validation losses
-    if config_manager.training_config['monitor_v0']:
-        estimate_v0(trainer, val_starting_states, batch_size, val_losses, prefix='val')
+    
+    # # optionally, estimate V0 and append to validation losses
+    # if config_manager.training_config['monitor_v0']:
+    #     estimate_v0(trainer, val_starting_states, batch_size, val_losses, prefix='val')
     
     ############################### Training loop #################################
     testing = getattr(config_manager, 'testing', False)
@@ -782,91 +839,110 @@ def train_with_hyperparameters(
     for epoch in range(n_epochs):
         # print epoch
         logger.info(f"Epoch {epoch+1}/{n_epochs}")  
+        
         epoch_training_losses = defaultdict(list)
+        epoch_training_q_stats = defaultdict(list)
         epoch_grad_norm = defaultdict(list)
 
         for batch_idx, batch in enumerate(training_buffer):
-            batch_losses, grad_norm = trainer.train(batch)
+            batch_losses, q_stats, grad_norm = trainer.train(batch)
 
-            # create log_dict for wandb logging - prefix with 'train/' so they show up under the train tab in wandb
-            log_dict = {f"train/{key}": value for key, value in batch_losses.items()}
-            log_dict.update({f"train/{key}": value for key, value in grad_norm.items()})
-            
-            # Add metadata for the X-axis
-            log_dict["epoch"] = epoch
-
-            # # Add current Learning Rate (Crucial for verifying your Cosine scheduler!)
-            # log_dict["train/lr"] = trainer.critic_optimizer.param_groups[0]['lr']
-            
-            # 3. Log to W&B (The "heartbeat")
-            if wandb.run is not None:
-                wandb.log(log_dict)
-            
-            # manual accumulation logic
-            # Automatically append all metrics - creates new keys if needed
             for key, value in batch_losses.items():
-                epoch_training_losses[key].append(value)
-            
-            for key, value in grad_norm.items():
-                epoch_grad_norm[key].append(value)
+                new_key = f"train/{key}"
+                epoch_training_losses[new_key].append(value)
+            epoch_training_losses.update({
+                "epoch": epoch,
+                "total_it": trainer.total_it
+            })
 
-            # check if we are simply testing the training loop, in which case we break after 100 batches
-            if batch_idx >= 10 and testing:
-                logger.info(" Testing mode: breaking after 10 batches.")
-                break
+            for key in q_stats:
+                new_key = f"train/{key}"
+                epoch_training_q_stats[new_key].append(q_stats[key])
+            epoch_training_q_stats.update({
+                "epoch": epoch,
+                "total_it": trainer.total_it
+            })
 
-        # step the scheduler if SARSA (scheduler is stepped in trainer for TD3-BC)
-        if config_manager.model_type in ['basic_q']:
-            if trainer.scheduler is not None:
-                trainer.scheduler.step()
-                print(f"Epoch {epoch} finished. New LR: {trainer.critic_optimizer.param_groups[0]['lr']:.2e}")
-
-        # Calculate average loss for this epoch and append to training_losses
-        append_epoch_losses(epoch_training_losses, training_losses)
-        append_grad_norms(epoch_grad_norm, grad_norms)
-        # print grad norm here
-        epoch_loss = np.mean(epoch_training_losses[loss_metric])
-        epoch_grad_norms = {key: np.mean(value) for key, value in epoch_grad_norm.items()}
-        logger.info(f"Epoch {epoch}: Train {loss_metric}={epoch_loss:.4f}, Grad Norms: {[f'{key}={value:.4f}' for key, value in epoch_grad_norms.items()]}")
+            for key in grad_norm:
+                new_key = f"train/{key}"
+                epoch_grad_norm[new_key].append(grad_norm[key])
+            epoch_grad_norm.update({
+                "epoch": epoch,
+                "total_it": trainer.total_it
+            })
+           
+        # 3. Log to W&B
+        if wandb.run is not None:
+            wandb.log(epoch_training_losses)
+            wandb.log(epoch_training_q_stats)
+            wandb.log(epoch_grad_norm)
+        
+        training_metrics.append_epoch_metrics(
+            epoch_training_losses=epoch_training_losses,
+            epoch_training_q_stats=epoch_training_q_stats,
+            epoch_grad_norms=epoch_grad_norm
+        )
+        
+        # check if we are simply testing the training loop, in which case we break after 100 batches
+        if batch_idx >= 10 and testing:
+            logger.info(" Testing mode: breaking after 10 batches.")
+            break
+               
+        epoch_loss = training_metrics.get_current_epoch_train_loss(loss_metric)
+        logger.info(f"Epoch {epoch}: Train {loss_metric}={epoch_loss:.4f}")
+        epoch_grad_norm = training_metrics.get_current_grad_norm()
+        if epoch_grad_norm is not None:
+            logger.info(f"Epoch {epoch}: Gradient norms: {epoch_grad_norm}")
         
 
-        # optionally, estimate V0 and append to training losses
-        if config_manager.training_config['monitor_v0']:
-            estimate_v0(trainer, training_starting_states, batch_size, training_losses)
-            log_dict = {
-                "train/v0_mean": training_losses['v0_mean'][-1],
-                "train/v0_sem": training_losses['v0_sem'][-1],
-                "epoch": epoch
-            }
-            if wandb.run is not None:
-                wandb.log(log_dict)
-            logger.info(f"Epoch {epoch}: Train mean start state values: {training_losses['v0_mean'][-1]:.4f} ± {training_losses['v0_sem'][-1]:.4f}")
+        # # optionally, estimate V0 and append to training losses
+        # if config_manager.training_config['monitor_v0']:
+        #     estimate_v0(trainer, training_starting_states, batch_size, training_losses)
+        #     log_dict = {
+        #         "train/v0_mean": training_losses['v0_mean'][-1],
+        #         "train/v0_sem": training_losses['v0_sem'][-1],
+        #         "epoch": epoch
+        #     }
+        #     if wandb.run is not None:
+        #         wandb.log(log_dict)
+        #     logger.info(f"Epoch {epoch}: Train mean start state values: {training_losses['v0_mean'][-1]:.4f} ± {training_losses['v0_sem'][-1]:.4f}")
 
-        #################### Evaluate during hyperparameter tuning ONLY ####################
+        #################### Evaluate ####################
         # Evaluate periodically
         if epoch % config_manager.training_config['eval_freq'] == 0 \
                                                 or epoch == n_epochs - 1:
-            evaluate_during_training(trainer, evaluator, epoch, val_buffer, batch_size, val_losses, config_manager)
             
-            # Determine validation loss for early stopping
-            current_val_loss = val_losses[f"val/{loss_metric}"][-1]            
-            current_training_loss = np.mean(training_losses[loss_metric][-1])
-            logger.info(f"Epoch {epoch}: Train {loss_metric}={current_training_loss:.4f}, Val {loss_metric}={current_val_loss:.4f}")              
+            epoch_val_losses, epoch_val_q_stats, epoch_neuron_stats, epoch_val_advantages = evaluate_during_training(
+                trainer, 
+                evaluator, 
+                epoch, 
+                val_buffer, 
+                batch_size
+            )
+
+            training_metrics.append_epoch_metrics(
+                epoch_val_losses=epoch_val_losses,
+                epoch_val_q_stats=epoch_val_q_stats,
+                epoch_val_advantages=epoch_val_advantages,
+                epoch_neuron_stats=epoch_neuron_stats        
+            )
             
-            # optionally, estimate V0 and append to validation losses
-            if config_manager.training_config['monitor_v0']:
-                estimate_v0(trainer, val_starting_states, batch_size, val_losses, prefix='val')
-                log_dict = {
-                    "val/v0_mean": val_losses['val/v0_mean'][-1],
-                    "val/v0_sem": val_losses['val/v0_sem'][-1],
-                    "epoch": epoch
-                }
-                if wandb.run is not None:
-                    wandb.log(log_dict)
-                
-                logger.info(f"Epoch {epoch}: Val mean start state values: {val_losses['val/v0_mean'][-1]:.4f} ± {val_losses['val/v0_sem'][-1]:.4f}")                 
+            current_val_loss = training_metrics.get_current_epoch_loss
+            logger.info(f"Epoch {-1}: Val {loss_metric}={current_val_loss:.4f}")
             
+            # # optionally, estimate V0 and append to validation losses
+            # if config_manager.training_config['monitor_v0']:
+            #     estimate_v0(trainer, val_starting_states, batch_size, val_losses, prefix='val')
+            #     log_dict = {
+            #         "val/v0_mean": val_losses['val/v0_mean'][-1],
+            #         "val/v0_sem": val_losses['val/v0_sem'][-1],
+            #         "epoch": epoch
+            #     }
+            # if wandb.run is not None:
+            #     wandb.log(log_dict)
             
+            # logger.info(f"Epoch {epoch}: Val mean start state values: {val_losses['val/v0_mean'][-1]:.4f} ± {val_losses['val/v0_sem'][-1]:.4f}")                 
+                    
             # Check for improvement and copy model parameters if best, only if early stopping is enabled
             if early_stopping['flag']:
                 improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)
@@ -913,7 +989,14 @@ def train_with_hyperparameters(
     model_path = Path(model_dir / "final_model.pt")
     
     if config_manager.model_type in ['basic_q']:
-        torch.save(trainer.critic.state_dict(), model_path)
+        checkpoint = {
+            'total_it': trainer.total_it,
+            'critic_state_dict': trainer.critic.state_dict(),
+            'critic_optimizer_state_dict': trainer.critic_optimizer.state_dict(),
+            'hyperparameters': hyperparams,
+            'training_config': config_manager.training_config,
+        }
+        torch.save(checkpoint, model_path)
     
     elif config_manager.model_type in ['td3_bc', 'conservative_q_learning']:
         checkpoint = {
@@ -949,16 +1032,14 @@ def train_with_hyperparameters(
     logger.info(f" Final model saved to {model_path}")
 
     # plot losses
-    plot_results(training_losses, val_losses, final_val_losses, model_dir, config_manager)
+    plot_results(training_metrics, model_dir, config_manager)
 
-    # plot gradient norms 
-    plot_gradient_norms(grad_norms, model_dir)
+    # # plot gradient norms 
+    # plot_gradient_norms(grad_norms, model_dir)
 
     # save results
     all_scores = save_results(
-        training_losses,
-        val_losses,
-        final_val_losses,
+        training_metrics,
         hyperparams,
         n_epochs,
         model_dir,

@@ -31,48 +31,70 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
 
         # standardize the incoming embeddings
-        self.state_norm = nn.LayerNorm(state_dim + action_dim)
         self.hidden_dim = hidden_dim
-
         self.hidden_dim2 = hidden_dim // 2  # Example of a second hidden layer with half the units of the first
         self.hidden_dim3 = self.hidden_dim2 // 2  # Example of a third hidden layer with half the units of the second
 
         self.negative_slope = negative_slope
 
         # Q1 architecture
+        # self.q1_net = nn.Sequential(
+        #     nn.LayerNorm(state_dim + action_dim), # Normalize input features
+        #     nn.Linear(state_dim + action_dim, self.hidden_dim),
+        #     nn.LayerNorm(self.hidden_dim), # Normalize internal activations
+        #     nn.LeakyReLU(negative_slope=self.negative_slope),
+        #     nn.Dropout(p=dropout),
+            
+        #     nn.Linear(self.hidden_dim, self.hidden_dim2),
+        #     nn.LayerNorm(self.hidden_dim2), # Normalize internal activations
+        #     nn.LeakyReLU(negative_slope=self.negative_slope),
+        #     nn.Dropout(p=dropout),
+            
+        #     nn.Linear(self.hidden_dim2, self.hidden_dim3),
+        #     nn.LayerNorm(self.hidden_dim3), # Normalize internal activations
+        #     nn.LeakyReLU(negative_slope=self.negative_slope),
+        #     # nn.Dropout(p=dropout),    
+            
+        #     nn.Linear(self.hidden_dim3, 1)
+        # )
+
         self.q1_net = nn.Sequential(
-            nn.Linear(state_dim + action_dim, self.hidden_dim),
-            nn.LayerNorm(self.hidden_dim), # Normalize internal activations
+            nn.LayerNorm(state_dim + action_dim),
+            nn.Linear(state_dim + action_dim, 128),
+            nn.LayerNorm(128),
             nn.LeakyReLU(negative_slope=self.negative_slope),
             nn.Dropout(p=dropout),
-            
-            nn.Linear(self.hidden_dim, self.hidden_dim2),
-            nn.LeakyReLU(negative_slope=self.negative_slope),
-            nn.Dropout(p=dropout),
-            
-            nn.Linear(self.hidden_dim2, self.hidden_dim3),
-            nn.LeakyReLU(negative_slope=self.negative_slope),
-            # nn.Dropout(p=dropout),    
-            
-            nn.Linear(self.hidden_dim3, 1)
+            nn.Linear(128, 1) # Directly to output
         )
 
-        # Q2 architecture
+        # # Q2 architecture
+        # self.q2_net = nn.Sequential(
+        #     nn.LayerNorm(state_dim + action_dim), # Normalize input features
+        #     nn.Linear(state_dim + action_dim, self.hidden_dim),
+        #     nn.LayerNorm(self.hidden_dim), # Normalize internal activations 
+        #     nn.LeakyReLU(negative_slope=self.negative_slope),
+        #     nn.Dropout(p=dropout),
+            
+        #     nn.Linear(self.hidden_dim, self.hidden_dim2),
+        #     nn.LayerNorm(self.hidden_dim2),
+        #     nn.LeakyReLU(negative_slope=self.negative_slope),
+        #     nn.Dropout(p=dropout),
+            
+        #     nn.Linear(self.hidden_dim2, self.hidden_dim3),
+        #     nn.LayerNorm(self.hidden_dim3),
+        #     nn.LeakyReLU(negative_slope=self.negative_slope),
+        #     # nn.Dropout(p=dropout),            
+            
+        #     nn.Linear(self.hidden_dim3, 1)
+        # )
+
         self.q2_net = nn.Sequential(
-            nn.Linear(state_dim + action_dim, self.hidden_dim),
-            nn.LayerNorm(self.hidden_dim), # Normalize internal activations 
+            nn.LayerNorm(state_dim + action_dim),
+            nn.Linear(state_dim + action_dim, 128),
+            nn.LayerNorm(128),
             nn.LeakyReLU(negative_slope=self.negative_slope),
             nn.Dropout(p=dropout),
-            
-            nn.Linear(self.hidden_dim, self.hidden_dim2),
-            nn.LeakyReLU(negative_slope=self.negative_slope),
-            nn.Dropout(p=dropout),
-            
-            nn.Linear(self.hidden_dim2, self.hidden_dim3),
-            nn.LeakyReLU(negative_slope=self.negative_slope),
-            # nn.Dropout(p=dropout),            
-            
-            nn.Linear(self.hidden_dim3, 1)
+            nn.Linear(128, 1) # Directly to output
         )
 
         self.apply(self._init_weights)
@@ -102,7 +124,7 @@ class Critic(nn.Module):
                 if m.bias is not None:
                     # Keep this at 0. With LayerNorm, non-zero biases can 
                     # actually introduce unnecessary shift.
-                    nn.init.constant_(m.bias, 0.05)      
+                    nn.init.constant_(m.bias, 0.0)      
         
         elif isinstance(m, nn.LayerNorm):
             # Standard identity transform - keep as is
@@ -112,9 +134,6 @@ class Critic(nn.Module):
     def forward(self, state, action):
 
         sa = torch.cat([state, action], 1)
-
-        # normalize states after concatenation
-        sa = self.state_norm(sa)
         
         q1 = self.q1_net(sa)
         q2 = self.q2_net(sa)
@@ -197,6 +216,15 @@ def get_q_stats(current_Q1, current_Q2, mortality) -> Dict[str, float]:
         non_survival_variance_Q = float('nan')
         non_survival_n = 0
 
+    if survival_n >= 2 and non_survival_n >= 2:
+        # calculate signal to noise ratio of the difference between survival and non-survival Q values
+        signal = abs(survival_Q - non_survival_Q)
+        pooled_variance = (survival_variance_Q + non_survival_variance_Q) / 2.0
+        noise = pooled_variance ** 0.5
+        signal_to_noise = signal / noise if noise > 0 else float('inf')
+    else:
+        signal_to_noise = float('nan')
+
     q_stats = {
         "batch_n": batch_n,
         "mean_Q": mean_Q,
@@ -207,7 +235,8 @@ def get_q_stats(current_Q1, current_Q2, mortality) -> Dict[str, float]:
         "survival_variance_Q": survival_variance_Q,
         "non_survival_n": non_survival_n,
         "non_survival_Q": non_survival_Q,
-        "non_survival_variance_Q": non_survival_variance_Q
+        "non_survival_variance_Q": non_survival_variance_Q,
+        "signal_to_noise": signal_to_noise
     }
     return q_stats
 

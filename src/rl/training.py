@@ -216,11 +216,17 @@ def save_results(
         with open(config_manager.experiment_dir / "config_manager.pkl", "wb") as f:
             pickle.dump(config_manager, f)  
 
+    # training_scores is the final value in each value in training_metrics.epoch_training_losses
+    training_losses = {key: values[-1] for key, values in training_metrics.epoch_training_losses.items()}
+    training_q_stats = {key: values[-1] for key, values in training_metrics.epoch_training_q_stats.items()}
+    training_scores = {**training_losses, **training_q_stats}
+
+    val_scores = {**training_metrics.final_val_losses, **training_metrics.final_val_q_stats, **training_metrics.final_val_advantages, **training_metrics.final_val_neuron_stats}
+    
     # create a dictionary to save the scores
     all_scores = {
-        "training_scores": training_scores,
         "val_scores": val_scores,
-        "test_scores": final_val_scores,
+        "training_scores": training_scores,
         "hyperparameters": hyperparameters,
         "n_epochs": n_epochs
     }
@@ -233,8 +239,9 @@ def save_results(
     with open(results_path, 'w') as f:
         json.dump(to_json_safe({
             'hyperparameters': hyperparameters,
-            # 'time_bins': config_manager.time_bins,
-            'final_metrics': final_val_scores,
+            # 'time_bins': config_manager.time_bins,            
+            'val_scores': val_scores,
+            'training_scores': training_scores,
             'config': config_manager.training_config
         }), f, indent=2)
     

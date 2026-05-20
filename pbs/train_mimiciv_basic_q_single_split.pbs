@@ -1,8 +1,8 @@
 #!/bin/bash
-# pbs/train_mimiciv_dynamic_deephit_single_split.pbs
+# pbs/train_choc_basic_q_single_split.pbs
 
 # Job name
-#PBS -N mimiciv_dynamic_deephit
+#PBS -N choc_basic_q
 
 # Output and error files
 #PBS -o /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs
@@ -69,9 +69,9 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --split_num 0 \
     --search_variant random_search \
     --n_epochs 200 \
-    --n_search_iterations 5 \
+    --n_search_iterations 1 \
     --action_mode continuous_only \
-    --cohort sepsis_broad \
+    --cohort sepsis \
     --start_time $START_TIME 
 
 exit_code=$?

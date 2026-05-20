@@ -3,7 +3,7 @@
     group: "reinforcement_learning"
     name: "basic_q"
 
-    tuning: True
+    tuning: False
 
     # Early stopping parameters (fixed for all combinations)    
     use_early_stopping: False

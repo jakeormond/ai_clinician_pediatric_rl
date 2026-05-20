@@ -257,7 +257,7 @@ def main():
         config_manager.model_type == "dynamic_deephit_prediction_all": 
         from ...supervised_learning.training import outer_training_loop, development_training_loop, single_split_training
         from ...supervised_learning.models.dynamic_deephit import make_mixed_resolution_time_bins
-        from ...supervised_learning.predict import plot_evaluation, predict_all, plot_random_predictions
+        from ...supervised_learning.predict import predict, plot_evaluation, predict_all, plot_random_predictions
 
     else:
         from ...supervised_learning.training_scikitlearn import outer_training_loop, \

@@ -604,7 +604,6 @@ def train_with_hyperparameters(
     best_model_state = None
 
     logger.info(f"Training with early stopping (patience={early_stopping['patience']}, eval_freq={early_stopping['eval_freq']}, min_delta={early_stopping['min_delta']})")
-    
 
     # Use defaultdict to automatically create new keys
     training_metrics = TrainingMetrics()
@@ -765,7 +764,7 @@ def train_with_hyperparameters(
             )
             
             current_val_loss = training_metrics.get_current_epoch_val_loss(loss_metric)
-            logger.info(f"Epoch {-1}: Val {loss_metric}={current_val_loss:.4f}")
+            logger.info(f"Epoch {epoch}: Val {loss_metric}={current_val_loss:.4f}")
                                  
             # Check for improvement and copy model parameters if best, only if early stopping is enabled
             if early_stopping['flag']:

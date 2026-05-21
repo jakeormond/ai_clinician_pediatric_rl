@@ -236,35 +236,83 @@ class ShardProcessor:
     def process_reward(self, config_manager, hyperparams):
         reward_type = config_manager.data_config['reward_type']
         if reward_type == 'health_score':
-            health_score = self.dynamic_deephit_predictions['health_score']
-            
-            # health score is from 0 to 100, we need to centre it so it is -50 to 50
-            health_score = health_score - 50.0            
-            
+            # score is 0 to 100
+            health_score = self.dynamic_deephit_predictions['health_score'] 
             index_ptr = self.dynamic_deephit_dataset['index_ptr']
 
-            # calculate hourly change; first hour should be 0
-            hourly_health_change = np.zeros_like(health_score)
-            for j in range(len(index_ptr) - 1):
-                start_idx = index_ptr[j]
-                end_idx = index_ptr[j + 1]
-                hourly_health_change[start_idx:end_idx] = np.diff(health_score[start_idx:end_idx], append=health_score[end_idx-1])
-
-            # reward_std = hourly_health_change.std()
-            #clip rewards to -5, 5
-            hourly_health_change = np.clip(hourly_health_change, -5.0, 5.0)
-           
-            # scale the hourly change
-            hourly_change_scale = hyperparams['health_score_hourly_change_scale']
-            hourly_health_change *= hourly_change_scale
-
-            # scale the raw health score
+            # get hourly_health_change            
+            hourly_health_change = np.append(np.diff(health_score), 0.) 
+            hourly_health_change[index_ptr[:-1]-1] = 0.0  
+            
+            # clip hourly_health_change to hyperparms['health_score_hourly_change_clip']
+            hourly_max = hyperparams['health_score_hourly_change_clip']
+            hourly_min = -hyperparams['health_score_hourly_change_clip']
+            hourly_health_change = np.clip(hourly_health_change, hourly_min, hourly_max)
+            
+            # min_max scale the health score to [-1, 1] 
+            max_health_score = 100.0
+            min_health_score = 0.0
+            health_score = (((health_score - min_health_score) / \
+                (max_health_score - min_health_score))) * 2 - 1
+            
+            # min_max the hourly_health_change to [-1, 1]
+            hourly_health_change = ((hourly_health_change - hourly_min) / \
+                (hourly_max - hourly_min)) * 2 - 1
+            
+            # scale by hyperparameters
             health_score_scale = hyperparams['health_score_scale']
-            health_score *= health_score_scale
-            health_score = np.clip(health_score, -5.0, 5.0)
+            hourly_change_scale = hyperparams['health_score_hourly_change_scale']
 
-            # add the scaled health score to the hourly change to get the final reward  
-            health_score_total = hourly_health_change + health_score        
+            # scale the scales so they sum to 1
+            total_scale = health_score_scale + hourly_change_scale
+            health_score_scale = health_score_scale / total_scale
+            hourly_change_scale = hourly_change_scale / total_scale
+          
+            health_score *= hyperparams['health_score_scale']
+            hourly_health_change *= hyperparams['health_score_hourly_change_scale']
+
+            # add them together to get the final reward
+            health_score_total = health_score + hourly_health_change
+
+            # apply a final scaling to [-1, 1]
+            health_score_total = (health_score_total - health_score_total.min()) / \
+                (health_score_total.max() - health_score_total.min()) * 2 - 1
+            
+
+            # finally apply a scaling factor to keep gradients in the sweet spot
+            total_health_score_scale = hyperparams['total_health_score_scale']
+            health_score_total *= total_health_score_scale
+                      
+            # index_ptr = self.dynamic_deephit_dataset['index_ptr']
+
+            # # calculate hourly change; last hour should be 0
+            # hourly_health_change = np.zeros_like(health_score)
+            # for j in range(len(index_ptr) - 1):
+            #     start_idx = index_ptr[j]
+            #     end_idx = index_ptr[j + 1]
+            #     hourly_health_change[start_idx:end_idx] = np.diff(health_score[start_idx:end_idx], append=health_score[end_idx-1])
+
+            # # health score is from 0 to 100, we need to centre it so it is -50 to 50
+            # health_score = health_score - 50.0            
+            
+
+            # # reward_std = hourly_health_change.std()
+            # #clip rewards to -5, 5
+            # hourly_health_change = np.clip(hourly_health_change, -5.0, 5.0)
+           
+            # # scale the raw health_score to [-1, 1]
+            # health_score = health_score / 50.0
+            
+            # # scale the hourly change
+            # hourly_change_scale = hyperparams['health_score_hourly_change_scale']
+            # hourly_health_change *= hourly_change_scale
+
+            # # scale the raw health score
+            # health_score_scale = hyperparams['health_score_scale']
+            # health_score *= health_score_scale
+
+            # # add the scaled health score to the hourly change to get the final reward  
+            # health_score_total = hourly_health_change + health_score        
             self.dynamic_deephit_predictions['reward'] = health_score_total.astype(np.float32)                                         
         
         else:

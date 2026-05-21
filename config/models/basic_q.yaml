@@ -49,7 +49,12 @@
     grad_clip: 0.5 # [0.5, 1.0]
     
     # health score reward shaping parameters
-    reward_scaling: 0.5  # Scaling factor for rewards
+    health_score_hourly_change_clip: 10. # health score is 0 to 100, clip prevents large spikes in reward
     health_score_scale: 0.1 # [0.05, 0.1, 0.2]  # Scaling factor for health score component of reward
-    health_score_hourly_change_scale: 0.5 # [0.5, 1]  # Scaling factor for hourly change component of reward
+    health_score_hourly_change_scale: 0.9 # [0.5,
+    total_health_score_scale: 5.  # Scaling factor for total health score component of reward
+
+    # reward_scaling: 0.5  # Scaling factor for rewards
+    # health_score_scale: 0.1 # [0.05, 0.1, 0.2]  # Scaling factor for health score component of reward
+    # health_score_hourly_change_scale: 0.5 # [0.5, 1]  # Scaling factor for hourly change component of reward
 

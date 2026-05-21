@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import os
 import json
+from sklearn.metrics import roc_auc_score
 
 from .shared_components import TrainerUtils
 
@@ -32,8 +33,8 @@ class Critic(nn.Module):
 
         # standardize the incoming embeddings
         self.hidden_dim = hidden_dim
-        self.hidden_dim2 = hidden_dim // 2  # Example of a second hidden layer with half the units of the first
-        self.hidden_dim3 = self.hidden_dim2 // 2  # Example of a third hidden layer with half the units of the second
+        # self.hidden_dim2 = hidden_dim // 2  # Example of a second hidden layer with half the units of the first
+        # self.hidden_dim3 = self.hidden_dim2 // 2  # Example of a third hidden layer with half the units of the second
 
         self.negative_slope = negative_slope
 
@@ -60,11 +61,11 @@ class Critic(nn.Module):
 
         self.q1_net = nn.Sequential(
             nn.LayerNorm(state_dim + action_dim),
-            nn.Linear(state_dim + action_dim, 128),
-            nn.LayerNorm(128),
+            nn.Linear(state_dim + action_dim, self.hidden_dim),
+            nn.LayerNorm(self.hidden_dim),
             nn.LeakyReLU(negative_slope=self.negative_slope),
             nn.Dropout(p=dropout),
-            nn.Linear(128, 1) # Directly to output
+            nn.Linear(self.hidden_dim, 1) # Directly to output
         )
 
         # # Q2 architecture
@@ -90,11 +91,11 @@ class Critic(nn.Module):
 
         self.q2_net = nn.Sequential(
             nn.LayerNorm(state_dim + action_dim),
-            nn.Linear(state_dim + action_dim, 128),
-            nn.LayerNorm(128),
+            nn.Linear(state_dim + action_dim, self.hidden_dim),
+            nn.LayerNorm(self.hidden_dim),
             nn.LeakyReLU(negative_slope=self.negative_slope),
             nn.Dropout(p=dropout),
-            nn.Linear(128, 1) # Directly to output
+            nn.Linear(self.hidden_dim, 1) # Directly to output
         )
 
         self.apply(self._init_weights)
@@ -222,9 +223,15 @@ def get_q_stats(current_Q1, current_Q2, mortality) -> Dict[str, float]:
         pooled_variance = (survival_variance_Q + non_survival_variance_Q) / 2.0
         noise = pooled_variance ** 0.5
         signal_to_noise = signal / noise if noise > 0 else float('inf')
+
+        # also calculate AUC of using Q value to predict mortality, as an alternative measure of signal to noise
+        auc_Q = roc_auc_score(1-mortality.detach().cpu().numpy(), current_Q.detach().cpu().numpy())
+
     else:
         signal_to_noise = float('nan')
+        auc_Q = float('nan')
 
+        
     q_stats = {
         "batch_n": batch_n,
         "mean_Q": mean_Q,
@@ -236,7 +243,8 @@ def get_q_stats(current_Q1, current_Q2, mortality) -> Dict[str, float]:
         "non_survival_n": non_survival_n,
         "non_survival_Q": non_survival_Q,
         "non_survival_variance_Q": non_survival_variance_Q,
-        "signal_to_noise": signal_to_noise
+        "signal_to_noise": signal_to_noise,
+        "auc_Q": auc_Q
     }
     return q_stats
 

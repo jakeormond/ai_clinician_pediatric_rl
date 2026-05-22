@@ -164,7 +164,7 @@ class TransformerDeepHitMulti(nn.Module):
         num_encoder_layers: int, # Replaces num_layers
         ff_factor: int, # dim_feedforward = ff_factor * d_model
         num_time_bins: int,
-        num_risks: int,
+        num_targets: int,
         dropout: float = 0.3,
         feature_dropout_p: float = 0.0, # Probability of dropping each feature (column) during training
         max_seq_len: int = 768, # For Positional Encoding and padding
@@ -180,7 +180,7 @@ class TransformerDeepHitMulti(nn.Module):
             nhead: number of attention heads
             num_encoder_layers: number of Transformer Encoder layers
             num_time_bins: number of discrete time bins
-            num_risks: number of competing risks (e.g. 2 for death, discharge)
+            num_targets: number of competing risks (e.g. 2 for death, discharge)
             dropout: dropout rate
             max_seq_len: maximum length of the input window (e.g., 768)
             predict_covariates: list of indices of covariates to predict for regularization
@@ -193,7 +193,7 @@ class TransformerDeepHitMulti(nn.Module):
         self.num_encoder_layers = int(num_encoder_layers)
         self.ff_factor = int(ff_factor)
         self.num_time_bins = int(num_time_bins)
-        self.num_risks = int(num_risks)
+        self.num_targets = int(num_targets)
         self.dropout = dropout
         self.feature_dropout_p = feature_dropout_p
         self.max_seq_len = max_seq_len
@@ -270,7 +270,7 @@ class TransformerDeepHitMulti(nn.Module):
                 nn.Dropout(dropout),
                 nn.Linear(self.d_model, num_time_bins)
             )
-            for _ in range(num_risks)
+            for _ in range(num_targets)
         ])
         
         self._initialize_weights()
@@ -389,7 +389,7 @@ class TransformerDeepHitTrainer:
         model,
         optimizer,
         device = "CUDA" if torch.cuda.is_available() else "CPU",
-        num_risks = 2,
+        num_targets = 2,
         num_time_bins = 100,
         loss_fn=None,
         grad_clip=1.0,
@@ -410,7 +410,7 @@ class TransformerDeepHitTrainer:
             model: DynamicDeepHitMulti instance
             optimizer: torch.optim optimizer
             device: 'cuda' or 'cpu'
-            num_risks: number of competing risks
+            num_targets: number of competing risks
             num_time_bins: discretized time horizon
             loss_fn: custom loss function (optional)
             grad_clip: gradient clipping value (optional)
@@ -420,7 +420,7 @@ class TransformerDeepHitTrainer:
         self.model = model.to(device)
         self.optimizer = optimizer
         self.device = device
-        self.num_risks = num_risks
+        self.num_targets = num_targets
         self.num_time_bins = num_time_bins
         self.loss_fn = loss_fn
         self.grad_clip = grad_clip
@@ -462,7 +462,7 @@ class TransformerDeepHitTrainer:
         risk_logits, covariate_pred, _ = self.model(X, padding_mask=None)
         
         # We need to restructure the risk_logits for the loss function:
-        # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_risks, num_time_bins]
+        # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_targets, num_time_bins]
         logits = torch.stack(risk_logits, dim=2) 
 
         # Compute log loss and ranking loss
@@ -563,7 +563,7 @@ class TransformerDeepHitTrainer:
         with torch.no_grad():
             risk_logits, covariate_pred, _ = self.model(X, padding_mask=None)
             # We need to restructure the risk_logits for the loss function:
-            # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_risks, num_time_bins]
+            # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_targets, num_time_bins]
             logits = torch.stack(risk_logits, dim=2)          
             
             # Compute log loss and ranking loss
@@ -609,7 +609,7 @@ def get_trainer(
         hyperparams, 
         train_processor, 
         training_dataset,
-        num_risks = 2,
+        num_targets = 2,
         ):
 
     learning_rate = float(hyperparams['learning_rate'])
@@ -621,7 +621,7 @@ def get_trainer(
         nhead=hyperparams['nhead'],                   # e.g., 4 or 8
         num_encoder_layers=hyperparams['n_layers'],   # e.g., 3 or 6
         num_time_bins=n_time_bins,
-        num_risks=num_risks,
+        num_targets=num_targets,
         dropout=hyperparams['dropout'],
         feature_dropout_p=hyperparams['feature_dropout_p'],
         ff_factor=hyperparams['ff_factor'],
@@ -670,7 +670,7 @@ def get_trainer(
             dynamic_deephit_model,
             deephit_optimizer,
             device=config_manager.training_config['device'],
-            num_risks=num_risks,
+            num_targets=num_targets,
             num_time_bins=n_time_bins,
             loss_fn=dynamic_deephit_loss,
             grad_clip = hyperparams['grad_clip'],
@@ -740,7 +740,7 @@ def dynamic_deephit_loss(
     valid_targets = valid_targets[:, predict_covariates]  # Select only predicted covariates
 
     # flatten tensors where needed
-    # 2. Reshape to [B * T_cap, num_risks, num_time_bins] for the loss function
+    # 2. Reshape to [B * T_cap, num_targets, num_time_bins] for the loss function
     #    (Assuming your existing loss function expects a flattened batch/time dimension)
     if final_timestep_only:
         # only keep the final timestep's logits for each patient

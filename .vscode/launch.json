@@ -45,6 +45,7 @@
                 "--final_timestep_only", "True",                
                 "--cohort", "all",
                 "--n_epochs", "100",
+                "--testing"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

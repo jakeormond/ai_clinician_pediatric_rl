@@ -75,6 +75,7 @@ def to_json_safe(obj):
 MODEL_MODULES = {
     "dynamic_deephit": "src.supervised_learning.models.dynamic_deephit",
     "dynamic_deephit_transformer": "src.supervised_learning.models.dynamic_deephit_transformer",
+    "bc_transformer": "src.supervised_learning.models.bc_transformer"
 }
 
 DISTRIBUTIONS = {
@@ -218,7 +219,10 @@ def create_trainer(train_processor, training_dataset, hyperparams, config_manage
 
     # feature_dim = train_processor.dynamic_deephit_dataset["features"].shape[2]
     feature_dim = train_processor.dynamic_deephit_dataset['feature_dim']
-    num_risks = 2 # hardcode for now
+    if config_manager.model_type == 'bc_transformer':
+        num_targets = 2 # hardcoded for now
+    else:
+        num_targets = len(config_manager.training_config['actions']) # hardcode for now
 
     model_type = config_manager.model_type
     module = importlib.import_module(MODEL_MODULES[model_type])
@@ -229,7 +233,7 @@ def create_trainer(train_processor, training_dataset, hyperparams, config_manage
         hyperparams,
         train_processor,
         training_dataset,
-        num_risks=num_risks
+        num_targets=num_targets
     )
 
 

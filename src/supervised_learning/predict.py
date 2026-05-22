@@ -23,7 +23,7 @@ from scipy import stats
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
-from scipy.stats import 
+# from scipy.stats import 
 
 from ..data.data_processor_for_shards import ShardProcessor
 from ..rl.replay_buffer import DynamicDeepHit_Lazy, worker_init_fn

@@ -87,6 +87,8 @@ class DynamicDeepHitTransformerDataset(Dataset):
             ):
         self.shuffle_inputs = config_manager.training_config.get('shuffle_inputs', False)
         
+        self.task = config_manager.training_config['name']
+
         self.trajectories = torch.tensor(data_processor.dynamic_deephit_dataset["trajectories"], dtype=torch.float32)
         self.feature_names = data_processor.dynamic_deephit_dataset["feature_names"]
         self.stay_ids = torch.tensor(data_processor.dynamic_deephit_dataset["stay_ids"], dtype=torch.long)

@@ -5,6 +5,7 @@ Behavioural cloning algorithm based on dynamic deephit implementation
 from typing import Dict, List, Tuple
 import numpy as np
 import math
+from supervised_learning.models.dynamic_deephit_transformer import TransformerDeepHitTrainer
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -55,7 +56,6 @@ class BehaviouralCloneTransformer(nn.Module):
         nhead: int,
         num_encoder_layers: int, # Replaces num_layers
         ff_factor: int, # dim_feedforward = ff_factor * d_model
-        num_risks: int,
         dropout: float = 0.3,
         feature_dropout_p: float = 0.0, # Probability of dropping each feature (column) during training
         n_actions: int = 2, # number of target actions to predict
@@ -207,18 +207,10 @@ class BCTransformerTrainer:
         model,
         optimizer,
         device = "CUDA" if torch.cuda.is_available() else "CPU",
-        num_risks = 2,
-        num_time_bins = 100,
         loss_fn=None,
         grad_clip=1.0,
-        alpha_rank = None,
-        alpha_pred = None,
-        alpha_class = None,
-        sigma = None,
         scheduler=None,
-        g_sigma_scheduler=None,
         verbose=True,
-        physiological_feature_type = None,
         l1_params: list = [],
         l1_lambda: float = 0.0,
         final_timestep_only: bool = True,
@@ -238,22 +230,15 @@ class BCTransformerTrainer:
         self.model = model.to(device)
         self.optimizer = optimizer
         self.device = device
-        self.num_risks = num_risks
-        self.num_time_bins = num_time_bins
         self.loss_fn = loss_fn
         self.grad_clip = grad_clip
-
-        self.sigma = sigma
         self.scheduler = scheduler
-        self.g_sigma_scheduler = g_sigma_scheduler
         self.verbose = verbose
-        self.physiological_feature_type = physiological_feature_type
         self.l1_params = l1_params
         self.l1_lambda = float(l1_lambda)
         self.final_timestep_only = final_timestep_only
 
     def train(self, batch: TensorBatch, epoch: int):
-
         self.model.train() # set model to train mode
 
         # unpack batch
@@ -308,86 +293,57 @@ class BCTransformerTrainer:
         self.model.eval()  # set model to eval mode
         
         # unpack batch
-        # X = batch[0].to(self.device)      # [batch_size, n_ts, n_features]
         X = batch['features'].to(self.device)
-        # time_to_event = batch[1].to(self.device)      # [batch_size]
-        time_to_event = batch['time_to_event'].to(self.device)
-        # event_label = batch[2].to(self.device)      # [batch_size]
-        event_label = batch['event'].to(self.device)
-        # mask = batch[3].to(self.device)
-        # no loger using a mask for the transformer, all timesteps are valid (padded with data, not zeros)
-        # mask = batch['mask'].to(self.device)
-        # mask is only for loss calculation, and is True where data is valid
+        
+        actions = batch['target_actions'].to(self.device)
+        
         mask = batch['loss_mask'].to(self.device)
 
         # Forward pass
         with torch.no_grad():
-            risk_logits, covariate_pred, _ = self.model(X, padding_mask=None)
-            # We need to restructure the risk_logits for the loss function:
-            # 1. Stack the list of risk tensors into a single tensor: [B, T_cap, num_risks, num_time_bins]
-            logits = torch.stack(risk_logits, dim=2)          
+            # Forward pass
+            # risk_logits: list of tensors, where each tensor is [B, T_cap, num_time_bins]
+            # covariate_pred: None (or [B, T_cap, num_covariates] if implemented)
+            predicted_actions, latent_features = self.model(
+                X, 
+                padding_mask=mask
+            )
             
-            # Compute log loss and ranking loss
-            loss, lik_loss, class_loss, rank_loss, pred_loss = self.loss_fn(
-                logits, 
-                covariate_pred, 
-                time_to_event,                  
-                event_label, 
-                X,
-                alpha_class = self.alpha_class,
-                alpha_rank = self.alpha_rank,
-                alpha_pred = self.alpha_pred,
-                sigma = self.sigma,
-                g_sigma_scheduler = self.g_sigma_scheduler,
-                epoch = epoch,
-                predict_covariates=self.model.predict_covariates,
-                predict_horizon=self.model.prediction_time_horizon,
-                physiological_feature_type=self.physiological_feature_type,
-                mask = mask,
-                final_timestep_only = self.final_timestep_only
-                )
-            
-            if self.final_timestep_only:
-                logits = logits[:, -1:, :, :]  # [B, 1, K, D]
+            criterion = nn.MSELoss()
 
+            loss = criterion(predicted_actions, actions)     
+                
         # set model back to train mode
         self.model.train()
 
         loss_dict = {
-            "combined_loss": loss.item(),
-            "likelihood_loss": lik_loss.item(),
-            "classification_loss": class_loss.item(),
-            "ranking_loss": rank_loss.item(),
-            "prediction_loss": pred_loss.item()
+            "mse_loss": loss.item()
             }
 
-        return loss_dict, logits
+        return loss_dict
 
 
 def get_trainer(
         config_manager, 
         feature_dim, 
         hyperparams, 
-        train_processor, 
+        train_processor, # don't need this 
         training_dataset,
-        num_risks = 2,
         ):
 
     learning_rate = float(hyperparams['learning_rate'])
     n_time_bins = len(config_manager.time_bins) - 1
 
-    dynamic_deephit_model = TransformerDeepHitMulti(
+    bc_model = BehaviouralCloneTransformer(
         feature_dim=feature_dim+1, # +1 for the local time feature we add in the replay buffer
         d_model=hyperparams['d_model'],               # e.g., 128 or 256
         nhead=hyperparams['nhead'],                   # e.g., 4 or 8
         num_encoder_layers=hyperparams['n_layers'],   # e.g., 3 or 6
-        num_time_bins=n_time_bins,
-        num_risks=num_risks,
+        n_actions=len(hyperparams['actions']),     # e.g., 2 for binary actions, or more for multi-class
         dropout=hyperparams['dropout'],
         feature_dropout_p=hyperparams['feature_dropout_p'],
         ff_factor=hyperparams['ff_factor'],
         max_seq_len=config_manager.training_config['window_length'],
-        predict_covariates=train_processor.dynamic_deephit_dataset['physiological_feature_ind']
     ).to(config_manager.training_config['device'])
 
     # # Collect L1 parameters: classification head weights only
@@ -396,8 +352,8 @@ def get_trainer(
     #     if name.startswith("heads.") and name.endswith(".weight")
     # ]
 
-    deephit_optimizer = torch.optim.AdamW(
-        dynamic_deephit_model.parameters(),
+    bc_optimizer = torch.optim.AdamW(
+        bc_model.parameters(),
         lr=learning_rate,
         weight_decay = float(hyperparams['weight_decay'])
     )
@@ -413,7 +369,7 @@ def get_trainer(
     pct_start = hyperparams['pct_start']
     div_factor = hyperparams['div_factor']
     scheduler = OneCycleLR(
-        deephit_optimizer,
+        bc_optimizer,
         max_lr=learning_rate,
         total_steps=total_steps,  # you'll need to pass this
         pct_start=pct_start, 
@@ -421,65 +377,32 @@ def get_trainer(
         anneal_strategy='cos'
     )
 
-    g_sigma_scheduler = G_SigmaScheduler(
-        start_sigma=hyperparams['start_sigma'],
-        end_sigma=hyperparams['end_sigma'],
-        total_epochs=n_epochs
-    )
-
-    trainer = TransformerDeepHitTrainer(
-            dynamic_deephit_model,
-            deephit_optimizer,
+    trainer = BCTransformerTrainer(
+            bc_model,
+            bc_optimizer,
             device=config_manager.training_config['device'],
-            num_risks=num_risks,
-            num_time_bins=n_time_bins,
             loss_fn=dynamic_deephit_loss,
             grad_clip = hyperparams['grad_clip'],
-            alpha_class = hyperparams['alpha_class'], 
-            alpha_rank = hyperparams['alpha_rank'],
-            alpha_pred = hyperparams['alpha_pred'],
-            sigma = hyperparams['sigma'],
             scheduler=scheduler,
-            g_sigma_scheduler=g_sigma_scheduler,
             verbose=True, 
-            physiological_feature_type = train_processor.dynamic_deephit_dataset['physiological_feature_type'],
             # l1_params=l1_params,          # ← ADD THIS
             l1_lambda=hyperparams['l1_lambda'],   
-            final_timestep_only = config_manager.final_timestep_only        
         )
 
     return trainer
 
 
 
-def dynamic_deephit_loss(
-        logits, 
-        predictions,
-        time_to_event, 
-        event_label,
-        X, # might not need this anymore, check!
-        predict_covariates: list = [],
-        predict_horizon=None,
-        physiological_feature_type: list = [],
-        no_censoring=True,
-        pair_sample_frac = 0.5,
-        alpha_class= None,
-        alpha_rank= None, 
-        alpha_pred = None,
-        sigma=None,
-        mask=None,
-        eps=1e-8,
-        g_sigma_scheduler=None,
-        epoch=None,
-        final_timestep_only = True,
+def bc_cloning_loss(
+        predicted_actions, 
+        clinician_actions
         ):
     """
-    Dynamic-DeepHit loss for competing risks (multi-risk, discrete-time)
-
+    MSE loss between predicted continuous actions and clinician actions
+    
     Args:
-        logits: tensor (B, K, T)  -- raw model outputs
-        time_to_event: [batch] integer time bin of event/censoring (0-based)
-        event_label: [batch] risk label (0=censored, 1..R)
+        predicted_actions: tensor (B, T, A)  -- predicted continuous actions
+        clinician_actions: tensor (B, T, A)  -- clinician actions
         mask: optional [batch] or [batch, seq_len] for padded sequences (1=valid, 0=padded)
         alpha: weight for ranking loss
         eps: numerical stability

@@ -1,4 +1,5 @@
 
+import wandb
 import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 from collections import defaultdict
@@ -426,55 +427,85 @@ def evaluate_model(
     return avg_losses
 
 
-def evaluate_during_training(trainer, epoch, val_buffer, val_losses, config_manager):
-    """Evaluate model during training and log results."""
-    
-    # Evaluate with sample limit for speed
-    max_samples = config_manager.training_config.get('max_val_samples', 1000)
-    epoch_val_metrics = evaluate_model(
+def evaluate_during_training(
         trainer, 
+        epoch, 
         val_buffer, 
-        config_manager,
-        max_samples=max_samples,
-        return_full_curves=False,
-        compute_survival_metrics_flag=True,
-        epoch=epoch
-    )
-    
-    # Log metrics
-    if len(epoch_val_metrics) > 1:
-        logger.info(f"Epoch {epoch}: Validation metrics: {epoch_val_metrics}")
-    
-    # Add epoch number
-    epoch_val_metrics['epoch'] = epoch
-    
-    # Append to validation losses
-    for key, value in epoch_val_metrics.items():
-        # 
+        batch_size,
+        final=False
+    ):
+    """Evaluate model during training and log results."""
 
-        if type(value) is torch.Tensor:
-            if value.shape[0] > 1:
-                value = value.detach().cpu().numpy()
-
-        val_losses[key].append(value)
-
-
-def evaluate_final_model(trainer, test_buffer, config_manager):
-    """Evaluate final model on test set."""
+    val_losses = defaultdict(list)
+    val_neuron_stats = defaultdict(list)
+    val_advantages = defaultdict(list)
     
-    # Evaluate on full test set (no sample limit)
-    test_metrics = evaluate_model(
-        trainer,
-        test_buffer,
-        config_manager,
-        max_samples=None,
-        compute_survival_metrics_flag=True, 
-        return_full_curves=True
-    )
+    for batch_idx, batch in enumerate(val_buffer):      
+        if not final:
+            if batch_idx * batch_size >= 50000:  # Limit validation to 5000 samples for speed, make this a variable
+                break
+       
+        batch_losses, _, neuron_stats = trainer.evaluate(batch)
+
+        # Create pairs of (incoming_batch_data, target_epoch_container)
+        metric_pairs = [
+            (batch_losses, val_losses),
+            (neuron_stats, val_neuron_stats),
+        ]
+
+        # Clean, single loop to add the prefix and append values
+        for batch_dict, epoch_dict in metric_pairs:
+            for key, value in batch_dict.items():
+                new_key = f"val/{key}"
+                
+                # If your container uses a standard dict, initialize the list if it's new
+                if new_key not in epoch_dict:
+                    epoch_dict[new_key] = []
+                    
+                epoch_dict[new_key].append(value)
+            
+        # A list of your actual dictionary variables to process in place
+        val_containers = [val_losses, val_neuron_stats]
+
+    for epoch_dict in val_containers:
+        # 1. Overwrite the lists of batch values with their single calculated mean
+        for key, list_of_values in epoch_dict.items():
+            epoch_dict[key] = float(np.mean([
+                v.item() if hasattr(v, "item") else v 
+                for v in list_of_values
+            ]))
+            
+        # 2. Add the epoch marker directly to this specific dictionary
+        epoch_dict["epoch"] = epoch
+        
+        # 3. Log it immediately to W&B
+        wandb.log(epoch_dict)
     
-    logger.info(f"Final test metrics: {test_metrics}")
+    return val_losses, val_neuron_stats
     
-    return test_metrics
+    
+    
+    
+    
+    
+
+
+# def evaluate_final_model(trainer, test_buffer, config_manager):
+#     """Evaluate final model on test set."""
+    
+#     # Evaluate on full test set (no sample limit)
+#     test_metrics = evaluate_model(
+#         trainer,
+#         test_buffer,
+#         config_manager,
+#         max_samples=None,
+#         compute_survival_metrics_flag=True, 
+#         return_full_curves=True
+#     )
+    
+#     logger.info(f"Final test metrics: {test_metrics}")
+    
+#     return test_metrics
 
 
 def check_improvement(best_val_loss, current_val_loss, early_stopping, change_direction='decrease'):
@@ -959,98 +990,6 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
     return best_trainer, best_hyperparams, training_scores_best, val_scores_best, n_epochs_best, raw_grad_norms_best
 
 
-def optimize_hyperparameters_cv(
-    train_dataset, 
-    config_manager,
-    n_inner_folds=None
-    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]], List[int]]:
-    """Inner CV loop for hyperparameter optimization."""
-    
-    loss_metric = config_manager.training_config['loss_metric'] # e.g. actor loss, critic loss etc, depends on algorithm
-
-    ################################ create hyperparameter space ################################
-    # the hyperparameter space to search consists of the parameters that are lists 
-    # in config_manager.training_config
-    hyperparameter_space = get_hyperparameter_space(config_manager)
-
-    ############################ initialize best_val_score #############################
-    # used to select best hyperparameters
-    best_val_loss = float('inf') 
-    
-    ##################### loop through hyperparameter combinations #####################
-    logger.info(f"Starting hyperparameter optimization with {config_manager.n_search_iterations} iterations...")
-    
-    for i in range(config_manager.n_search_iterations):
-        ################# select hyperparameters randomly #################
-        current_params = select_hyperparameters_randomly(
-            hyperparameter_space, config_manager
-        )       
-        logger.info(f"Testing hyperparameters {i+1}/{config_manager.n_search_iterations}: {current_params}")
-        
-        # create storage for validation, training scores, and n_epochs
-        n_inner_folds_to_run = config_manager.cv_config.get('n_inner_to_run', n_inner_folds)
-        inner_training_scores = [None] * n_inner_folds_to_run
-        inner_val_scores = [None] * n_inner_folds_to_run
-        inner_n_epochs = [None] * n_inner_folds_to_run        
-
-        ################# Inner CV evaluation for testing hyperparameters #################       
-        kf_inner = KFold(n_splits=n_inner_folds, shuffle=True, 
-                         random_state=config_manager.data_config["seed"])        
-        
-        for inner_fold, (inner_train_id, inner_val_id) in enumerate(kf_inner.split(train_dataset.encounter_ids())):
-            if inner_fold >= config_manager.cv_config.get('n_inner_to_run', n_inner_folds):
-                logger.info(f"  Skipping inner fold {inner_fold+1} as per n_inner_to_run setting.")
-                continue  # Skip extra inner folds if specified
-            
-            logger.info(f"  Inner fold {inner_fold+1}/{n_inner_folds}")
-            
-            # create train and val processors with shared normalization
-            inner_train_processor, inner_val_processor, _ = create_processors(
-                train_dataset, inner_train_id, inner_val_id, config_manager
-            )
-           
-            ######################### Train with current hyperparameters ########################
-            inner_training_scores[inner_fold], \
-            inner_val_scores[inner_fold], \
-            inner_n_epochs[inner_fold],\
-                _ = train_with_hyperparameters(
-                inner_train_processor, 
-                inner_val_processor, 
-                config_manager, 
-                current_params
-            )                        
-            
-            current_val_loss = min(inner_val_scores[inner_fold][loss_metric])
-            logger.info(f"  Inner fold {inner_fold+1} val loss: {current_val_loss:.4f}")
-        
-        ###################### Evaluate and update best hyperparameters ########################
-        overall_val_loss = np.mean([min(score[loss_metric]) for score in inner_val_scores])
-        logger.info(f" Overall mean validation {loss_metric}: {overall_val_loss:.4f}")
-        
-        ################ INSERT EARLY STOPPING LOGIC HERE ####################
-        early_stopping = get_early_stopping_config(config_manager)
-        if loss_metric in ['weighted_multi_C']:
-            # for c-index, higher is better
-            improvement, best_val_loss = check_improvement(best_val_loss, overall_val_loss, early_stopping, change_direction='increase')
-        else:
-            # for loss, lower is better
-            improvement, best_val_loss = check_improvement(best_val_loss, overall_val_loss, early_stopping, change_direction='decrease')
-        
-        if early_stopping['patience_counter'] == 0:
-            logger.info(f" New best hyperparameters found! (improvement: {improvement:.4f})\n")
-            best_val_loss = overall_val_loss
-            best_hyperparams = current_params.copy()
-            training_scores_best = inner_training_scores
-            val_scores_best = inner_val_scores
-            n_epochs_best = inner_n_epochs
-        else:
-            logger.info(f"No improvement (current best: {best_val_loss:.4f})\n")
-        
-    ############################ Summarize hyperparameter optimization results #############################
-    logger.info(f"Best hyperparameters after {config_manager.n_search_iterations} iterations: {best_hyperparams}")
-    logger.info(f"\n                 Hyperparameter optimization complete!")
-
-    return best_hyperparams, training_scores_best, val_scores_best, n_epochs_best
 
 
 def get_hyperparameter(hyperparams, config_manager, param_name):
@@ -1111,13 +1050,27 @@ def train_with_hyperparameters(
     logger.info(f"Training with early stopping (patience={early_stopping['patience']}, eval_freq={early_stopping['eval_freq']}, min_delta={early_stopping['min_delta']})")
     
     # Use defaultdict to automatically create new keys
-    training_losses = defaultdict(list) 
-    raw_grad_norms = defaultdict(list)
+    # training_losses = defaultdict(list) 
+    # raw_grad_norms = defaultdict(list)
 
     # Evaluate before training starts to get initial validation loss
-    val_losses = defaultdict(list)
+    # val_losses = defaultdict(list)
     # evaluate before any training for epoch 0
-    evaluate_during_training(trainer, -1, val_test_buffer, val_losses, config_manager)   
+    val_losses, val_neuron_stats = evaluate_during_training(trainer, -1, val_test_buffer, batch_size, final=False)   
+
+    training_metrics = TrainingMetrics()
+    training_metrics.append_epoch_metrics(
+        val_losses=val_losses,
+        val_neuron_stats=val_neuron_stats,
+    )
+
+
+
+ ###########################################################
+ ######################################################
+################################################
+#########################################################
+
     
     ############################### Training loop #################################
     testing = getattr(config_manager, 'testing', False)

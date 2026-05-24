@@ -252,11 +252,6 @@ class BehaviouralCloneTransformer(nn.Module):
         return total_norm
 
 
-
-
-
-
-
 class BCTransformerTrainer:
     def __init__(
         self,
@@ -322,9 +317,16 @@ class BCTransformerTrainer:
         # Backward pass - compute gradients
         loss.backward()
 
-        # 1. Capture the raw norm for logging
-        raw_grad_norm = get_grad_norm(self.model)
+        # capture gradient norms
+        grad_norm = {"raw_grad_norm": self.model.get_grad_norm()}
 
+        # determine whether to clip gradients based on grad_clip value
+        grad_norm['was_clipped'] = 1.0 if (self.grad_clip and grad_norm['raw_grad_norm'] > self.grad_clip) else 0.0
+
+        # update the moving average of the clipping binary
+        self.clip_fraction_ema = self.ema_alpha * self.clip_fraction_ema + (1 - self.ema_alpha) * grad_norm['was_clipped']
+        grad_norm['clip_fraction_ema'] = self.clip_fraction_ema
+        
         # Gradient clipping if specified
         if self.grad_clip is not None:
             torch.nn.utils.clip_grad_norm_(
@@ -342,7 +344,7 @@ class BCTransformerTrainer:
         }
 
         
-        return loss_dict, None, raw_grad_norm
+        return loss_dict, None, grad_norm
     
 
     def evaluate(self, batch: TensorBatch, epoch: int):
@@ -378,7 +380,7 @@ class BCTransformerTrainer:
             "mse_loss": loss.item()
             }
 
-        return loss_dict
+        return loss_dict, neuron_stats
 
 
 def get_trainer(

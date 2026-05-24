@@ -64,13 +64,15 @@ def parse_arguments():
     parser.add_argument('--model_type', 
                         default=None, 
                         choices=['xgbclassifier', 'xgbregressor', 'dynamic_deephit',
-                                 'dynamic_deephit_transformer', 'dynamic_deephit_prediction_all'], 
+                                 'dynamic_deephit_transformer', 'dynamic_deephit_prediction_all',
+                                'bc_transformer'], 
                         help='Model type to train or predict with') # both refers to generating predictions from both types
     
     parser.add_argument('--prediction_type', 
                         default=None, 
-                        choices=['mortality_all', 'mortality_24', 'discharge_mortality', 'discharge_mortality_tte'], 
-                        help='type of prediction to make (default: mortality_all)') 
+                        choices=['mortality_all', 'mortality_24', 'discharge_mortality', 
+                                 'discharge_mortality_tte', 'action'], 
+                            help='type of prediction to make (default: mortality_all)') 
 
     parser.add_argument('--mode', type=str, default='single_fold',
                         choices=['save_dataframe', 'single_fold', 'aggregate', 'plot_shap', 'plot_model_results', 
@@ -252,10 +254,12 @@ def main():
     
     # Initialize config manager, it holds paths and environment info
     config_manager = ConfigManager(args)
+    if config_manager.model_type == "dynamic_deephit" or config_manager.model_type == "dynamic_deephit_transformer" or \
+        config_manager.model_type == "dynamic_deephit_prediction_all" or config_manager.model_type == "bc_transformer": 
+        from ...supervised_learning.training import outer_training_loop, development_training_loop, single_split_training
 
     if config_manager.model_type == "dynamic_deephit" or config_manager.model_type == "dynamic_deephit_transformer" or \
-        config_manager.model_type == "dynamic_deephit_prediction_all": 
-        from ...supervised_learning.training import outer_training_loop, development_training_loop, single_split_training
+        config_manager.model_type == "dynamic_deephit_prediction_all":         
         from ...supervised_learning.models.dynamic_deephit import make_mixed_resolution_time_bins
         from ...supervised_learning.predict import predict, plot_evaluation, predict_all, plot_random_predictions
 
@@ -270,11 +274,13 @@ def main():
     
     elif args.mode == 'single_split':
         if (config_manager.model_type == "dynamic_deephit" or config_manager.model_type == "dynamic_deephit_transformer" or \
-            config_manager.model_type == "dynamic_deephit_prediction_all"): 
-                    
+            config_manager.model_type == "dynamic_deephit_prediction_all" or config_manager.model_type == "bc_transformer"): 
             # set training config
             config_manager.set_training_config()
-            
+
+        if (config_manager.model_type == "dynamic_deephit" or config_manager.model_type == "dynamic_deephit_transformer" or \
+            config_manager.model_type == "dynamic_deephit_prediction_all"): 
+                                
             # set max encounter length as 2 months
             max_encounter_length = 24 * 60  # hours - CONFIRM THIS IS CODED IN THE DATA PREP
             
@@ -302,9 +308,7 @@ def main():
         
             results = single_split_training(config_manager)
 
-
-        
-        
+       
         elif args.experiment_variant == 'prediction' and args.cohort == 'all':
             """
             this is for generating predictions on the MIMIC IV dataset with a single train/val/test split.

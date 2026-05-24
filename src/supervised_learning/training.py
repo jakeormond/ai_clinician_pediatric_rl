@@ -1,5 +1,4 @@
-import os
-import yaml
+
 import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 from collections import defaultdict
@@ -7,15 +6,9 @@ from dataclasses import asdict
 from pathlib import Path
 import json
 import random
-import itertools
-import joblib
-import glob
-import copy
 import numpy as np
 import pandas as pd
 import pickle
-import shap
-import wandb
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, GridSearchCV, GroupKFold, RandomizedSearchCV
@@ -30,17 +23,16 @@ import xgboost as xgb
 import torch
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
-# from .evaluation import calculate_metrics
-# from .plotting import create_all_plots, create_aggregated_shap_plots
-from ..utils.logging_utilities import wandb_init
+from ..utils.logging_utilities import wandb_init, generate_run_seed, get_job_id
 from ..data.data_processor import DataProcessor
 from ..data.data_processor_for_shards import ShardProcessor
-# from .dataset import Dataset
 from ..rl.replay_buffer import DynamicDeepHit_Lazy, worker_init_fn, DynamicDeepHit_InMemory, DynamicDeepHitTransformerDataset
 
 from ..utils.utilities import set_seed
 from ..rl.plotting import plot_c_and_brier_over_time, plot_auroc_prc_curves
 from .dynamic_deephit_evaluation import compute_survival_metrics
+
+
 
 import logging
 logger = logging.getLogger(__name__)
@@ -108,6 +100,68 @@ def average_dicts(list_of_dicts):
     averages = {k: sum(v_list) / len(v_list) for k, v_list in values.items()}
     return averages
 
+
+
+class TrainingMetrics:
+    def __init__(self):
+        self._metric_keys = [
+            "batch_training_losses",
+            "epoch_training_losses",
+            "val_losses",
+            "final_val_losses",
+            "batch_training_grad_norms",
+            "epoch_training_grad_norms",
+            "val_neuron_stats",
+            "final_val_neuron_stats",
+        ]
+
+        # 2. Dynamically initialize them as empty defaultdicts
+        for key in self._metric_keys:
+            setattr(self, key, defaultdict(list))
+
+    def append_epoch_metrics(self, **kwargs) -> None:
+        """Accepts any metrics container as a keyword argument
+        and dynamically appends its contents to the matching attribute.
+        """
+        for container_name, incoming_dict in kwargs.items():
+            # Check if this is a container we manage and that it actually contains data
+            if incoming_dict is None or container_name not in self._metric_keys:
+                continue
+
+            # Safety check specifically for the 'advantages' edge case
+            # (Checking if the dictionary is empty or has uninitialized keys)
+            if "advantages" in container_name and (
+                not incoming_dict or len(list(incoming_dict.values())[0]) == 0
+            ):
+                continue
+
+            # Target the matching internal defaultdict attribute
+            target_storage = getattr(self, container_name)
+
+            # Append all values cleanly
+            for key, value in incoming_dict.items():
+                target_storage[key].append(value)
+
+    def get_current_epoch_val_loss(self, loss_key):
+        if self.val_losses[f"val/{loss_key}"]:
+            return self.val_losses[f"val/{loss_key}"][-1]
+        else:
+            return None
+
+    def get_current_epoch_train_loss(self, loss_key):
+        if self.epoch_training_losses[f"train/epoch_{loss_key}"]:
+            return self.epoch_training_losses[f"train/epoch_{loss_key}"][-1]
+        else:
+            return None
+
+    def get_current_epoch_grad_norm(self):
+        if self.epoch_training_grad_norms:
+            return {key: values[-1] for key, values in self.epoch_training_grad_norms.items()}
+        else:
+            return None
+
+
+
 def get_fixed_hyperparameters(config_manager):
     """Extracts fixed hyperparameters from config_manager."""
     hyperparameters = config_manager.training_config.copy()
@@ -165,11 +219,12 @@ def create_buffer(processor, batch_size, config_manager, shuffle=True):
         # buffer = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
         raise NotImplementedError("DynamicDeepHitDataset is not implemented for CHOC dataset. Only DynamicDeepHitTransformerDataset is implemented for CHOC.")
 
-    elif config_manager.hospital == 'choc' and config_manager.model_type != 'dynamic_deephit_transformer':
+    elif config_manager.hospital == 'choc' and (config_manager.model_type != 'dynamic_deephit_transformer' and config_manager.model_type != 'bc_transformer'):
         raise NotImplementedError("Only dynamic_deephit model is implemented for CHOC dataset.")
 
     elif (config_manager.hospital == 'mimic_iv' or config_manager.hospital == 'choc') and \
-        (config_manager.model_type == 'dynamic_deephit_transformer' or config_manager.model_type == 'dynamic_deephit'):
+        (config_manager.model_type == 'dynamic_deephit_transformer' or config_manager.model_type == 'dynamic_deephit' or 
+         config_manager.model_type == 'bc_transformer'):
         dataset = DynamicDeepHitTransformerDataset(processor, config_manager)
         buffer = DataLoader(
             dataset, 
@@ -220,7 +275,7 @@ def create_trainer(train_processor, training_dataset, hyperparams, config_manage
     # feature_dim = train_processor.dynamic_deephit_dataset["features"].shape[2]
     feature_dim = train_processor.dynamic_deephit_dataset['feature_dim']
     if config_manager.model_type == 'bc_transformer':
-        num_targets = 2 # hardcoded for now
+        num_targets = len(hyperparams['actions']) # hardcoded for now
     else:
         num_targets = len(config_manager.training_config['actions']) # hardcode for now
 
@@ -496,7 +551,7 @@ def single_split_training(config_manager):
         val_buffer, 
         config_manager
     )
-    
+   
     logger.info(f"Final val metrics: {final_val_losses}")
 
     # Save final model if this is the final training
@@ -1011,20 +1066,35 @@ def train_with_hyperparameters(
         val_test_processor, 
         config_manager, 
         hyperparams, 
-        n_epochs = None, 
-        final_model=False
+        search_iteration=None
     ):
     """Train model with specific hyperparameters and return validation score."""
     
-    if n_epochs is None:
-        n_epochs = config_manager.n_epochs
+    n_epochs = config_manager.n_epochs
 
     batch_size = get_hyperparameter(hyperparams, config_manager, 'batch_size')
     loss_metric = config_manager.training_config['loss_metric']
 
+    # get job_id and seed
+    job_id = get_job_id(config_manager)
+    seed = generate_run_seed(job_id, search_iteration)
+    hyperparams['seed'] = seed
+    config_manager.seed = seed
+    set_seed(seed)
+
+    # initialize wandb for this training run
+    run = wandb_init(hyperparams, job_id)
+
+    hyperparams['wandb_id'] = run.id if run is not None else None
+    print(f"W&B run initialized with ID: {hyperparams['wandb_id']}")
+
     # Create replay buffers
     training_buffer, training_dataset = create_buffer(train_processor, batch_size, config_manager, shuffle=True)
     val_test_buffer, _ = create_buffer(val_test_processor, batch_size, config_manager, shuffle=False)
+    
+    # from RL
+    # # get total number of steps for scheduler if needed
+    # hyperparams['total_steps'] = n_epochs * len(training_buffer)
     
     # create trainer
     trainer = create_trainer(train_processor, training_dataset, hyperparams, config_manager)

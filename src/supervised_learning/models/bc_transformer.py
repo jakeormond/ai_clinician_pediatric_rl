@@ -147,19 +147,21 @@ class BehaviouralCloneTransformer(nn.Module):
         # FEATURE DROPOUT
         # Apply Feature (Column) Dropout first
         x = self.feature_dropout(x)
-               
+        # 1. Input Projection
+        x = self.input_projection(x) # [B, T, d_model]
+
         # 3. Transformer Encoder
         # The attention mask (src_key_padding_mask) needs to be passed to the encoder.
         # PyTorch Transformer expects mask to be a boolean tensor where True means to IGNORE the key.
         causal_mask = self.causal_mask[:seq_len, :seq_len].to(x.device).bool()
-      
+        
         if padding_mask is not None:
             # Mask should be True where padding exists (you should ensure your padding logic creates this mask)
             output = self.transformer_encoder(
                 x, 
                 mask=causal_mask, # Causal Mask
                 # src_key_padding_mask=padding_mask
-                src_key_padding_mask=padding_mask.bool() if padding_mask is not None else None
+                src_key_padding_mask=~padding_mask.bool() if padding_mask is not None else None
             ) # [B, T, d_model]
         else:
             output = self.transformer_encoder(
@@ -183,22 +185,76 @@ class BehaviouralCloneTransformer(nn.Module):
             pred_dose = head(latent_features) 
             predicted_actions.append(pred_dose)
 
-            # Concatenate the list of [B, 1] tensors into a single [B, action_dims] tensor
-            predicted_actions = torch.cat(predicted_actions, dim=-1)
+        # Concatenate the list of [B, 1] tensors into a single [B, action_dims] tensor
+        predicted_actions = torch.cat(predicted_actions, dim=-1)
 
 
         # Return both the bounded predictions (for the loss) and the raw features (for the Critic)
         return predicted_actions, latent_features
+    
+    def generate_square_subsequent_mask(self, sz: int) -> torch.Tensor:
+        """Generates an upper-triangular matrix of -inf, which prevents attention to future positions."""
+        # PyTorch helper function creates a matrix where T means blocked
+        mask = torch.triu(torch.ones(sz, sz), diagonal=1).bool()
+        return mask
+
+        
+    @torch.no_grad()
+    def get_neuron_stats(self, x: torch.Tensor, padding_mask: torch.Tensor = None):
+        self.eval()
+        stats = {}
+        
+        # 1. Forward pass to get the pooled latent embedding vector
+        # shape: [Batch, d_model] (e.g., [B, 128])
+        latent_features = self.get_behavioral_embedding(x, padding_mask)
+        
+        # 2. Check for Token Uniformity (Is our 128-D embedding space alive?)
+        # Calculate variance across the batch for each hidden dimension
+        latent_vars = torch.var(latent_features, dim=0)
+        
+        # If variance across the batch is near 0, the transformer is outputting 
+        # the exact same embedding for every patient (Representational Collapse)
+        pct_dead_dimensions = (latent_vars < 1e-5).float().mean().item() * 100
+        stats["latent_space_dead_dim_pct"] = pct_dead_dimensions
+        
+        # Average variance across the embedding space (higher is generally healthier)
+        stats["latent_space_avg_variance"] = latent_vars.mean().item()
+
+        # 3. Audit the final Dosing Regression Heads (These DO use ReLU!)
+        # You can loop through your multi-action policy heads cleanly
+        for head_idx, head in enumerate(self.policy_heads):
+            # We can trace through the internal layers of each Sequential head
+            head_x = latent_features
+            relu_idx = 0
+            for layer in head:
+                head_x = layer(head_x)
+                if isinstance(layer, nn.ReLU):
+                    # For standard ReLU, being inactive means outputting exactly 0
+                    pct_inactive = (head_x == 0).float().mean().item() * 100
+                    stats[f"head_{head_idx}_relu_{relu_idx}_inactive_pct"] = pct_inactive
+                    
+                    # Check for dead neurons in the head's dense mapping
+                    layer_vars = torch.var(head_x, dim=0)
+                    pct_dead = (layer_vars < 1e-6).float().mean().item() * 100
+                    stats[f"head_{head_idx}_layer_{relu_idx}_dead_pct"] = pct_dead
+                    relu_idx += 1
+                    
+        return stats
+    
+
+    def get_grad_norm(self):
+        total_norm = 0
+        for p in self.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.detach().norm(2)
+                total_norm += param_norm.item() ** 2
+        total_norm = total_norm ** 0.5
+        return total_norm
 
 
-def get_grad_norm(model):
-    total_norm = 0
-    for p in model.parameters():
-        if p.grad is not None:
-            param_norm = p.grad.detach().data.norm(2)
-            total_norm += param_norm.item() ** 2
-    total_norm = total_norm ** 0.5
-    return total_norm
+
+
+
 
 
 class BCTransformerTrainer:
@@ -312,6 +368,8 @@ class BCTransformerTrainer:
             criterion = nn.MSELoss()
 
             loss = criterion(predicted_actions, actions)     
+
+            neuron_stats = self.model.get_neuron_stats(X, padding_mask=mask)
                 
         # set model back to train mode
         self.model.train()
@@ -329,17 +387,17 @@ def get_trainer(
         hyperparams, 
         train_processor, # don't need this 
         training_dataset,
+        num_targets=2
         ):
 
     learning_rate = float(hyperparams['learning_rate'])
-    n_time_bins = len(config_manager.time_bins) - 1
 
     bc_model = BehaviouralCloneTransformer(
         feature_dim=feature_dim+1, # +1 for the local time feature we add in the replay buffer
         d_model=hyperparams['d_model'],               # e.g., 128 or 256
         nhead=hyperparams['nhead'],                   # e.g., 4 or 8
         num_encoder_layers=hyperparams['n_layers'],   # e.g., 3 or 6
-        n_actions=len(hyperparams['actions']),     # e.g., 2 for binary actions, or more for multi-class
+        n_actions=num_targets,     # e.g., 2 for binary actions, or more for multi-class
         dropout=hyperparams['dropout'],
         feature_dropout_p=hyperparams['feature_dropout_p'],
         ff_factor=hyperparams['ff_factor'],
@@ -381,7 +439,7 @@ def get_trainer(
             bc_model,
             bc_optimizer,
             device=config_manager.training_config['device'],
-            loss_fn=dynamic_deephit_loss,
+            loss_fn=bc_loss,
             grad_clip = hyperparams['grad_clip'],
             scheduler=scheduler,
             verbose=True, 
@@ -393,7 +451,7 @@ def get_trainer(
 
 
 
-def bc_cloning_loss(
+def bc_loss(
         predicted_actions, 
         clinician_actions
         ):
@@ -416,73 +474,10 @@ def bc_cloning_loss(
     We're not using a mask for the model, because we're padding with data, not zeros.
 
     """
-    # before flattening tensors, deal with predictions, as they have one less timestep per window
-    targets_shifted = X[:, predict_horizon:, :]  # Shifted targets for prediction loss
-    mask_shifted = mask[:, :-predict_horizon]    # Shifted mask for prediction loss
-    valid_preds = predictions[mask_shifted]  # Filter out padded predictions
-    valid_targets = targets_shifted[mask_shifted]  # Corresponding valid targets
-    valid_targets = valid_targets[:, predict_covariates]  # Select only predicted covariates
-
-    # flatten tensors where needed
-    # 2. Reshape to [B * T_cap, num_risks, num_time_bins] for the loss function
-    #    (Assuming your existing loss function expects a flattened batch/time dimension)
-    if final_timestep_only:
-        # only keep the final timestep's logits for each patient
-        logits = logits[:, -1:, :, :]  # [B, 1, R, D]
-        time_to_event = time_to_event[:, -1:]  # [B]
-        event_label = event_label      # [B]
-        mask = mask[:, -1:]            # [B, 1]
-    
-    B, T_cap, R, D = logits.shape
-    logits_flat = logits.reshape(B * T_cap, R, D)
-    
-    # 3. Create flattened versions of the targets and masks
-    time_to_event_flat = time_to_event.reshape(B * T_cap)
-    # if event_label has shape [B], we need to expand it to [B, T_cap] first
-    if event_label.dim() == 1:
-        event_label = event_label.unsqueeze(1).expand(-1, T_cap)  # [B, T_cap]
+    criterion = nn.MSELoss()
+    loss = criterion(predicted_actions, clinician_actions)    
    
-    event_label_flat = event_label.reshape(B * T_cap)
-    mask_flat = mask.reshape(B * T_cap) # This is the key for excluding padded steps
-
-    # --- 1. Filter Padded Timesteps ---
-    # We only want to compute loss for timesteps that are NOT padding.
-    # mask is False for valid steps.
-    valid_indices = mask_flat
-
-    # Filter all relevant tensors to keep only the valid "active" hours
-    v_logits = logits_flat[valid_indices]    
-    v_time_to_event = time_to_event_flat[valid_indices]
-    v_event_label = event_label_flat[valid_indices]
-
-    # --- 2. Compute DeepHit Component Losses ---
-    # Because we filtered, these functions now see a "batch" of size N_valid
-    # lik_loss = log_likelihood_loss(v_logits, v_time_to_event, v_event_label, no_censoring)
-    lik_loss = gaussian_log_likelihood_loss(v_logits, v_time_to_event, v_event_label, no_censoring=True, g_sigma_scheduler=g_sigma_scheduler, epoch=epoch)
-
-    
-    classification_loss = event_classification_loss(v_logits, v_event_label, no_censoring)
-    
-    # Ranking loss evaluates pairs. With multi-timestep, it compares risk 
-    # across different patients AND different hours within the stay.
-    rank_loss = ranking_loss(v_logits, v_time_to_event, v_event_label, no_censoring=no_censoring, sigma=sigma)
-
-    # --- 3. Auxiliary Prediction Loss ---
-    # If you are doing step-ahead covariate prediction, you need to filter 
-    # the feature tensors as well.      
-    if alpha_pred > 0 and len(predict_covariates) > 0:
-        pred_loss = prediction_loss(
-                valid_targets,
-                valid_preds,  
-                physiological_feature_type
-                ) 
-    else:
-        pred_loss = torch.tensor(0.0, device=logits.device)
-
-    # --- 4. Combine ---
-    loss = lik_loss + alpha_class * classification_loss + alpha_rank * rank_loss + alpha_pred * pred_loss
-    
-    return loss, lik_loss, classification_loss, rank_loss, pred_loss
+    return loss, 
 
 
 class G_SigmaScheduler:
@@ -502,220 +497,4 @@ class G_SigmaScheduler:
 
         sigma = self.start_g_sigma * (self.end_g_sigma / self.start_g_sigma) ** (epoch / self.total_epochs)
         return sigma
-
-
-
-def gaussian_log_likelihood_loss(logits, time_to_event, event_label, g_sigma_scheduler=None, epoch=None, no_censoring=True):
-    """
-    logits: (B, K, T) - K event types, T time bins
-    time_to_event: (B,) - Long tensor of ground truth bins
-    event_label: (B,) - Long tensor of event types (1 to K)
-    sigma: Float - Controls the 'spread' of the reward. 
-                   Higher sigma = more credit for near misses.
-    """
-    B, K, T = logits.shape
-    g_sigma = g_sigma_scheduler.get_sigma(epoch) if g_sigma_scheduler and epoch is not None else 1.0
-    
-    # Adjust labels if 1-indexed
-    event_label = event_label - 1 if no_censoring else event_label   
-    
-    # 1. Create a coordinate grid for the T time bins (0, 1, 2, ..., T-1)
-    # Shape: (T,)
-    time_bins = torch.arange(T, device=logits.device).float()
-    
-    # 2. Calculate the Gaussian "bump" for the correct event head
-    # We want (B, T) where each row is a Gaussian centered at time_to_event[i]
-    # Formula: exp(-0.5 * ((bin - target) / sigma)^2)
-    diff = time_bins.view(1, T) - time_to_event.view(B, 1).float()
-    target_dist = torch.exp(-0.5 * (diff / g_sigma)**2)
-    
-    # Normalize so each row sums to 1.0 (to make it a valid probability distribution)
-    target_dist = target_dist / (target_dist.sum(dim=1, keepdim=True) + 1e-8)
-    
-    # 3. Place these bumps into a full (B, K, T) target tensor
-    # Initialize with zeros
-    full_target = torch.zeros_like(logits)
-    
-    # Scatter the Gaussian bumps into the correct event channel (k) for each batch
-    # This ensures the model is penalized for picking the wrong event type AND the wrong time
-    for i in range(B):
-        full_target[i, event_label[i], :] = target_dist[i]
-    
-    # 4. Calculate Loss
-    # Flatten both to (B, K*T)
-    full_target_flat = full_target.view(B, K * T)
-    logp_flat = F.log_softmax(logits.view(B, K * T), dim=1)
-    
-    # Cross Entropy with soft targets: -sum(target * log_prob)
-    # This naturally rewards 'close' predictions because log_prob will be 
-    # weighted by the Gaussian values in target_dist.
-    lik_loss = -(full_target_flat * logp_flat).sum(dim=1).mean()
-    
-    return lik_loss
-
-
-def log_likelihood_loss(logits, time_to_event, event_label, no_censoring=True):
-    B, K, T = logits.shape # note that T is num_time_bins here, that may not be consistent with the model naming where T may be sequence length
-
-    # subtract 1 from event_label if no censoring
-    event_label = event_label -1 if no_censoring else event_label   
-
-    # --- 1) Likelihood loss (use log_softmax over flattened K*T) ----------------
-    logits_flat = logits.view(B, K * T)                # (B, K*T)
-    logp_flat = F.log_softmax(logits_flat, dim=1)      # (B, K*T)
-    idx = (event_label * T + time_to_event).unsqueeze(1) # (B,1) - this gives the index of the actual event label - time combination
-    logp_flat_sel = logp_flat.gather(1, idx.long()).squeeze(1) # (B,) - take the log prob for the actual event label - time combination
-    lik_loss = - logp_flat_sel.mean() # the negative of which can be used as the loss (log prob close to 0 mean highs high prob, 
-    # log prob very negative means low prob   
-    return lik_loss
-
-
-def event_classification_loss(logits, event_label, no_censoring=True):
-
-    # subtract 1 from event_label if no censoring
-    event_label = event_label -1 if no_censoring else event_label   
-    
-    # aggregate over time to get event-level logits
-    # event_logits = logits.sum(dim=2)           # [B, K]
-    event_logits = torch.logsumexp(logits, dim=2)  # [B, K]
-    # event_logp = F.log_softmax(event_logits, dim=1)
-    # classification_loss = F.nll_loss(event_logp, event_label.long())                      
-    classification_loss = F.cross_entropy(event_logits, event_label.long())
-    
-    return classification_loss
-
-
-def ranking_loss(logits, time_to_event, event_label, no_censoring=True, sigma=None, pair_sample_frac=0.5):
-
-    B, K, T = logits.shape
-    device = logits.device
-
-    # subtract 1 from event_label if no censoring
-    event_label = event_label -1 if no_censoring else event_label   
-    
-    # --- 2) Ranking loss --------------------------------------------------------
-    # compute cumulative incidence S_k(t) = sum_{s<=t} p_k(s)
-    logits_flat = logits.view(B, K * T)                # (B, K*T)
-    logp_flat = F.log_softmax(logits_flat, dim=1)      # (B, K*T)
-    logp = logp_flat.view(B, K, T)     
-    p = logp.exp()                                     # (B,K,T) - probabilities
-    S = torch.cumsum(p, dim=2)                         # (B,K,T) - cumulative incidence for each event class
-
-    # We'll form pairwise differences only for pairs where i has event k and t_i < t_j
-    # Create index tensors for pairwise operations
-    # We vectorize by creating all pairs (i,j) in batch: shape (B,B)
-    # mask_ij_k: True where pair (i,j) is comparable for cause k.
-    # To limit complexity, we optionally sample pairs randomly.
-    # Build matrices for t and k comparisons:
-    t_i = time_to_event.view(B, 1)   # (B,1)
-    t_j = time_to_event.view(1, B)   # (1,B)
-
-    # comparable if k_i == k (i experienced cause k), and t_i < t_j (i earlier than j)
-    # We'll loop over causes to get S_k at t_i for i and at t_i for j (note: compare at time t_i)
-    rank_loss = torch.tensor(0.0, device=device)
-    total_pairs = 0
-
-    for k in range(K):
-        # mask of i samples with event==k
-        mask_i_k = (event_label == k)                 # (B,)
-        event_indices = torch.where(mask_i_k)[0]      # indices of samples with event k
-        
-        if len(event_indices) == 0:
-            continue
-
-        if len(event_indices) > 12000:
-            event_indices = event_indices[torch.randperm(len(event_indices))[:12000]]
-        n_event = len(event_indices)
-
-        # Gather CIF values at t_i for all samples
-        # cif_k has shape (B, T), we want to gather at position t_i for each sample
-        cif_k = S[event_indices, k, :]  # (B, T)
-
-        # Build matrices for t and k comparisons:
-        t_i_k = t_i[event_indices]   # (N_k,1)
-        t_j_k = t_j[:, event_indices]
-        mask_time = (t_i_k < t_j_k)  
-        num_pairs = mask_time.sum().item()
-        if num_pairs == 0:
-            continue
-
-        # Create gathering indices: for each sample i, get cif at all t_i values
-        # We need to broadcast this operation
-        t_i_expand = t_i_k.expand(n_event, n_event)  # (B, B) - each row i has t_i repeated
-        t_i_expand = t_i_expand.long()
-
-        # Gather: for each (i,j) pair, get CIF_j at time t_i
-        # This is a bit tricky - we need to use advanced indexing
-        event_indices_expanded = torch.arange(n_event, device=device).view(1, n_event).expand(n_event, n_event)
-        cif_at_ti = cif_k[event_indices_expanded, t_i_expand]  # (B, B)
-
-        risk_i = torch.diagonal(cif_at_ti, 0).unsqueeze(1)  # (B, 1) - diagonal elements
-        risk_j = cif_at_ti  # (B, B)
-
-        # Compute pairwise ranking loss: η(risk_i, risk_j) = exp(-(risk_i - risk_j) / sigma)
-        # We want risk_i > risk_j, so we penalize when risk_i <= risk_j
-        # pairwise_loss = torch.exp(-(risk_i - risk_j) / sigma)  # (B, B)
-        pairwise_loss = torch.log(1 + torch.exp(-(risk_i - risk_j)/sigma)) 
-        
-        # apply mask to loss
-        masked_loss = pairwise_loss * mask_time.float()
-        rank_loss += masked_loss.sum()
-        total_pairs += num_pairs
-        
-    if total_pairs > 0:
-        rank_loss = rank_loss / total_pairs
-    else:
-        rank_loss = torch.tensor(0.0, device=device)
-    
-    return rank_loss
-
-
-def prediction_loss(X, predictions, physiological_feature_type=None):
-    """
-    Compute the step-ahead prediction loss (L3 in DeepHit paper).
-    
-    Args:
-        predictions: [batch * seq_len-1, num_predict_covariates] - predicted next-step values
-        X: [batch * seq_len-1, feature_dim] - original input sequences
-        continuous_indices: list of indices (within predict_covariates) that are continuous
-                          (if None, assumes all are continuous)
-    
-    Returns:
-        loss: scalar prediction loss
-
-    NOTE: NEED TO IMPLEMENT PROPER ORDINAL LOSS
-    """
-    # Compute loss based on covariate type
-    binary_indices = [i for i, val in enumerate(physiological_feature_type) if val == 'binary']
-    continuous_indices = [i for i, val in enumerate(physiological_feature_type) if val in ['continuous', 'ordinal']]
-
-    # continuous - MSE
-    if len(continuous_indices) > 0:
-        continuous_loss = F.mse_loss(
-            predictions[:, continuous_indices],
-            X[:, continuous_indices],
-            reduction='none'
-        )  # [N, num_cont]
-    else:
-        continuous_loss = torch.zeros((predictions.shape[0], 0), device=predictions.device, dtype=predictions.dtype)
-
-    # binary - BCE with logits
-    if len(binary_indices) > 0:
-        target_binary = X[:, binary_indices]
-        binary_loss = F.binary_cross_entropy_with_logits(
-            predictions[:, binary_indices],
-            target_binary,
-            reduction='none'
-        )  # [N, num_bin]
-    else:
-        binary_loss = torch.zeros((predictions.shape[0], 0), device=predictions.device, dtype=predictions.dtype)
-
-    # Combine along feature dimension (last dim)
-    loss = torch.cat([continuous_loss, binary_loss], dim=-1)
-    
-    # Apply mask and compute mean   
-    total_loss = loss.sum()
-    n_timesteps = loss.shape[0] * loss.shape[1]
-    
-    return total_loss / (n_timesteps + 1e-8)
 

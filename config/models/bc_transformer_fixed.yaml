@@ -26,18 +26,10 @@ hidden_dim: 32  # Hidden dimension for all networks
 attn_hidden_dim: 32
 n_layers: 1
 
-loss_metric: "weighted_multi_C" # "combined_loss"  # Which metric to use for early stopping
+loss_metric: "mse" # "combined_loss"  # Which metric to use for early stopping
 max_val_samples: 5000  # Max samples to use for validation during training
 
 l1_lambda: 8e-06 # 1e-4  # L1 regularization weight for classification head
-
-alpha_class: 0.1
-alpha_rank: 2.0   # Weight for ranking loss
-alpha_pred: 1.0
-sigma: 0.5
-
-# gaussian sigma scheduling parameters
-start_sigma: 2.
 end_sigma: 0.7
 
 # learning rate scheduling parameters

@@ -53,6 +53,29 @@
         },
 
         {
+            "name": "choc_bc_cloning_fixed",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "supervised_learning",
+                "--model_type", "bc_transformer", 
+                "--prediction_type", "action",
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--search_variant", "fixed_hyperparameters",
+                "--final_timestep_only", "True",                
+                "--cohort", "all",
+                "--n_epochs", "100",
+                "--testing"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
             "name": "mimic_iv_gru_fixed",
             "type": "debugpy",
             "request": "launch",

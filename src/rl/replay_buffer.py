@@ -136,6 +136,7 @@ class DynamicDeepHitTransformerDataset(Dataset):
                     ind3 = self.feature_names.index(action + "_delta")
                     action_ind.append(ind3)
 
+            # SHOULD I INCLUDE ALL INTERVENTIONS HERE??????????????????????????
             self.response_zero_ind = np.sort(list(set(self.response_zero_ind) & set(action_ind)))
             self.carry_forward_ind = np.sort(list(set(self.carry_forward_ind) & set(action_ind)))
 

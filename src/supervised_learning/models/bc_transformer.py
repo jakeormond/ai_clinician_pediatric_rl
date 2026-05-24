@@ -380,7 +380,7 @@ class BCTransformerTrainer:
             "mse_loss": loss.item()
             }
 
-        return loss_dict, neuron_stats
+        return loss_dict, None, neuron_stats
 
 
 def get_trainer(

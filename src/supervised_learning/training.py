@@ -438,7 +438,6 @@ def evaluate_during_training(
 
     val_losses = defaultdict(list)
     val_neuron_stats = defaultdict(list)
-    val_advantages = defaultdict(list)
     
     for batch_idx, batch in enumerate(val_buffer):      
         if not final:
@@ -1064,13 +1063,8 @@ def train_with_hyperparameters(
         val_neuron_stats=val_neuron_stats,
     )
 
-
-
- ###########################################################
- ######################################################
-################################################
-#########################################################
-
+    current_val_loss = np.mean(training_metrics.get_current_epoch_val_loss(loss_metric))
+    logger.info(f"Epoch {-1}: Val {loss_metric}={current_val_loss:.4f}")
     
     ############################### Training loop #################################
     testing = getattr(config_manager, 'testing', False)
@@ -1079,99 +1073,228 @@ def train_with_hyperparameters(
         n_epochs = min(n_epochs, 5)
     
     torch.cuda.empty_cache()
+    
+    global_step = 0
     for epoch in range(n_epochs):
+        # print epoch
+        logger.info(f"Epoch {epoch+1}/{n_epochs}")  
+
         # shuffle training dataset
         training_dataset.reshuffle_subsample()
         #################### Train ####################
         epoch_training_losses = defaultdict(list)
-        epoch_raw_grad_norms = defaultdict(list)
+        epoch_grad_norm = defaultdict(list)
 
         for batch_idx, batch in enumerate(training_buffer):
-            batch_losses, _, raw_grad_norm = trainer.train(batch, epoch)
+            batch_losses, _, grad_norm = trainer.train(batch, epoch)
+           
+            # 1. Prepare a lightweight dictionary for W&B for THIS specific iteration
+            batch_payload = {
+                "epoch": epoch,  # Keep your tracking matched to your logger display
+                "iteration": global_step,
+            }
 
-            # Automatically append all metrics - creates new keys if needed
-            for key, value in batch_losses.items():
-                epoch_training_losses[key].append(value)
+            # # Automatically append all metrics - creates new keys if needed
+            # for key, value in batch_losses.items():
+            #     epoch_training_losses[key].append(value)
 
-            epoch_raw_grad_norms['raw_grad_norm'].append(raw_grad_norm)
+            # epoch_raw_grad_norms['raw_grad_norm'].append(raw_grad_norm)
+
+            # 2. Process and map your dictionaries into the payload and your aggregators
+            # Pairing (incoming_batch_dict, target_epoch_aggregator)
+            metric_pairs = [
+                (batch_losses, epoch_training_losses),
+                (grad_norm, epoch_grad_norm),
+            ]
+
+            for batch_dict, epoch_container in metric_pairs:
+                for key, value in batch_dict.items():
+                    # Extract raw numerical value if it is a PyTorch tensor
+                    scalar_val = value.item() if hasattr(value, "item") else value
+
+                    # Apply the specific prefix we defined in wandb_init
+                    new_key = f"train/batch_{key}"
+
+                    # Store the scalar in the payload for W&B
+                    batch_payload[new_key] = scalar_val
+
+                    # Append to your aggregator so we can compute epoch means later
+                    epoch_container[new_key].append(scalar_val)
 
             # check if we are simply testing the training loop, in which case we break after 100 batches
             if batch_idx >= 10 and testing:
                 logger.info(" Testing mode: breaking after 10 batches.")
                 break
         
+            # 3. Stream the single-batch iteration metrics directly to W&B
+            if wandb.run is not None:
+                wandb.log(batch_payload)   
+
+            global_step += 1
+
             # current_lr = trainer.optimizer.param_groups[0]['lr']
             # if batch_idx % 10 == 0 and current_lr < hyperparams['learning_rate']:
             #     print(f"Step {batch_idx}: LR = {current_lr:.6f}\n")
 
-        # Calculate average loss for this epoch and append to training_losses
-        append_epoch_losses(epoch_training_losses, training_losses)
-        append_epoch_losses(epoch_raw_grad_norms, raw_grad_norms)
+            # check if we are simply testing the training loop, in which case we break after 100 batches
+            if batch_idx >= 10 and testing:
+                logger.info(" Testing mode: breaking after 10 batches.")
+                break
 
+        # # Calculate average loss for this epoch and append to training_losses
+        # append_epoch_losses(epoch_training_losses, training_losses)
+        # append_epoch_losses(epoch_raw_grad_norms, raw_grad_norms)
+
+        # log the batch values to the TrainingMetrics object for later epoch-level processing
+        training_metrics.append_epoch_metrics(
+            batch_training_losses=epoch_training_losses,
+            batch_training_grad_norms=epoch_grad_norm  
+        )  
+
+        # calculate epoch averages and log to W&B
+        # 1. Gather your training containers to process them in place
+        train_epoch_containers = [
+            epoch_training_losses, 
+            epoch_grad_norm
+        ]
+
+        for epoch_dict in train_epoch_containers:
+            # 2. Overwrite the lists of batch values with their single calculated mean
+            # We use list(epoch_dict.keys()) so we can safely modify the dict while looping
+            for batch_key in list(epoch_dict.keys()):
+                list_of_values = epoch_dict[batch_key]
+                
+                # Compute the average
+                mean_value = float(np.mean(list_of_values)) if list_of_values else 0.0
+                
+                # Transform the key name from 'train/batch_loss' to 'train/epoch_loss'
+                epoch_key = batch_key.replace("train/batch_", "train/epoch_")
+                
+                # Store the average under the new key, and clean up the old batch-list key
+                epoch_dict[epoch_key] = mean_value
+                del epoch_dict[batch_key]
+        
+            # 3. Add the structural tracking tokens to the dictionary
+            epoch_dict["epoch"] = epoch       # Will be 0 on your first pass
+            epoch_dict["global_step"] = global_step - 1
+        
+            # 4. Send the epoch summary point to W&B
+            if wandb.run is not None:
+                wandb.log(epoch_dict)
+            
+        # log the epoch values to the TrainingMetrics instance
+        training_metrics.append_epoch_metrics(
+            epoch_training_losses=epoch_training_losses,
+            epoch_training_grad_norms=epoch_grad_norm  
+        )
+
+        epoch_loss = training_metrics.get_current_epoch_train_loss(loss_metric)
+        logger.info(f"Epoch {epoch}: Train {loss_metric}={epoch_loss:.4f}")
+        epoch_grad_norm = training_metrics.get_current_epoch_grad_norm()
+        if epoch_grad_norm is not None:
+            logger.info(f"Epoch {epoch}: Gradient norms: {epoch_grad_norm}")
 
         #################### Evaluate ####################
-        # note: this evaluation is used for early stopping during hyperparameter tuning,
-        # but only used for visualization during final model training
         # Evaluate periodically
         if epoch % config_manager.training_config['eval_freq'] == 0 \
                                                 or epoch == n_epochs - 1:
-            evaluate_during_training(trainer, epoch, val_test_buffer, val_losses, config_manager)
             
-            # Determine validation loss for early stopping
-            current_val_loss = val_losses[loss_metric][-1]            
-            logger.info(f"Epoch {epoch}: Train {loss_metric}={training_losses[loss_metric][-1]:.4f}, Val {loss_metric}={current_val_loss:.4f}")
+            val_losses, val_neuron_stats = evaluate_during_training(
+                trainer, 
+                epoch, 
+                val_test_buffer, 
+                batch_size, 
+                final=False
+            )   
+
+            training_metrics.append_epoch_metrics(
+                val_losses=val_losses,
+                val_neuron_stats=val_neuron_stats        
+            )
+
+            current_val_loss = training_metrics.get_current_epoch_val_loss(loss_metric)
+            logger.info(f"Epoch {epoch}: Val {loss_metric}={current_val_loss:.4f}")
+            # # Determine validation loss for early stopping
+            # current_val_loss = val_losses[loss_metric][-1]            
+            # logger.info(f"Epoch {epoch}: Train {loss_metric}={training_losses[loss_metric][-1]:.4f}, Val {loss_metric}={current_val_loss:.4f}")
                             
-            if not final_model: 
-                # Check for improvement and copy model parameters if best
-                ##### AI suggesting using c-index instead for early stopping ############
+            # Check for improvement and copy model parameters if best, only if early stopping is enabled
+            if early_stopping['flag']:
                 if loss_metric in ['weighted_multi_C']:
                     # for c-index, higher is better
                     improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping, change_direction='increase')
                 else:
                     # for losses, lower is better
-                    improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping, change_direction='decrease')
+                    improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)
 
-                if improvement > 0:
-                    best_model_state = copy_model_parameters(trainer, config_manager)
-                    
-                #  Early stopping - stop training THIS hyperparameter combination
-                if early_stopping['patience_counter'] >= early_stopping['patience']:                
-                    logger.info(f" Early stopping at epoch {epoch}/{n_epochs}")
-                    logger.info(f" Best validation loss: {best_val_loss:.4f}")
+                    if improvement > 0:
+                        best_model_state = copy_model_parameters(trainer, config_manager)
+                        
+                    #  Early stopping - stop training THIS hyperparameter combination
+                    if early_stopping['patience_counter'] >= early_stopping['patience']:                
+                        logger.info(f" Early stopping at epoch {epoch}/{n_epochs}")
+                        logger.info(f" Best validation loss: {best_val_loss:.4f}")
 
-                    n_epochs = epoch + 1  # Update n_epochs to actual number run
+                        n_epochs = epoch + 1  # Update n_epochs to actual number run
 
-                    break
+                        break
     
-    ######################### return results if hyperparameter tuning ########################
-    if not final_model:
-        # Restore best model state before returning score
+    ########################## training complete ########################################
+    # restore best model if using early stopping. 
+    if early_stopping['flag']:
         if best_model_state is not None:
             restore_model_parameters(trainer, best_model_state, config_manager)
-            logger.info(f"    Restored best model (val_loss={best_val_loss:.4f})")
+            logger.info(f"    Restored best model (val_loss={best_val_loss:.4f})")   
 
-        return training_losses, val_losses, n_epochs, trainer, raw_grad_norms
+    # model dir
+    model_dir = config_manager.experiment_dir / hyperparams['wandb_id']
+    # create model dir if it doesn't exist
+    model_dir.mkdir(parents=True, exist_ok=True)   
 
-    ########################## evaluate on test set after training if final model ##########################
-    # note that results df will be None if no targets/predictions were collected during evaluation (i.e.Q learning)
-    test_losses = evaluate_final_model( # this evaluates on the entire test set (during training we only use a subset for speed)
+    # run full evaluation on validation set
+    final_losses, final_q_stats, final_neuron_stats, final_val_advantages = evaluate_during_training(
         trainer, 
-        val_test_buffer,
-        config_manager
+        epoch, 
+        val_test_buffer, 
+        batch_size,
+        final=True
     )
-    
-    logger.info(f"Final test metrics: {test_losses}")
 
-    # Save final model if this is the final training
-    model_path = Path(config_manager.experiment_dir /  "final_model.pt")
-    torch.save(trainer.model.state_dict(), model_path)
+    training_metrics.append_epoch_metrics(
+        final_val_losses=final_losses,
+        final_val_neuron_stats=final_neuron_stats        
+    )
+
+    # print key value pairs from training_metrics.final_val_losses to logger
+    logger.info("Final val metrics:")
+    for key, value in training_metrics.final_val_losses.items():
+        logger.info(f" {key}: {value[-1]:.4f}")
+
+    model_path = Path(model_dir / "final_model.pt")
+
+    if config_manager.model_type in ['dynamic_deephit_transformer', 'bc_transformer']:
+        checkpoint = {
+            'total_it': trainer.total_it,
+            'model_state_dict': trainer.model.state_dict(),
+            'optimizer_state_dict': trainer.optimizer.state_dict(),
+            'hyperparameters': hyperparams,
+            'training_config': config_manager.training_config,
+        }
+        torch.save(checkpoint, model_path)
+    else:
+        # no other models currently save optimizer state, but we can easily add this to the checkpoint in the future if needed
+        raise NotImplementedError("Saving checkpoints with optimizer state is currently only implemented for transformer-based models. Add implementation for other model types if needed.")
+
     logger.info(f" Final model saved to {model_path}")
 
-    # Save test predictions if available
-    # if results_df is not None:
-    #     results_path = Path(config_manager.fold_dir / "test_predictions.parquet")
-    #     results_df.to_parquet(results_path)
-    #     logger.info(f" Test predictions saved to {results_path}\n")       
+    # plot losses
+    plot_results(training_metrics, model_dir, config_manager)
 
-    return training_losses, val_losses, test_losses, raw_grad_norms
-
+    # save results
+    all_scores = save_results(
+        training_metrics,
+        hyperparams,
+        n_epochs,
+        model_dir,
+        config_manager
+    )

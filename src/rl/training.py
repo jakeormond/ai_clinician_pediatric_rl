@@ -748,7 +748,7 @@ def train_with_hyperparameters(
         if epoch % config_manager.training_config['eval_freq'] == 0 \
                                                 or epoch == n_epochs - 1:
             
-            val_losses, val_q_stats, neuron_stats, val_advantages = evaluate_during_training(
+            val_losses, val_q_stats, val_neuron_stats, val_advantages = evaluate_during_training(
                 trainer, 
                 evaluator, 
                 epoch, 
@@ -760,7 +760,7 @@ def train_with_hyperparameters(
                 val_losses=val_losses,
                 val_q_stats=val_q_stats,
                 val_advantages=val_advantages,
-                val_neuron_stats=neuron_stats        
+                val_neuron_stats=val_neuron_stats        
             )
             
             current_val_loss = training_metrics.get_current_epoch_val_loss(loss_metric)
@@ -871,5 +871,4 @@ def train_with_hyperparameters(
         config_manager
     )
 
-    # return training_losses, val_losses, final_val_losses, hyperparams, n_epochs, model_dir
     

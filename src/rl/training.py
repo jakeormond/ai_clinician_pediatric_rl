@@ -518,7 +518,7 @@ def single_split_training(config_manager):
 
 
 def optimize_hyperparameters(train_processor, val_processor, config_manager):
-    """Inner CV loop for hyperparameter optimization."""
+    """for hyperparameter optimization."""
     
     # create hyperparameter space
     hyperparameter_space = get_hyperparameter_space(config_manager)
@@ -562,7 +562,6 @@ def train_with_hyperparameters(
     train_processor.process_reward(config_manager, hyperparams)
     val_processor.process_reward(config_manager, hyperparams)
     
-    
     n_epochs = config_manager.n_epochs
 
     batch_size = hyperparams['batch_size']
@@ -605,7 +604,7 @@ def train_with_hyperparameters(
 
     logger.info(f"Training with early stopping (patience={early_stopping['patience']}, eval_freq={early_stopping['eval_freq']}, min_delta={early_stopping['min_delta']})")
 
-    # Use defaultdict to automatically create new keys
+    # create TrainingMetrics instance to store all training and validation metrics in a structured way for easy access and saving at the end of training
     training_metrics = TrainingMetrics()
 
     """ evaluate before any training for epoch 0 - the generated values are calculated 

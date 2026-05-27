@@ -71,7 +71,7 @@ def parse_arguments():
     parser.add_argument('--prediction_type', 
                         default=None, 
                         choices=['mortality_all', 'mortality_24', 'discharge_mortality', 
-                                 'discharge_mortality_tte', 'action'], 
+                                 'discharge_mortality_tte', 'action', 'behavioural_cloning'], 
                             help='type of prediction to make (default: mortality_all)') 
 
     parser.add_argument('--mode', type=str, default='single_fold',
@@ -115,7 +115,7 @@ def parse_arguments():
     
 
     parser.add_argument('--cohort', type=str, default=None,
-                        choices=['all', 'sepsis_strict', 'sepsis_broad', 
+                        choices=['all', 'sepsis_strict', 'sepsis_broad', 'sepsis',
                             'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad'],
                         help='Cohort to use for this experiment (overrides config file)')
 
@@ -190,73 +190,113 @@ def main():
         """
         this is for generating predictions on the MIMIC IV dataset with a single train/val/test split, for a specific split number.
         """
-        from ...supervised_learning.predict import get_predictions, get_all_predictions, bootstrap_evaluation, plot_random_predictions, plot_health_score_statistics
+        if args.model_type == "dynamic_deephit_transformer":
+            from ...supervised_learning.predict import get_predictions, get_all_predictions, bootstrap_evaluation, plot_random_predictions, plot_health_score_statistics
 
-        split_nums = args.split_num if isinstance(args.split_num, list) else [args.split_num]
-        
-        dynamic_deephit_datasets = []
-        for split_num in split_nums:
-            args.split_num = split_num
-
-            config_manager = ConfigManager(args)
-            # set training config
-            config_manager.set_training_config()
-
-            # manually set tuning to false (it may or may not be set false already)
-            config_manager.training_config['tuning'] = False
+            split_nums = args.split_num if isinstance(args.split_num, list) else [args.split_num]
             
-            # set max encounter length as 2 months
-            max_encounter_length = 24 * 60  # hours
+            dynamic_deephit_datasets = []
+            for split_num in split_nums:
+                args.split_num = split_num
 
-            if config_manager.hospital == "mimic_iv":
-                time_bins = [0, 13, 28, 47, 75, 116, 185, 322, 1435]
-            elif config_manager.hospital == "choc":
-                # calculated in get_time_bins.ipynb based on the distribution of trajectory lengths in the CHOC dataset, with a max trajectory length of 60 days (1440 hours)
-                time_bins = [0, 45, 94, 154, 230, 329, 472, 696, 1441]
-            else:            
-                time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
-            config_manager.max_encounter_length = max_encounter_length
-            config_manager.time_bins = time_bins  
+                config_manager = ConfigManager(args)
+                # set training config
+                config_manager.set_training_config()
 
-            print(f"Running on {config_manager.environment} environment")    
-
-            logger.info(f"Processing split {split_num}")
-            config_manager.split_num = split_num
-
-            model_type = config_manager.model_type
-            experiment_dir = config_manager.experiment_dir
-
-            # predictions = get_all_predictions(
-            #     config_manager, 
-            #     model_type, 
-            #     experiment_dir
-            # ) # generates the predictions, need to modify to get entropy and health score
-
-            # dynamic_deephit_datasets.append(dynamic_deephit_dataset)
-
-            # bootstrap_evaluation(
-            #     dynamic_deephit_dataset,
-            #     config_manager=config_manager,
-            #     n_bootstrap_samples=100
-            # ) # generates the bootstrap evaluation results for the predictions
-
-            
-            plot_health_score_statistics(config_manager)
-            plot_random_predictions(config_manager)
-        
-        # after generating predictions for all specified splits, we can aggregate the results
-        # save_dir = Path(config_manager.experiment_dir).parents[2]
-
-        # combined_dynamic_deephit_dataset = ShardProcessor.concatenate_dynamic_deephit_datasets(dynamic_deephit_datasets, save_dir = save_dir)
+                # manually set tuning to false (it may or may not be set false already)
+                config_manager.training_config['tuning'] = False
                 
-        return
+                # set max encounter length as 2 months
+                max_encounter_length = 24 * 60  # hours
+
+                if config_manager.hospital == "mimic_iv":
+                    time_bins = [0, 13, 28, 47, 75, 116, 185, 322, 1435]
+                elif config_manager.hospital == "choc":
+                    # calculated in get_time_bins.ipynb based on the distribution of trajectory lengths in the CHOC dataset, with a max trajectory length of 60 days (1440 hours)
+                    time_bins = [0, 45, 94, 154, 230, 329, 472, 696, 1441]
+                else:            
+                    time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
+                config_manager.max_encounter_length = max_encounter_length
+                config_manager.time_bins = time_bins  
+
+                print(f"Running on {config_manager.environment} environment")    
+
+                logger.info(f"Processing split {split_num}")
+                config_manager.split_num = split_num
+
+                model_type = config_manager.model_type
+                experiment_dir = config_manager.experiment_dir
+
+                predictions = get_all_predictions(
+                    config_manager, 
+                    model_type, 
+                    experiment_dir
+                ) # generates the predictions, need to modify to get entropy and health score
+
+                # dynamic_deephit_datasets.append(dynamic_deephit_dataset)
+
+                # bootstrap_evaluation(
+                #     dynamic_deephit_dataset,
+                #     config_manager=config_manager,
+                #     n_bootstrap_samples=100
+                # ) # generates the bootstrap evaluation results for the predictions
+
+                
+                plot_health_score_statistics(config_manager)
+                plot_random_predictions(config_manager)
+        
+            # after generating predictions for all specified splits, we can aggregate the results
+            # save_dir = Path(config_manager.experiment_dir).parents[2]
+
+            # combined_dynamic_deephit_dataset = ShardProcessor.concatenate_dynamic_deephit_datasets(dynamic_deephit_datasets, save_dir = save_dir)
+                    
+            return
+        
+        
+        elif args.model_type == "bc_transformer":
+            from ...supervised_learning.predict_behavioural_cloning_transformer import predict, plot_random_predictions
+
+            split_nums = args.split_num if isinstance(args.split_num, list) else [args.split_num]
+                
+            dynamic_deephit_datasets = []
+            for split_num in split_nums:
+                args.split_num = split_num
+
+                config_manager = ConfigManager(args)
+                # set training config
+                config_manager.set_training_config()
+
+                # manually set tuning to false (it may or may not be set false already)
+                config_manager.training_config['tuning'] = False
+                
+                # set max encounter length as 2 months
+                max_encounter_length = 24 * 60  # hours
+                config_manager.max_encounter_length = max_encounter_length
+
+                print(f"Running on {config_manager.environment} environment")    
+
+                logger.info(f"Processing split {split_num}")
+                config_manager.split_num = split_num
+
+                predictions = predict(config_manager)
+
+
+
+
+
+
+
+
+
+
+
 
     
     # Initialize config manager, it holds paths and environment info
     config_manager = ConfigManager(args)
     if config_manager.model_type == "dynamic_deephit" or config_manager.model_type == "dynamic_deephit_transformer" or \
         config_manager.model_type == "dynamic_deephit_prediction_all" or config_manager.model_type == "bc_transformer": 
-        from ...supervised_learning.training import outer_training_loop, development_training_loop, single_split_training
+        from ...supervised_learning.training import single_split_training
 
     if config_manager.model_type == "dynamic_deephit" or config_manager.model_type == "dynamic_deephit_transformer" or \
         config_manager.model_type == "dynamic_deephit_prediction_all":         

@@ -143,6 +143,10 @@ class DynamicDeepHitTransformerDataset(Dataset):
         # model specific processing
         if self.task == "bc_transformer":
             self.target_actions = torch.tensor(data_processor.dynamic_deephit_dataset["trajectories"][:, targets_ind], dtype=torch.float32)
+            # drop the response features from the input trajectories since we are using them as targets for BC
+            trajectories = torch.tensor(data_processor.dynamic_deephit_dataset["trajectories"][:, [i for i in range(self.trajectories.shape[1]) if i not in targets_ind]], dtype=torch.float32)
+            self.trajectories = trajectories
+
         elif self.task == "dynamic_deephit_transformer":
             self.time_to_event_raw = torch.tensor(data_processor.dynamic_deephit_dataset["time_to_event_raw"], dtype=torch.long)
             self.time_to_event = torch.tensor(data_processor.dynamic_deephit_dataset["time_to_event"], dtype=torch.long)

@@ -66,9 +66,8 @@
                 "--split_num", "0",
                 "--search_variant", "fixed_hyperparameters",
                 "--final_timestep_only", "True",                
-                "--cohort", "all",
+                "--cohort", "sepsis",
                 "--n_epochs", "100",
-                "--testing"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
@@ -175,6 +174,29 @@
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env"
         },
+
+
+        {
+            "name": "choc_bc_prediction_single_split",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "supervised_learning",
+                "--prediction_type", "behavioural_cloning",
+                "--model_type", "bc_transformer",
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--cohort", "sepsis",
+                "--model_dir", "sepsis/intake-vis",
+                "--experiment_variant", "prediction"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
 
         {
             "name": "choc_prediction_single_split",

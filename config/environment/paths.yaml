@@ -1,8 +1,9 @@
 local:
   choc:
     experiments_dir: "/home/jake/Documents/AI_Clinician/experiments"
-    supervised_final_model_dir: "/home/jake/Documents/AI_Clinician/dynamic_deephit_results/choc/"
-    rl_models_dir: "/home/jake/Documents/AI_Clinician/rl_models/choc/"
+    supervised_final_model_dir: "/home/jake/Documents/AI_Clinician/models/dynamic_deephit_results/choc/"
+    bc_transformer_final_model_dir: "/home/jake/Documents/AI_Clinician/models/bc_transformer/choc/"
+    rl_models_dir: "/home/jake/Documents/AI_Clinician/models/rl_models/choc/"
     data_dir: "/home/jake/Documents/AI_Clinician/choc_data"
     code_dir: "/home/jake/Documents/AI_Clinician/choc_code"
   mimic_iv:

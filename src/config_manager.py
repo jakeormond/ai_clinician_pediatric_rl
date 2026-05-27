@@ -60,6 +60,12 @@ class ConfigManager:
                             "five_splits", f"split_{self.split_num}", "final_model"
                         )
 
+                elif self.model_type == "bc_transformer":
+                    results_dir = os.path.join(
+                        self.paths['bc_transformer_final_model_dir'], 
+                        self.model_dir, "final_model"
+                    )
+
                 elif self.cohort == 'all':
                     # we will build the paths in the prediction function
                     results_dir = None

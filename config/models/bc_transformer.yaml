@@ -1,0 +1,54 @@
+project: "AI_Clininician"
+"group": "supervised_learning"
+name: "bc_transformer"
+# n_epochs: 100  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
+checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
+window_length: 72 #168 # Prediction horizon in hours - so 1 month
+device: "cuda"  # Device (cuda or cpu)
+
+tuning: False
+use_windows_from_memory: False  # Whether to load precomputed windows into memory (only for smaller datasets) - 
+# not necessary for transformer model as windows are already in memory in the self.dynamic_deephit_dataset
+
+learning_rate: 2.8e-05          #      [1e-6]  # Learning rates to try - 1e-4 overfits quickly
+dropout: 0.163 # 0.138422
+feature_dropout_p: 0.0442 # 0.0 means 'off', up to 20% features dropped
+weight_decay: 0.000533 # 1.1e-5 # 5e-3
+use_layernorm: True
+batch_size: 64  # Batch size for all networks
+
+d_model: 128  # Dimension of the model
+num_encoder_layers: 4  # Number of encoder layers
+ff_factor: 2  # Dimension of feedforward network in transformer
+nhead: 4  # Number of attention heads
+
+hidden_dim: 32  # Hidden dimension for all networks
+attn_hidden_dim: 32
+n_layers: 1
+
+loss_metric: "mse" # "combined_loss"  # Which metric to use for early stopping
+max_val_samples: 5000  # Max samples to use for validation during training
+
+l1_lambda: 8e-06 # 1e-4  # L1 regularization weight for classification head
+end_sigma: 0.7
+
+# learning rate scheduling parameters
+pct_start: 0.1
+div_factor: 25
+
+# Early stopping parameters (fixed for all combinations)
+early_stopping_flag: False  # Whether to use early stopping
+patience: 15        # Stop if no improvement for 15 evaluations
+eval_freq: 1       # Evaluate every 20 epochs  
+min_delta: 0.0001   # Minimum improvement threshold
+
+grad_clip: 0.1  # Gradient clipping value
+
+# for controls
+shuffle_inputs: False  # Whether to shuffle feature columns to confirm transformer not looking ahead
+zero_inputs: False  # Whether to zero out feature columns to confirm transformer not looking ahead
+
+# actions to leave out of last time step for RL setting
+# actions: ['fio2', 'peep_set', 'tidal_volume_set'] # for mimic_iv ventilation
+actions: ['intake', 'vis'] # for choc sepsis
+# actions: ['combined_hourly_iv', 'vasoactive_inotropic_score'] # for mimic sepsis

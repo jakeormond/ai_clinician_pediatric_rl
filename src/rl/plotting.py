@@ -10,7 +10,7 @@ from pathlib import Path
 
 def plot_results(training_metrics, plot_dir, config_manager):
     
-    training_epochs = training_metrics.epoch_training_losses['epoch']
+    # training_epochs = training_metrics.epoch_training_losses['epoch']
     global_step = training_metrics.epoch_training_losses['global_step']
     global_step_diff_mid = ((global_step[1]-1)-global_step[0])/2
     train_epochs_to_global_step = [g - global_step_diff_mid for g in global_step]
@@ -31,9 +31,15 @@ def plot_results(training_metrics, plot_dir, config_manager):
     all_keys = get_keys(training_metrics)
     
     plot_data(training_metrics, x_axes, all_keys, 'losses', plot_dir)
-    plot_data(training_metrics, x_axes, all_keys, 'q_stats', plot_dir)
-    plot_data(training_metrics, x_axes, all_keys, 'advantages', plot_dir)
+    
+    if 'q_stats' in all_keys:
+        plot_data(training_metrics, x_axes, all_keys, 'q_stats', plot_dir)
+    
+    if 'advantage_keys' in all_keys:
+        plot_data(training_metrics, x_axes, all_keys, 'advantages', plot_dir)
+    
     plot_data(training_metrics, x_axes, all_keys, 'neuron_stats', plot_dir)
+    
     plot_data(training_metrics, x_axes, all_keys, 'grad_norms', plot_dir)
 
     pass
@@ -52,18 +58,19 @@ def get_keys(training_metrics):
    
     all_keys['losses'] = new_loss_keys
 
-    # q_stat keys
-    q_stat_keys = list(training_metrics.batch_training_q_stats.keys())
-    new_q_stat_keys = []
-    for key in q_stat_keys:
-        key_truncated = key.split('/batch_')[-1]  # get the part after the last '/'
-        new_q_stat_keys.append(key_truncated)
-   
-    # drop batch_n from new_q_stat_keys if present
-    if 'batch_n' in new_q_stat_keys:
-        new_q_stat_keys.remove('batch_n')
+    if hasattr(training_metrics, 'batch_training_q_stats'):
+        # q_stat keys
+        q_stat_keys = list(training_metrics.batch_training_q_stats.keys())
+        new_q_stat_keys = []
+        for key in q_stat_keys:
+            key_truncated = key.split('/batch_')[-1]  # get the part after the last '/'
+            new_q_stat_keys.append(key_truncated)
+    
+        # drop batch_n from new_q_stat_keys if present
+        if 'batch_n' in new_q_stat_keys:
+            new_q_stat_keys.remove('batch_n')
 
-    all_keys['q_stats'] = new_q_stat_keys
+        all_keys['q_stats'] = new_q_stat_keys
 
     # neuron_stat_keys
     neuron_stat_keys = list(training_metrics.val_neuron_stats.keys())
@@ -87,14 +94,15 @@ def get_keys(training_metrics):
 
     all_keys['grad_norms'] = new_grad_norm_keys
 
-    # advantage_keys
-    # check if training_metrics.val_advantages has keys that start with 'val/' and if so, remove the prefix for the advantage keys
-    advantage_keys = list(training_metrics.val_advantages.keys())
-    if len(advantage_keys) > 0:
-        advantage_keys = [key.split('/val_')[-1] for key in advantage_keys]
+    if hasattr(training_metrics, 'val_advantages'):
+        # advantage_keys
+        # check if training_metrics.val_advantages has keys that start with 'val/' and if so, remove the prefix for the advantage keys
+        advantage_keys = list(training_metrics.val_advantages.keys())
+        if len(advantage_keys) > 0:
+            advantage_keys = [key.split('/val_')[-1] for key in advantage_keys]
 
-        all_keys['advantage_keys'] = advantage_keys
-    
+            all_keys['advantage_keys'] = advantage_keys
+        
     return all_keys
 
 

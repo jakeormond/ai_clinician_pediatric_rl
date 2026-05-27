@@ -206,7 +206,7 @@ class BehaviouralCloneTransformer(nn.Module):
         
         # 1. Forward pass to get the pooled latent embedding vector
         # shape: [Batch, d_model] (e.g., [B, 128])
-        latent_features = self.get_behavioral_embedding(x, padding_mask)
+        _, latent_features = self(x, padding_mask)
         
         # 2. Check for Token Uniformity (Is our 128-D embedding space alive?)
         # Calculate variance across the batch for each hidden dimension
@@ -264,6 +264,7 @@ class BCTransformerTrainer:
         verbose=True,
         l1_params: list = [],
         l1_lambda: float = 0.0,
+        ema_alpha: float = 0.99,  # Add ema_alpha argument for moving
         final_timestep_only: bool = True,
     ):
         """
@@ -287,15 +288,21 @@ class BCTransformerTrainer:
         self.verbose = verbose
         self.l1_params = l1_params
         self.l1_lambda = float(l1_lambda)
+        self.clip_fraction_ema = 0.0  # Initialize EMA for clipping fraction
+        self.ema_alpha = ema_alpha
         self.final_timestep_only = final_timestep_only
 
+        self.total_it = 0
+
     def train(self, batch: TensorBatch, epoch: int):
+        self.total_it += 1
+
         self.model.train() # set model to train mode
 
         # unpack batch
         X = batch['features'].to(self.device)
         
-        actions = batch['target_actions'].to(self.device)
+        actions = batch['target_actions'][:,-1,:].to(self.device)
         
         mask = batch['loss_mask'].to(self.device)
 
@@ -340,20 +347,20 @@ class BCTransformerTrainer:
             self.scheduler.step()
 
         loss_dict = {
-            "mse_loss": loss.item(),
+            "mse": loss.item(),
         }
 
         
         return loss_dict, None, grad_norm
     
 
-    def evaluate(self, batch: TensorBatch, epoch: int):
+    def evaluate(self, batch: TensorBatch):
         self.model.eval()  # set model to eval mode
         
         # unpack batch
         X = batch['features'].to(self.device)
         
-        actions = batch['target_actions'].to(self.device)
+        actions = batch['target_actions'][:,-1,:].to(self.device)
         
         mask = batch['loss_mask'].to(self.device)
 
@@ -377,7 +384,7 @@ class BCTransformerTrainer:
         self.model.train()
 
         loss_dict = {
-            "mse_loss": loss.item()
+            "mse": loss.item()
             }
 
         return loss_dict, None, neuron_stats
@@ -387,8 +394,6 @@ def get_trainer(
         config_manager, 
         feature_dim, 
         hyperparams, 
-        train_processor, # don't need this 
-        training_dataset,
         num_targets=2
         ):
 
@@ -420,11 +425,13 @@ def get_trainer(
 
     n_epochs = config_manager.n_epochs
     batch_size = int(hyperparams['batch_size'])
-    # dataset_size = train_processor.dynamic_deephit_dataset['event'].shape[0] * \
-    #     train_processor.dynamic_deephit_dataset['event'].shape[1]  # total number of timesteps across all patients
-    dataset_size = training_dataset.n_samples  # n windows we sample on each epoch
-    steps_per_epoch = (dataset_size + batch_size - 1) // batch_size
-    total_steps = n_epochs * steps_per_epoch
+
+
+    # dataset_size = training_dataset.n_samples  # n windows we sample on each epoch
+    # dataset_size = hyperparams['total_steps']
+    # steps_per_epoch = (dataset_size + batch_size - 1) // batch_size
+    # total_steps = n_epochs * steps_per_epoch
+    total_steps = int(hyperparams['total_steps'])
 
     pct_start = hyperparams['pct_start']
     div_factor = hyperparams['div_factor']
@@ -479,7 +486,7 @@ def bc_loss(
     criterion = nn.MSELoss()
     loss = criterion(predicted_actions, clinician_actions)    
    
-    return loss, 
+    return loss 
 
 
 class G_SigmaScheduler:

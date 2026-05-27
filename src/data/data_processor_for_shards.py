@@ -123,6 +123,11 @@ class ShardProcessor:
             else:
                 raise ValueError(f"No normalization parameters file found at {norm_params_file}. This may cause issues if you are normalizing the validation or test set, as it should be normalized with the parameters from the training set. Please check that your training set was normalized and that the normalization parameters were saved correctly.")
 
+            if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
+                # if we are filtering to a specific cohort, we need to filter the dataset to only include that cohort
+                logger.info(f"Filtering dynamic deephit dataset to only include cohort: {config_manager._data_config['cohort']}")
+                self.filter_cohort(config_manager)            
+            
             return
            
         
@@ -315,12 +320,9 @@ class ShardProcessor:
             # health_score_total = hourly_health_change + health_score        
             self.dynamic_deephit_predictions['reward'] = health_score_total.astype(np.float32)                                         
         
-        else:
+        else: 
             raise ValueError(f"Invalid reward type: {reward_type}. Supported reward types are: 'health_score' and 'time_to_event'.")
     
-    
-
-
     def create_rl_dataset(self, states="model_outputs", scaler=None, action_names=None):
         self.rl_dataset = {}
         
@@ -460,6 +462,7 @@ class ShardProcessor:
             # check if dataset_type is an attribute of the class
             if not hasattr(self, dataset_type):
                 logger.warning(f"Dataset type '{dataset_type}' is not an attribute of the class.")
+                continue
 
             # filter the dynamic_deephit_dataset
             if dataset_type == 'dynamic_deephit_dataset':

@@ -6,7 +6,7 @@ checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save 
 window_length: 72 #168 # Prediction horizon in hours - so 1 month
 device: "cuda"  # Device (cuda or cpu)
 
-tuning: True
+tuning: False
 use_windows_from_memory: False  # Whether to load precomputed windows into memory (only for smaller datasets) - 
 # not necessary for transformer model as windows are already in memory in the self.dynamic_deephit_dataset
 
@@ -37,6 +37,7 @@ pct_start: 0.1
 div_factor: 25
 
 # Early stopping parameters (fixed for all combinations)
+early_stopping_flag: False  # Whether to use early stopping
 patience: 15        # Stop if no improvement for 15 evaluations
 eval_freq: 1       # Evaluate every 20 epochs  
 min_delta: 0.0001   # Minimum improvement threshold

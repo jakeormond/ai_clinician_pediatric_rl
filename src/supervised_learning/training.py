@@ -245,7 +245,7 @@ def create_trainer(train_processor, hyperparams, config_manager):
     if config_manager.model_type == 'dynamic_deephit_transformer':
         feature_dim = train_processor.dynamic_deephit_dataset['feature_dim'] 
     else:
-        feature_dim = train_processor.dynamic_deephit_dataset['feature_dim'] - len(config_manager.training_config['actions'])
+        feature_dim = train_processor.dynamic_deephit_dataset['feature_dim']
     if config_manager.model_type == 'bc_transformer':
         num_targets = len(hyperparams['actions']) # hardcoded for now
     else:

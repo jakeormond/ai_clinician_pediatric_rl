@@ -143,9 +143,6 @@ class DynamicDeepHitTransformerDataset(Dataset):
         # model specific processing
         if self.task == "bc_transformer":
             self.target_actions = torch.tensor(data_processor.dynamic_deephit_dataset["trajectories"][:, targets_ind], dtype=torch.float32)
-            # drop the response features from the input trajectories since we are using them as targets for BC
-            trajectories = torch.tensor(data_processor.dynamic_deephit_dataset["trajectories"][:, [i for i in range(self.trajectories.shape[1]) if i not in targets_ind]], dtype=torch.float32)
-            self.trajectories = trajectories
 
         elif self.task == "dynamic_deephit_transformer":
             self.time_to_event_raw = torch.tensor(data_processor.dynamic_deephit_dataset["time_to_event_raw"], dtype=torch.long)
@@ -188,7 +185,7 @@ class DynamicDeepHitTransformerDataset(Dataset):
             # load time_to_event and event at final_ind
             time_to_event = self.time_to_event[start_ptr:final_ind+1] 
         elif self.task == "bc_transformer":
-            target_actions = self.target_actions[start_ptr:final_ind+1]
+            target_actions = self.target_actions[final_ind]
 
         event = self.event[start_ind]
         padding_mask = torch.zeros(self.window_length, dtype=torch.bool)
@@ -208,9 +205,6 @@ class DynamicDeepHitTransformerDataset(Dataset):
             if self.task == "dynamic_deephit_transformer":
                 tte_pad_block = time_to_event[0:1].repeat(pad)
                 time_to_event = torch.cat([tte_pad_block, time_to_event], dim=0)
-            elif self.task == "bc_transformer":
-                target_pad_block = target_actions[0:1].repeat(pad, 1)
-                target_actions = torch.cat([target_pad_block, target_actions], dim=0)
 
         # zero out or carry forward response features at final timestep for RL setting
         if len(self.response_zero_ind) > 0:

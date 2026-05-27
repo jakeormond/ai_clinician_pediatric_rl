@@ -302,7 +302,7 @@ class BCTransformerTrainer:
         # unpack batch
         X = batch['features'].to(self.device)
         
-        actions = batch['target_actions'][:,-1,:].to(self.device)
+        actions = batch['target_actions'].to(self.device)
         
         mask = batch['loss_mask'].to(self.device)
 
@@ -360,7 +360,7 @@ class BCTransformerTrainer:
         # unpack batch
         X = batch['features'].to(self.device)
         
-        actions = batch['target_actions'][:,-1,:].to(self.device)
+        actions = batch['target_actions'].to(self.device)
         
         mask = batch['loss_mask'].to(self.device)
 

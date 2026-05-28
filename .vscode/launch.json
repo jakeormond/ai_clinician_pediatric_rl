@@ -7,6 +7,7 @@
 
 
 
+
         {
             "name": "mimic_iv_transformer_fixed",
             "type": "debugpy",
@@ -190,7 +191,9 @@
                 "--split_num", "0",
                 "--cohort", "sepsis",
                 "--model_dir", "sepsis/intake-vis",
-                "--experiment_variant", "prediction"
+                "--experiment_variant", "prediction",
+                "--search_variant", "fixed_hyperparameters",
+
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

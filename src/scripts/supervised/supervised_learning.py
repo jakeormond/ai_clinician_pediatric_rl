@@ -227,6 +227,7 @@ def main():
                 model_type = config_manager.model_type
                 experiment_dir = config_manager.experiment_dir
 
+
                 predictions = get_all_predictions(
                     config_manager, 
                     model_type, 
@@ -254,7 +255,8 @@ def main():
         
         
         elif args.model_type == "bc_transformer":
-            from ...supervised_learning.predict_behavioural_cloning_transformer import predict, plot_random_predictions
+            from ...supervised_learning.predict_behavioural_cloning_transformer import predict, \
+                plot_random_predictions, get_all_predictions
 
             split_nums = args.split_num if isinstance(args.split_num, list) else [args.split_num]
                 
@@ -278,7 +280,18 @@ def main():
                 logger.info(f"Processing split {split_num}")
                 config_manager.split_num = split_num
 
-                predictions = predict(config_manager)
+                model_type = config_manager.model_type
+                experiment_dir = config_manager.experiment_dir
+
+                predictions = get_all_predictions(
+                    config_manager, 
+                    model_type, 
+                    experiment_dir
+                )
+
+                plot_random_predictions(config_manager)
+
+
 
 
 

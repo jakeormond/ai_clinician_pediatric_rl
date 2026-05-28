@@ -239,13 +239,11 @@ def create_buffer(processor, batch_size, config_manager, shuffle=True):
     return buffer, dataset
 
 
-def create_trainer(train_processor, hyperparams, config_manager):
+def create_trainer(training_dataset, hyperparams, config_manager):
 
     # feature_dim = train_processor.dynamic_deephit_dataset["features"].shape[2]
-    if config_manager.model_type == 'dynamic_deephit_transformer':
-        feature_dim = train_processor.dynamic_deephit_dataset['feature_dim'] 
-    else:
-        feature_dim = train_processor.dynamic_deephit_dataset['feature_dim']
+    feature_dim = training_dataset.trajectories.shape[1] 
+
     if config_manager.model_type == 'bc_transformer':
         num_targets = len(hyperparams['actions']) # hardcoded for now
     else:
@@ -791,7 +789,7 @@ def train_with_hyperparameters(
     hyperparams['total_steps'] = n_epochs * len(training_buffer)
     
     # create trainer
-    trainer = create_trainer(train_processor, hyperparams, config_manager)
+    trainer = create_trainer(training_dataset, hyperparams, config_manager)
         
     # Early stopping configuration 
     early_stopping = get_early_stopping_config(config_manager)

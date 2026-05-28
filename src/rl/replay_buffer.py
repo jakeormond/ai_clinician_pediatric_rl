@@ -143,6 +143,13 @@ class DynamicDeepHitTransformerDataset(Dataset):
         # model specific processing
         if self.task == "bc_transformer":
             self.target_actions = torch.tensor(data_processor.dynamic_deephit_dataset["trajectories"][:, targets_ind], dtype=torch.float32)
+            if ~config_manager.training_config['actions_in_state']:
+                # remove all self.response_zero_ind and self.carry_forward_ind columns from trajectories
+                cols_to_remove = np.sort(list(set(self.response_zero_ind) | set(self.carry_forward_ind)))
+                self.trajectories = torch.tensor(np.delete(data_processor.dynamic_deephit_dataset["trajectories"], cols_to_remove, axis=1), dtype=torch.float32)
+                # reinitialize response_zero_ind and carry_forward_ind to be empty since those features have been removed from the state representation
+                self.response_zero_ind = []
+                self.carry_forward_ind = []
 
         elif self.task == "dynamic_deephit_transformer":
             self.time_to_event_raw = torch.tensor(data_processor.dynamic_deephit_dataset["time_to_event_raw"], dtype=torch.long)

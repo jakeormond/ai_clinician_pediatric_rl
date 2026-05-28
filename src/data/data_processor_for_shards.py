@@ -442,6 +442,8 @@ class ShardProcessor:
             
             if 'predictions' in self.dynamic_deephit_dataset:
                 f.create_dataset('predictions', data=self.dynamic_deephit_dataset['predictions'], dtype=np.float32)
+            if 'targets' in self.dynamic_deephit_dataset:
+                f.create_dataset('targets', data=self.dynamic_deephit_dataset['targets'], dtype=np.float32)
             if 'entropy' in self.dynamic_deephit_dataset:
                 f.create_dataset('entropy', data=self.dynamic_deephit_dataset['entropy'], dtype=np.float32)
             if 'health_score' in self.dynamic_deephit_dataset:
@@ -847,8 +849,12 @@ class ShardProcessor:
             keys_to_load = [key for key in keys_to_load if key not in keys_to_exclude]
 
         with h5py.File(file_path, 'r') as f:
+            if 'event' in keys_to_load:
+                dynamic_deephit_predictions['event'] = f['event'][:].astype(np.int32)
             if 'predictions' in keys_to_load:
                 dynamic_deephit_predictions['predictions'] = f['predictions'][:].astype(np.float32)
+            if 'targets' in keys_to_load:
+                dynamic_deephit_predictions['targets'] = f['targets'][:].astype(np.float32)
             if 'stay_ids' in keys_to_load:
                 dynamic_deephit_predictions['stay_ids'] = f['stay_ids'][:]
             if 'index_ptr' in keys_to_load:

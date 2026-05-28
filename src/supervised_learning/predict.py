@@ -381,7 +381,7 @@ def predict(config_manager):
         dynamic_deephit_model = instantiate_model(config_manager, hyperparams, n_time_bins, num_risks=2, test_processor=test_processor)
 
         # run inference on test set
-        dynamic_deephit_dataset = inference_loop(dynamic_deephit_model, test_processor, config_manager,device='cuda')
+        dynamic_deephit_dataset = inference_loop(dynamic_deephit_model, test_processor, config_manager, device='cuda')
 
 
 def plot_c_index_boxplots(c_index_values, plot_dir):

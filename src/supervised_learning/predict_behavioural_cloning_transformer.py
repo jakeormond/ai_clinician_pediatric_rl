@@ -106,6 +106,7 @@ def instantiate_model(
 def inference_loop(
         model, 
         dataset, 
+        processor,
         config_manager, 
         hyperparams=None,
         filename=None, 
@@ -127,35 +128,31 @@ def inference_loop(
         # raise error
         raise ValueError("Actions must be specified in hyperparameters for behavioural cloning transformer inference.")
 
-    action_ind = []
-    targets_ind = []
-    for action in actions:
-        ind = processor.dynamic_deephit_dataset['feature_names'].index(action)
-        action_ind.append(ind)
-        targets_ind.append(ind)
+    if config_manager.training_config['actions_in_state']:
+        action_ind = []
+        for action in actions:
+            ind = dataset.feature_names.index(action)
+            action_ind.append(ind)
 
-        mask_name = action + "_mask"
-        if mask_name in processor.dynamic_deephit_dataset['feature_names']:
-            ind2 = processor.dynamic_deephit_dataset['feature_names'].index(action + "_mask")
-            action_ind.append(ind2)
+            mask_name = action + "_mask"
+            if mask_name in dataset.feature_names:
+                ind2 = dataset.feature_names.index(action + "_mask")
+                action_ind.append(ind2)
 
-        delta_name = action + "_delta"
-        if delta_name in processor.dynamic_deephit_dataset['feature_names']:
-            ind3 = processor.dynamic_deephit_dataset['feature_names'].index(action + "_delta")
-            action_ind.append(ind3)
+            delta_name = action + "_delta"
+            if delta_name in dataset.feature_names:
+                ind3 = dataset.feature_names.index(action + "_delta")
+                action_ind.append(ind3)
 
-    response_zero_ind = np.sort(list(set(response_zero_ind) & set(action_ind)))
-    carry_forward_ind = np.sort(list(set(carry_forward_ind) & set(action_ind)))    
+        response_zero_ind = np.sort(list(set(response_zero_ind) & set(action_ind)))
+        carry_forward_ind = np.sort(list(set(carry_forward_ind) & set(action_ind)))  
+         
+    else: # response_zero_ind and carry_forward_ind should already be empty, in DynamicDeepHitTransformerDataset
+        if len(response_zero_ind) > 0 or len(carry_forward_ind) > 0:
+            raise ValueError("If actions are not included in state, then response_zero_ind and carry_forward_ind should be empty.")
     
     # BC transformer specific processing
-    target_actions = torch.tensor(processor.dynamic_deephit_dataset["trajectories"][:, targets_ind], dtype=torch.float32)
-
-
-    if ~config_manager.training_config['actions_in_state']:
-        # drop columns from trajectories that correspond to response_zero_ind and carry_forward_ind since those features are not included in the state representation for the transformer
-        cols_to_remove = np.sort(list(set(response_zero_ind) | set(carry_forward_ind)))
-        processor.dynamic_deephit_dataset["trajectories"] = np.delete(processor.dynamic_deephit_dataset["trajectories"], cols_to_remove, axis=1)
-
+    target_actions = dataset.target_actions
 
     # create storage for predictions
     all_predictions = []   
@@ -168,7 +165,7 @@ def inference_loop(
             end_idx = index_ptr[i+1]
             
             # 1. Get full patient data (T, F)
-            trajectory = processor.dynamic_deephit_dataset['trajectories'][start_idx:end_idx]
+            trajectory = dataset.trajectories[start_idx:end_idx]
             trajectory = torch.as_tensor(trajectory, dtype=torch.float32, device=device)
             T, F = trajectory.shape
 
@@ -281,35 +278,35 @@ def inference_loop(
 
 
 
-def predict(config_manager):
+# def predict(config_manager):
 
-    filename = 'test_set_predictions'
-    filepath = os.path.join(config_manager.experiment_dir, filename + '.h5')
-    if os.path.exists(filepath):
-        # load existing predictions
-        print(f"Loading existing predictions from {filepath}")
-        dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(filepath, config_manager)
+#     filename = 'test_set_predictions'
+#     filepath = os.path.join(config_manager.experiment_dir, filename + '.h5')
+#     if os.path.exists(filepath):
+#         # load existing predictions
+#         print(f"Loading existing predictions from {filepath}")
+#         dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(filepath, config_manager)
 
-    else:
-        # load result.json from config_manager.experiment_dir to get hyperparameters
-        with open(
-            os.path.join(config_manager.experiment_dir, 'results.json'), 'r'
-        ) as f:
-            results_dict = json.load(f)
-        hyperparams = results_dict['hyperparameters']    
+#     else:
+#         # load result.json from config_manager.experiment_dir to get hyperparameters
+#         with open(
+#             os.path.join(config_manager.experiment_dir, 'results.json'), 'r'
+#         ) as f:
+#             results_dict = json.load(f)
+#         hyperparams = results_dict['hyperparameters']    
              
-        # create DataLoader for test dataset
-        # Create test_processor; note it will throw an error if the normalized test shard is missing.
-        # All possible windows will be computed
-        _, _, test_processor = create_processor_from_shards(config_manager, normalize=True)
+#         # create DataLoader for test dataset
+#         # Create test_processor; note it will throw an error if the normalized test shard is missing.
+#         # All possible windows will be computed
+#         _, _, test_processor = create_processor_from_shards(config_manager, normalize=True)
 
-        test_dataset = DynamicDeepHitTransformerDataset(test_processor, config_manager)
-        feature_dim = test_dataset.trajectories.shape[1] # the model adds + 1 for the local time feature that gets added
-        # instantiate the model
-        bc_transformer_model = instantiate_model(config_manager, hyperparams, feature_dim)
+#         test_dataset = DynamicDeepHitTransformerDataset(test_processor, config_manager)
+#         feature_dim = test_dataset.trajectories.shape[1] # the model adds + 1 for the local time feature that gets added
+#         # instantiate the model
+#         bc_transformer_model = instantiate_model(config_manager, hyperparams, feature_dim)
 
-        # run inference on test set - SWAP IN test_dataset!!!!!!!!!
-        dynamic_deephit_dataset = inference_loop(bc_transformer_model, test_processor, config_manager,device='cuda')
+#         # run inference on test set - SWAP IN test_dataset!!!!!!!!!
+#         dynamic_deephit_dataset = inference_loop(bc_transformer_model, test_processor, config_manager,device='cuda')
 
 
 
@@ -367,7 +364,7 @@ def get_predictions(config_manager, model_type, experiment_dir, set='test', stay
         # All possible windows will be computed
         processor = create_processor_from_shards(config_manager, normalize=True, set_to_return = set)
         dataset = DynamicDeepHitTransformerDataset(processor, config_manager)
-
+        
         # instantiate the model
         # load result.json from config_manager.experiment_dir to get hyperparameters
         with open(
@@ -385,6 +382,7 @@ def get_predictions(config_manager, model_type, experiment_dir, set='test', stay
         dynamic_deephit_predictions = inference_loop(
             bc_transformer_model, 
             dataset, 
+            processor,
             config_manager,
             hyperparams=hyperparams,
             filename=filename,

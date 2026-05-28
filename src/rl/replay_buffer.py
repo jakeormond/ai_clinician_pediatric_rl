@@ -151,6 +151,9 @@ class DynamicDeepHitTransformerDataset(Dataset):
                 self.response_zero_ind = []
                 self.carry_forward_ind = []
 
+                # drop those features from feature_names as well
+                self.feature_names = [feat for i, feat in enumerate(self.feature_names) if i not in cols_to_remove]
+
         elif self.task == "dynamic_deephit_transformer":
             self.time_to_event_raw = torch.tensor(data_processor.dynamic_deephit_dataset["time_to_event_raw"], dtype=torch.long)
             self.time_to_event = torch.tensor(data_processor.dynamic_deephit_dataset["time_to_event"], dtype=torch.long)

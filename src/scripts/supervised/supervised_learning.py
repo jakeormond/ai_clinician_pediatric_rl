@@ -255,8 +255,7 @@ def main():
         
         
         elif args.model_type == "bc_transformer":
-            from ...supervised_learning.predict_behavioural_cloning_transformer import predict, \
-                plot_random_predictions, get_all_predictions
+            from ...supervised_learning.predict_behavioural_cloning_transformer import plot_random_predictions, get_all_predictions
 
             split_nums = args.split_num if isinstance(args.split_num, list) else [args.split_num]
                 

@@ -619,7 +619,7 @@ def get_trainer(
         feature_dim=feature_dim+1, # +1 for the local time feature we add in the replay buffer
         d_model=hyperparams['d_model'],               # e.g., 128 or 256
         nhead=hyperparams['nhead'],                   # e.g., 4 or 8
-        num_encoder_layers=hyperparams['n_layers'],   # e.g., 3 or 6
+        num_encoder_layers=hyperparams['num_encoder_layers'],   # e.g., 3 or 6
         num_time_bins=n_time_bins,
         num_targets=num_targets,
         dropout=hyperparams['dropout'],

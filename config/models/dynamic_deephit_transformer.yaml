@@ -23,9 +23,6 @@ num_encoder_layers: [2, 3, 4, 6]
 ff_factor: [2, 4]  # dim_feedforward is ff_factor * d_model
 nhead: [4, 8] # [2, 4, 8]  # Number of attention heads - d_model must be divisible by nhead
 
-hidden_dim: [32, 64, 128]  # Hidden dimension for all networks
-attn_hidden_dim: [32, 64, 128, 256]
-n_layers: [1, 2, 3, 4] # [1, 2, 3, 4]
 
 loss_metric: "weighted_multi_C" # "combined_loss"  # Which metric to use for early stopping
 max_val_samples: 5000  # Max samples to use for validation during training

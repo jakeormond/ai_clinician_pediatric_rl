@@ -186,10 +186,13 @@ def main():
     logger.info("Logging configured (level=%s)", logging.getLevelName(logging.getLogger().getEffectiveLevel()))
     validate_arguments(args)
 
+
+    #################### PREDICTIONS ON TRAINED MODELS ####################
     if args.experiment_variant == 'prediction' and args.split_num is not None:
         """
         this is for generating predictions on the MIMIC IV dataset with a single train/val/test split, for a specific split number.
         """
+        ##################### DYNAMIC_DEEPHIT_TRANSFORMER PREDICTIONS #####################
         if args.model_type == "dynamic_deephit_transformer":
             from ...supervised_learning.predict import get_predictions, get_all_predictions, bootstrap_evaluation, plot_random_predictions, plot_health_score_statistics
 
@@ -254,6 +257,7 @@ def main():
             return
         
         
+        ####################### BC_TRANSFORMER PREDICTIONS #######################
         elif args.model_type == "bc_transformer":
             from ...supervised_learning.predict_behavioural_cloning_transformer import plot_random_predictions, get_all_predictions
 
@@ -292,18 +296,6 @@ def main():
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-    
     # Initialize config manager, it holds paths and environment info
     config_manager = ConfigManager(args)
     if config_manager.model_type == "dynamic_deephit" or config_manager.model_type == "dynamic_deephit_transformer" or \

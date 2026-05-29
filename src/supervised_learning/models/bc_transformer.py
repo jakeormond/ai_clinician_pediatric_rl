@@ -205,7 +205,8 @@ class BehaviouralCloneTransformer(nn.Module):
         
         # 1. Forward pass to get the pooled latent embedding vector
         # shape: [Batch, d_model] (e.g., [B, 128])
-        _, latent_features = self(x, padding_mask)
+        # _, latent_features = self(x, padding_mask)
+        _, latent_features = self(x)
         
         # 2. Check for Token Uniformity (Is our 128-D embedding space alive?)
         # Calculate variance across the batch for each hidden dimension
@@ -309,7 +310,7 @@ class BCTransformerTrainer:
         # covariate_pred: None (or [B, T_cap, num_covariates] if implemented)
         predicted_actions, latent_features = self.model(
             X, 
-            padding_mask=mask
+            # padding_mask=mask
         )
 
         # use loss_fn
@@ -366,7 +367,7 @@ class BCTransformerTrainer:
             # covariate_pred: None (or [B, T_cap, num_covariates] if implemented)
             predicted_actions, latent_features = self.model(
                 X, 
-                padding_mask=mask
+                # padding_mask=mask
             )
 
             loss = self.loss_fn(predicted_actions, actions)   

@@ -189,7 +189,8 @@ def inference_loop(
                 # make mask chunk boolean
                 mask_chunk = mask_chunk.bool()
 
-                predicted_actions, output = model(windows_chunk, padding_mask=mask_chunk)
+                # predicted_actions, output = model(windows_chunk, padding_mask=mask_chunk)
+                predicted_actions, output = model(windows_chunk)
                 # risk_logits = [logits[:, -1, :].cpu() for logits in risk_logits]  # unpack tuple
                 # risk_logits = torch.stack(risk_logits, dim=2)  # (batch_size, num_risks, num_time_bins)
 

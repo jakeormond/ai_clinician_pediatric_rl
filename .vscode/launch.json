@@ -68,7 +68,7 @@
                 "--search_variant", "fixed_hyperparameters",
                 "--final_timestep_only", "True",                
                 "--cohort", "sepsis",
-                "--n_epochs", "100",
+                "--n_epochs", "20",
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

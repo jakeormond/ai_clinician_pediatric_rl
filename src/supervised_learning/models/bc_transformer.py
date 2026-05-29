@@ -161,18 +161,18 @@ class BehaviouralCloneTransformer(nn.Module):
                 x, 
                 mask=causal_mask, # Causal Mask
                 # src_key_padding_mask=padding_mask
-                src_key_padding_mask=~padding_mask.bool() if padding_mask is not None else None
+                src_key_padding_mask=~padding_mask.bool() if padding_mask is not None else None,
+                is_causal=True
             ) # [B, T, d_model]
         else:
             output = self.transformer_encoder(
                 x,
                 mask=causal_mask # Causal Mask
             )
-        
-        # # # 4. Process all timesteps
-        # # # Flatten the output to treat every timestep of every sequence as a separate prediction point
-        # # Output shape is now [B * T, d_model]
-        # all_timesteps_rep = output.reshape(batch_size * seq_len, self.d_model)
+
+        # Wipe out any FlashAttention evaluation arithmetic artifacts
+        if not self.training:
+            output = torch.nan_to_num(output, nan=0.0)
         
         # 4. Pooling: Extract the final timestep's latent embedding
         # This vector represents the accumulated history up to hour T
@@ -262,8 +262,6 @@ class BCTransformerTrainer:
         grad_clip=1.0,
         scheduler=None,
         verbose=True,
-        l1_params: list = [],
-        l1_lambda: float = 0.0,
         ema_alpha: float = 0.99,  # Add ema_alpha argument for moving
         final_timestep_only: bool = True,
     ):
@@ -286,8 +284,6 @@ class BCTransformerTrainer:
         self.grad_clip = grad_clip
         self.scheduler = scheduler
         self.verbose = verbose
-        self.l1_params = l1_params
-        self.l1_lambda = float(l1_lambda)
         self.clip_fraction_ema = 0.0  # Initialize EMA for clipping fraction
         self.ema_alpha = ema_alpha
         self.final_timestep_only = final_timestep_only
@@ -316,10 +312,9 @@ class BCTransformerTrainer:
             X, 
             padding_mask=mask
         )
-        
-        criterion = nn.MSELoss()
 
-        loss = criterion(predicted_actions, actions)       
+        # use loss_fn
+        loss = self.loss_fn(predicted_actions, actions)
 
         # Backward pass - compute gradients
         loss.backward()
@@ -348,6 +343,7 @@ class BCTransformerTrainer:
 
         loss_dict = {
             "mse": loss.item(),
+            "lr": self.optimizer.param_groups[0]['lr']
         }
 
         
@@ -373,10 +369,8 @@ class BCTransformerTrainer:
                 X, 
                 padding_mask=mask
             )
-            
-            criterion = nn.MSELoss()
 
-            loss = criterion(predicted_actions, actions)     
+            loss = self.loss_fn(predicted_actions, actions)   
 
             neuron_stats = self.model.get_neuron_stats(X, padding_mask=mask)
                 
@@ -403,7 +397,7 @@ def get_trainer(
         feature_dim=feature_dim+1, # +1 for the local time feature we add in the replay buffer
         d_model=hyperparams['d_model'],               # e.g., 128 or 256
         nhead=hyperparams['nhead'],                   # e.g., 4 or 8
-        num_encoder_layers=hyperparams['n_layers'],   # e.g., 3 or 6
+        num_encoder_layers=hyperparams['num_encoder_layers'],   # e.g., 3 or 6
         n_actions=num_targets,     # e.g., 2 for binary actions, or more for multi-class
         dropout=hyperparams['dropout'],
         feature_dropout_p=hyperparams['feature_dropout_p'],
@@ -411,26 +405,12 @@ def get_trainer(
         max_seq_len=config_manager.training_config['window_length'],
     ).to(config_manager.training_config['device'])
 
-    # # Collect L1 parameters: classification head weights only
-    # l1_params = [
-    #     p for name, p in dynamic_deephit_model.named_parameters()
-    #     if name.startswith("heads.") and name.endswith(".weight")
-    # ]
-
     bc_optimizer = torch.optim.AdamW(
         bc_model.parameters(),
         lr=learning_rate,
         weight_decay = float(hyperparams['weight_decay'])
     )
 
-    n_epochs = config_manager.n_epochs
-    batch_size = int(hyperparams['batch_size'])
-
-
-    # dataset_size = training_dataset.n_samples  # n windows we sample on each epoch
-    # dataset_size = hyperparams['total_steps']
-    # steps_per_epoch = (dataset_size + batch_size - 1) // batch_size
-    # total_steps = n_epochs * steps_per_epoch
     total_steps = int(hyperparams['total_steps'])
 
     pct_start = hyperparams['pct_start']
@@ -452,8 +432,6 @@ def get_trainer(
             grad_clip = hyperparams['grad_clip'],
             scheduler=scheduler,
             verbose=True, 
-            # l1_params=l1_params,          # ← ADD THIS
-            l1_lambda=hyperparams['l1_lambda'],   
         )
 
     return trainer
@@ -487,23 +465,3 @@ def bc_loss(
     loss = criterion(predicted_actions, clinician_actions)    
    
     return loss 
-
-
-class G_SigmaScheduler:
-    def __init__(self, start_sigma=2.0, end_sigma=0.5, total_epochs=100):
-        self.start_g_sigma = start_sigma
-        self.end_g_sigma = end_sigma
-        self.total_epochs = total_epochs
-
-    def get_sigma(self, epoch):
-        # Exponential decay is usually most effective
-        # sigma = start * (end/start) ^ (epoch/total)
-        if epoch >= self.total_epochs:
-            return self.end_g_sigma
-        
-        if epoch <= 0:
-            return self.start_g_sigma
-
-        sigma = self.start_g_sigma * (self.end_g_sigma / self.start_g_sigma) ** (epoch / self.total_epochs)
-        return sigma
-

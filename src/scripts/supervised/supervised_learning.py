@@ -286,6 +286,32 @@ def main():
                 model_type = config_manager.model_type
                 experiment_dir = config_manager.experiment_dir
 
+                actions_in_state = config_manager.training_config['actions_in_state']
+                if actions_in_state:
+                    # insert subdirectory "with_actions" before "final_model" in the experiment_dir path
+                    experiment_dir = Path(
+                        str(experiment_dir).replace("/final_model/", "/with_actions/final_model/")
+                    )
+                else:
+                    experiment_dir = Path(
+                        str(experiment_dir).replace("/final_model/", "/without_actions/final_model/")
+                    )
+
+                # truncate experiment_dir after final_model
+                experiment_dir = str(experiment_dir).split("final_model")[0] + "final_model/"
+
+                # find the folder inside experiment_dir and add it to experiment_dir
+                subfolders = [f.path for f in os.scandir(experiment_dir) if f.is_dir()]
+                if len(subfolders) == 0:
+                    raise ValueError(f"No subfolders found in {experiment_dir}")
+                elif len(subfolders) > 1:
+                    raise ValueError(f"Multiple subfolders found in {experiment_dir}: {subfolders}")
+                else:
+                    experiment_dir = subfolders[0]
+
+                config_manager.experiment_dir = experiment_dir
+
+                print(f"Experiment directory for predictions: {config_manager.experiment_dir}")
                 predictions = get_all_predictions(
                     config_manager, 
                     model_type, 

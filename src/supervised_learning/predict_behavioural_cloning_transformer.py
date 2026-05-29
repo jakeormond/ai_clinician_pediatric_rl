@@ -45,7 +45,7 @@ def instantiate_model(
         feature_dim=feature_dim + 1,   # input feature dimension - add 1 for the local time feature we add in the replay buffer
         d_model=hyperparams['d_model'],               # e.g., 128 or 256
         nhead=hyperparams['nhead'],                   # e.g., 4 or 8
-        num_encoder_layers=hyperparams['n_layers'],   # e.g., 3 or 6
+        num_encoder_layers=hyperparams['num_encoder_layers'],   # e.g., 3 or 6
         ff_factor=hyperparams['ff_factor'],
         dropout=hyperparams['dropout'],
         feature_dropout_p=hyperparams['feature_dropout_p'],
@@ -56,7 +56,8 @@ def instantiate_model(
     # load trained model weights from final_model.pt
     model_path = os.path.join(config_manager.experiment_dir, 'final_model.pt')
     device = config_manager.training_config['device']
-    checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+    # allowlist numpy scalar before loading
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     state_dict = checkpoint['model_state_dict'] if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint else checkpoint
 
     bc_transformer_model.load_state_dict(state_dict)

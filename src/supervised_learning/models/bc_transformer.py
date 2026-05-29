@@ -5,7 +5,6 @@ Behavioural cloning algorithm based on dynamic deephit implementation
 from typing import Dict, List, Tuple
 import numpy as np
 import math
-from supervised_learning.models.dynamic_deephit_transformer import TransformerDeepHitTrainer
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

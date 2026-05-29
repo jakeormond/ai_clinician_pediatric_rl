@@ -48,5 +48,5 @@ zero_inputs: False  # Whether to zero out feature columns to confirm transformer
 # actions to leave out of last time step for RL setting
 # actions: ['fio2', 'peep_set', 'tidal_volume_set'] # for mimic_iv ventilation
 actions: [['intake', 'vis']] # for choc sepsis
-actions_in_state: True # whether to include action features in the state representation for the transformer - False is ablation
+actions_in_state: False # whether to include action features in the state representation for the transformer - False is ablation
 # actions: ['combined_hourly_iv', 'vasoactive_inotropic_score'] # for mimic sepsis

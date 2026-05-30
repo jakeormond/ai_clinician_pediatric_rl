@@ -290,11 +290,11 @@ def main():
                 if actions_in_state:
                     # insert subdirectory "with_actions" before "final_model" in the experiment_dir path
                     experiment_dir = Path(
-                        str(experiment_dir).replace("/final_model/", "/with_actions/final_model/")
+                        str(experiment_dir).replace("/final_model", "/with_actions/final_model/")
                     )
                 else:
                     experiment_dir = Path(
-                        str(experiment_dir).replace("/final_model/", "/without_actions/final_model/")
+                        str(experiment_dir).replace("/final_model", "/without_actions/final_model/")
                     )
 
                 # truncate experiment_dir after final_model
@@ -319,6 +319,8 @@ def main():
                 )
 
                 plot_random_predictions(config_manager)
+
+                return
 
 
 

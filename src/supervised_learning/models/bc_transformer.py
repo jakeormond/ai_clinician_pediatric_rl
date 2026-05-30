@@ -461,7 +461,29 @@ def bc_loss(
     We're not using a mask for the model, because we're padding with data, not zeros.
 
     """
-    criterion = nn.MSELoss()
-    loss = criterion(predicted_actions, clinician_actions)    
-   
+    # criterion = nn.MSELoss()
+    # loss = criterion(predicted_actions, clinician_actions)    
+
+    # 1. Compute raw squared errors
+    squared_errors = (predicted_actions - clinician_actions) ** 2 # [B, T, 2]
+    
+    # 2. Define your weights
+    fluid_task_weight = 1.0
+    vaso_task_weight = 5.0  # Scale up the entire vasopressor channel
+    
+    active_vaso_multiplier = 10.0 # Heavily punish missing a true active dose
+    
+    # 3. Construct the weight matrix
+    weights = torch.ones_like(clinician_actions)
+    weights[:, 0] = fluid_task_weight
+    weights[:, 1] = vaso_task_weight
+
+    # Apply the extra multiplier ONLY where the true vasopressor dose is > 0
+    true_vaso = clinician_actions[:, 1]
+    weights[:, 1] = torch.where(true_vaso > 0, vaso_task_weight * active_vaso_multiplier, vaso_task_weight)
+    
+    # 4. Apply weights and mask out padding steps
+    weighted_loss = squared_errors * weights
+    loss = weighted_loss.mean()  # Average over all dimensions (B, T, A)
+
     return loss 

@@ -280,6 +280,7 @@ class BCTransformerTrainer:
         optimizer,
         device = "CUDA" if torch.cuda.is_available() else "CPU",
         loss_fn=None,
+        loss_scale=1.0,
         vaso_loss_weight=1.0,
         grad_clip=1.0,
         scheduler=None,
@@ -304,6 +305,7 @@ class BCTransformerTrainer:
         self.optimizer = optimizer
         self.device = device
         self.loss_fn = loss_fn
+        self.loss_scale = loss_scale
         self.vaso_loss_weight = vaso_loss_weight
         self.grad_clip = grad_clip
         self.scheduler = scheduler
@@ -348,7 +350,8 @@ class BCTransformerTrainer:
             )
 
         # Backward pass - compute gradients
-        loss.backward()
+        total_loss_scaled = loss['total_loss'] * self.loss_scale
+        total_loss_scaled.backward()
 
         # capture gradient norms
         grad_norm = {"raw_grad_norm": self.model.get_grad_norm()}
@@ -372,11 +375,24 @@ class BCTransformerTrainer:
         if self.scheduler is not None:
             self.scheduler.step()
 
-        loss_dict = {
-            "mse": loss.item(),
-            "lr": self.optimizer.param_groups[0]['lr']
-        }
-
+        if self.use_binary_loss:
+            loss_dict = {
+                "total_loss": loss['total_loss'].item(),
+                "total_loss_scaled": total_loss_scaled.item(),
+                "mse_fluid_loss": loss['mse_fluid_loss'].item() if 'mse_fluid_loss' in loss else 0.0,
+                "mse_vaso_loss": loss['mse_vaso_loss'].item() if 'mse_vaso_loss' in loss else 0.0,
+                "bce_fluid_loss": loss['bce_fluid_loss'].item() if 'bce_fluid_loss' in loss else 0.0,
+                "bce_vaso_loss": loss['bce_vaso_loss'].item() if 'bce_vaso_loss' in loss else 0.0,
+                "lr": self.optimizer.param_groups[0]['lr']
+            }
+        else:
+            loss_dict = {
+                "total_loss": loss['total_loss'].item(),
+                "total_loss_scaled": total_loss_scaled.item(),
+                "mse_fluid_loss": loss['mse_fluid_loss'].item() if 'mse_fluid_loss' in loss else 0.0,
+                "mse_vaso_loss": loss['mse_vaso_loss'].item() if 'mse_vaso_loss' in loss else 0.0,
+                "lr": self.optimizer.param_groups[0]['lr']
+            }
         
         return loss_dict, None, grad_norm
     
@@ -414,8 +430,19 @@ class BCTransformerTrainer:
         # set model back to train mode
         self.model.train()
 
-        loss_dict = {
-            "mse": loss.item()
+        if self.use_binary_loss:
+            loss_dict = {
+                "total_loss": loss['total_loss'].item(),
+                "mse_fluid_loss": loss['mse_fluid_loss'].item() if 'mse_fluid_loss' in loss else 0.0,
+                "mse_vaso_loss": loss['mse_vaso_loss'].item() if 'mse_vaso_loss' in loss else 0.0,
+                "bce_fluid_loss": loss['bce_fluid_loss'].item() if 'bce_fluid_loss' in loss else 0.0,
+                "bce_vaso_loss": loss['bce_vaso_loss'].item() if 'bce_vaso_loss' in loss else 0.0
+            }
+        else:
+            loss_dict = {
+                "total_loss": loss['total_loss'].item(),
+                "mse_fluid_loss": loss['mse_fluid_loss'].item() if 'mse_fluid_loss' in loss else 0.0,
+                "mse_vaso_loss": loss['mse_vaso_loss'].item() if 'mse_vaso_loss' in loss else 0.0
             }
 
         return loss_dict, None, neuron_stats
@@ -467,6 +494,7 @@ def get_trainer(
             bc_optimizer,
             device=config_manager.training_config['device'],
             loss_fn=bc_loss,
+            loss_scale=hyperparams['loss_scale'],
             vaso_loss_weight=hyperparams['vaso_loss_weight'],
             use_binary_loss=hyperparams['use_binary_loss'],
             grad_clip = hyperparams['grad_clip'],
@@ -511,20 +539,28 @@ def bc_loss(
         # 2. Classification Loss (BCE)
         bce_fluid_loss = nn.BCEWithLogitsLoss()(action_logits[:, 0], binary_targets[:, 0])
         bce_vaso_loss = nn.BCEWithLogitsLoss()(action_logits[:, 1], binary_targets[:, 1]) * vaso_loss_weight  # Scale up vaso loss since it's more important to get the classification right for vaso
-        bce_loss = bce_fluid_loss + bce_vaso_loss
 
         # 3. Regression Loss (MSE) - ONLY calculate where the drug is actually active!
         # This prevents the zero-baseline from warping the continuous weights.
         active_mask = clinician_actions > 0.0
-        mse_loss = 0.0
-        for i in range(predicted_actions.shape[1]):
-            if active_mask[:, i].sum() > 0:
-                if i == 0: # fluid channel
-                    mse_loss += nn.MSELoss()(predicted_actions[active_mask[:, i], i], clinician_actions[active_mask[:, i], i])
-                else: # vaso channel - apply extra weight here since vaso predictions worse and we want to
-                    mse_loss += nn.MSELoss()(predicted_actions[active_mask[:, i], i], clinician_actions[active_mask[:, i], i]) * vaso_loss_weight * 10
+        if active_mask[:, 0].sum() > 0:
+            mse_fluid_loss = nn.MSELoss()(predicted_actions[active_mask[:, 0], 0], clinician_actions[active_mask[:, 0], 0])
+        else:
+            mse_fluid_loss = torch.tensor(0.0, device=predicted_actions.device)
         
-        loss = bce_loss + mse_loss
+        if active_mask[:, 1].sum() > 0:
+            mse_vaso_loss = nn.MSELoss()(predicted_actions[active_mask[:, 1], 1], clinician_actions[active_mask[:, 1], 1]) * vaso_loss_weight
+        else:
+            mse_vaso_loss = torch.tensor(0.0, device=predicted_actions.device)
+
+        total_loss = bce_fluid_loss + bce_vaso_loss + mse_fluid_loss + mse_vaso_loss
+        loss = {
+            "total_loss": total_loss,
+            "bce_fluid_loss": bce_fluid_loss,
+            "bce_vaso_loss": bce_vaso_loss,
+            "mse_fluid_loss": mse_fluid_loss ,
+            "mse_vaso_loss": mse_vaso_loss
+        }   
         return loss
 
     else:
@@ -533,8 +569,7 @@ def bc_loss(
         
         # 2. Define your weights
         fluid_loss_weight = 1.0
-        vaso_loss_weight = 5.0  # Scale up the entire vasopressor channel
-        
+        vaso_loss_weight = 5.0  # Scale up the entire vasopressor channel        
         active_vaso_multiplier = 10.0 # Heavily punish missing a true active dose
         
         # 3. Construct the weight matrix
@@ -547,7 +582,12 @@ def bc_loss(
         weights[:, 1] = torch.where(true_vaso > 0, vaso_loss_weight * active_vaso_multiplier, vaso_loss_weight)
         
         # 4. Apply weights and mask out padding steps
-        weighted_loss = squared_errors * weights
-        loss = weighted_loss.mean()  # Average over all dimensions (B, T, A)
-
+        fluid_loss = (squared_errors[:, 0] * weights[:, 0]).mean()
+        vaso_loss = (squared_errors[:, 1] * weights[:, 1]).mean()
+        total_loss = fluid_loss + vaso_loss
+        loss = {
+            "total_loss": total_loss,
+            "mse_fluid_loss": fluid_loss,
+            "mse_vaso_loss": vaso_loss
+        }
         return loss 

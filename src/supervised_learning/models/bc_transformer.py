@@ -288,6 +288,7 @@ class BCTransformerTrainer:
         ema_alpha: float = 0.99,  # Add ema_alpha argument for moving
         final_timestep_only: bool = True,
         use_binary_loss: bool = False, # whether to include the binary loss component in addition to the regression loss for the vaso channel - ablation
+        mse_loss_weight: float = 1.0,
     ):
         """
         Args:
@@ -314,6 +315,7 @@ class BCTransformerTrainer:
         self.ema_alpha = ema_alpha
         self.final_timestep_only = final_timestep_only
         self.use_binary_loss = use_binary_loss
+        self.mse_loss_weight = mse_loss_weight
 
         self.total_it = 0
 
@@ -346,7 +348,8 @@ class BCTransformerTrainer:
             action_logits, 
             clinician_actions, 
             vaso_loss_weight=self.vaso_loss_weight,
-            use_binary_loss=self.use_binary_loss
+            use_binary_loss=self.use_binary_loss,
+            mse_loss_weight=self.mse_loss_weight
             )
 
         # Backward pass - compute gradients
@@ -422,7 +425,8 @@ class BCTransformerTrainer:
                 action_logits, 
                 clinician_actions, 
                 vaso_loss_weight=self.vaso_loss_weight,
-                use_binary_loss=self.use_binary_loss
+                use_binary_loss=self.use_binary_loss,
+                mse_loss_weight=self.mse_loss_weight
                 )
 
             neuron_stats = self.model.get_neuron_stats(X, padding_mask=mask)
@@ -497,6 +501,7 @@ def get_trainer(
             loss_scale=hyperparams['loss_scale'],
             vaso_loss_weight=hyperparams['vaso_loss_weight'],
             use_binary_loss=hyperparams['use_binary_loss'],
+            mse_loss_weight=hyperparams['mse_loss_weight'],
             grad_clip = hyperparams['grad_clip'],
             scheduler=scheduler,
             verbose=True, 
@@ -512,6 +517,7 @@ def bc_loss(
         clinician_actions, 
         vaso_loss_weight=1.0,
         use_binary_loss=False,
+        mse_loss_weight=1.0,
         ):
     """
     MSE loss between predicted continuous actions and clinician actions
@@ -553,7 +559,7 @@ def bc_loss(
         else:
             mse_vaso_loss = torch.tensor(0.0, device=predicted_actions.device)
 
-        total_loss = bce_fluid_loss + bce_vaso_loss + mse_fluid_loss + mse_vaso_loss
+        total_loss = bce_fluid_loss + bce_vaso_loss +  mse_loss_weight * (mse_fluid_loss + mse_vaso_loss)
         loss = {
             "total_loss": total_loss,
             "bce_fluid_loss": bce_fluid_loss,

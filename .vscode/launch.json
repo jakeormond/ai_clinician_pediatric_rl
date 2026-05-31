@@ -69,6 +69,7 @@
                 "--final_timestep_only", "True",                
                 "--cohort", "sepsis",
                 "--n_epochs", "20",
+                "--testing"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

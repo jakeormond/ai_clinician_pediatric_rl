@@ -46,7 +46,6 @@ class FeatureDropout(nn.Module):
         return x * mask * (1.0 / (1.0 - self.p))
 
 
-
 class BehaviouralCloneTransformer(nn.Module):
     def __init__(
         self,
@@ -59,6 +58,7 @@ class BehaviouralCloneTransformer(nn.Module):
         feature_dropout_p: float = 0.0, # Probability of dropping each feature (column) during training
         n_actions: int = 2, # number of target actions to predict
         max_seq_len: int = 72, # For Positional Encoding and padding
+        use_binary_loss: bool = False, # whether to include the binary loss component in addition to the regression loss for the vaso channel - ablation
 
     ):
         """
@@ -82,7 +82,8 @@ class BehaviouralCloneTransformer(nn.Module):
         self.ff_factor = int(ff_factor)
 
         self.n_actions = int(n_actions)
-        
+        self.use_binary_loss = use_binary_loss
+
         self.dropout = dropout
         self.feature_dropout_p = feature_dropout_p
         self.max_seq_len = max_seq_len
@@ -113,6 +114,20 @@ class BehaviouralCloneTransformer(nn.Module):
             norm=nn.LayerNorm(d_model) # Final LayerNorm after the stack
         )
 
+        if use_binary_loss:
+            # Gatekeeper: Binary Classification Heads (Is action > 0?)
+            self.gatekeeper_heads = nn.ModuleList([
+                nn.Sequential(
+                    nn.Linear(self.d_model, self.d_model),
+                    nn.LayerNorm(self.d_model),
+                    nn.ReLU(),
+                    nn.Dropout(dropout),
+                    nn.Linear(self.d_model, 1) # Outputs raw logits (No Sigmoid here!)
+                )    
+                for _ in range(self.n_actions)
+            ])
+        
+        # doses
         self.policy_heads = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(self.d_model, self.d_model),
@@ -155,6 +170,7 @@ class BehaviouralCloneTransformer(nn.Module):
         causal_mask = self.causal_mask[:seq_len, :seq_len].to(x.device).bool()
         
         if padding_mask is not None:
+            # MASKING ISN'T WORKING, SO SHOULDN'T BE USED FOR NOW - I'VE LEFT THE LOGIC IN PLACE THOUGH
             # Mask should be True where padding exists (you should ensure your padding logic creates this mask)
             output = self.transformer_encoder(
                 x, 
@@ -178,18 +194,23 @@ class BehaviouralCloneTransformer(nn.Module):
         latent_features = output[:, -1, :] # Shape: [B, d_model]
                    
         # 5. Process through the regression heads to predict continuous actions
+        action_logits = []
         predicted_actions = []
-        for head in self.policy_heads:
+        for i in range(self.n_actions):
             # Each head outputs shape [B, 1] due to the final Linear(d_model, 1)
-            pred_dose = head(latent_features) 
+            if self.use_binary_loss:
+                action_logit = self.gatekeeper_heads[i](latent_features)
+                action_logits.append(action_logit)
+            pred_dose = self.policy_heads[i](latent_features) 
             predicted_actions.append(pred_dose)
 
         # Concatenate the list of [B, 1] tensors into a single [B, action_dims] tensor
+        if self.use_binary_loss:
+            action_logits = torch.cat(action_logits, dim=-1) # [B, n_actions]
         predicted_actions = torch.cat(predicted_actions, dim=-1)
 
-
         # Return both the bounded predictions (for the loss) and the raw features (for the Critic)
-        return predicted_actions, latent_features
+        return predicted_actions, action_logits,latent_features
     
     def generate_square_subsequent_mask(self, sz: int) -> torch.Tensor:
         """Generates an upper-triangular matrix of -inf, which prevents attention to future positions."""
@@ -206,7 +227,7 @@ class BehaviouralCloneTransformer(nn.Module):
         # 1. Forward pass to get the pooled latent embedding vector
         # shape: [Batch, d_model] (e.g., [B, 128])
         # _, latent_features = self(x, padding_mask)
-        _, latent_features = self(x)
+        _, _, latent_features = self(x)
         
         # 2. Check for Token Uniformity (Is our 128-D embedding space alive?)
         # Calculate variance across the batch for each hidden dimension
@@ -259,11 +280,13 @@ class BCTransformerTrainer:
         optimizer,
         device = "CUDA" if torch.cuda.is_available() else "CPU",
         loss_fn=None,
+        vaso_loss_weight=1.0,
         grad_clip=1.0,
         scheduler=None,
         verbose=True,
         ema_alpha: float = 0.99,  # Add ema_alpha argument for moving
         final_timestep_only: bool = True,
+        use_binary_loss: bool = False, # whether to include the binary loss component in addition to the regression loss for the vaso channel - ablation
     ):
         """
         Args:
@@ -281,12 +304,14 @@ class BCTransformerTrainer:
         self.optimizer = optimizer
         self.device = device
         self.loss_fn = loss_fn
+        self.vaso_loss_weight = vaso_loss_weight
         self.grad_clip = grad_clip
         self.scheduler = scheduler
         self.verbose = verbose
         self.clip_fraction_ema = 0.0  # Initialize EMA for clipping fraction
         self.ema_alpha = ema_alpha
         self.final_timestep_only = final_timestep_only
+        self.use_binary_loss = use_binary_loss
 
         self.total_it = 0
 
@@ -297,7 +322,7 @@ class BCTransformerTrainer:
 
         # unpack batch
         X = batch['features'].to(self.device)
-        
+        clinician_actions = batch['target_actions'].to(self.device)
         actions = batch['target_actions'].to(self.device)
         
         mask = batch['loss_mask'].to(self.device)
@@ -308,13 +333,19 @@ class BCTransformerTrainer:
         # Forward pass
         # risk_logits: list of tensors, where each tensor is [B, T_cap, num_time_bins]
         # covariate_pred: None (or [B, T_cap, num_covariates] if implemented)
-        predicted_actions, latent_features = self.model(
+        predicted_actions, action_logits, latent_features = self.model(
             X, 
             # padding_mask=mask
         )
 
         # use loss_fn
-        loss = self.loss_fn(predicted_actions, actions)
+        loss = self.loss_fn(
+            predicted_actions, 
+            action_logits, 
+            clinician_actions, 
+            vaso_loss_weight=self.vaso_loss_weight,
+            use_binary_loss=self.use_binary_loss
+            )
 
         # Backward pass - compute gradients
         loss.backward()
@@ -356,7 +387,7 @@ class BCTransformerTrainer:
         # unpack batch
         X = batch['features'].to(self.device)
         
-        actions = batch['target_actions'].to(self.device)
+        clinician_actions = batch['target_actions'].to(self.device)
         
         mask = batch['loss_mask'].to(self.device)
 
@@ -365,12 +396,18 @@ class BCTransformerTrainer:
             # Forward pass
             # risk_logits: list of tensors, where each tensor is [B, T_cap, num_time_bins]
             # covariate_pred: None (or [B, T_cap, num_covariates] if implemented)
-            predicted_actions, latent_features = self.model(
+            predicted_actions, action_logits, latent_features = self.model(
                 X, 
                 # padding_mask=mask
             )
 
-            loss = self.loss_fn(predicted_actions, actions)   
+            loss = self.loss_fn(
+                predicted_actions, 
+                action_logits, 
+                clinician_actions, 
+                vaso_loss_weight=self.vaso_loss_weight,
+                use_binary_loss=self.use_binary_loss
+                )
 
             neuron_stats = self.model.get_neuron_stats(X, padding_mask=mask)
                 
@@ -403,6 +440,7 @@ def get_trainer(
         feature_dropout_p=hyperparams['feature_dropout_p'],
         ff_factor=hyperparams['ff_factor'],
         max_seq_len=config_manager.training_config['window_length'],
+        use_binary_loss=hyperparams['use_binary_loss']
     ).to(config_manager.training_config['device'])
 
     bc_optimizer = torch.optim.AdamW(
@@ -429,6 +467,8 @@ def get_trainer(
             bc_optimizer,
             device=config_manager.training_config['device'],
             loss_fn=bc_loss,
+            vaso_loss_weight=hyperparams['vaso_loss_weight'],
+            use_binary_loss=hyperparams['use_binary_loss'],
             grad_clip = hyperparams['grad_clip'],
             scheduler=scheduler,
             verbose=True, 
@@ -440,7 +480,10 @@ def get_trainer(
 
 def bc_loss(
         predicted_actions, 
-        clinician_actions
+        action_logits,
+        clinician_actions, 
+        vaso_loss_weight=1.0,
+        use_binary_loss=False,
         ):
     """
     MSE loss between predicted continuous actions and clinician actions
@@ -461,29 +504,50 @@ def bc_loss(
     We're not using a mask for the model, because we're padding with data, not zeros.
 
     """
-    # criterion = nn.MSELoss()
-    # loss = criterion(predicted_actions, clinician_actions)    
+    if use_binary_loss:
+        # 1. Create binary targets (1 if drug is given, 0 if not)
+        binary_targets = (clinician_actions > 0.0).float()   
 
-    # 1. Compute raw squared errors
-    squared_errors = (predicted_actions - clinician_actions) ** 2 # [B, T, 2]
-    
-    # 2. Define your weights
-    fluid_task_weight = 1.0
-    vaso_task_weight = 5.0  # Scale up the entire vasopressor channel
-    
-    active_vaso_multiplier = 10.0 # Heavily punish missing a true active dose
-    
-    # 3. Construct the weight matrix
-    weights = torch.ones_like(clinician_actions)
-    weights[:, 0] = fluid_task_weight
-    weights[:, 1] = vaso_task_weight
+        # 2. Classification Loss (BCE)
+        bce_fluid_loss = nn.BCEWithLogitsLoss()(action_logits[:, 0], binary_targets[:, 0])
+        bce_vaso_loss = nn.BCEWithLogitsLoss()(action_logits[:, 1], binary_targets[:, 1]) * vaso_loss_weight  # Scale up vaso loss since it's more important to get the classification right for vaso
+        bce_loss = bce_fluid_loss + bce_vaso_loss
 
-    # Apply the extra multiplier ONLY where the true vasopressor dose is > 0
-    true_vaso = clinician_actions[:, 1]
-    weights[:, 1] = torch.where(true_vaso > 0, vaso_task_weight * active_vaso_multiplier, vaso_task_weight)
-    
-    # 4. Apply weights and mask out padding steps
-    weighted_loss = squared_errors * weights
-    loss = weighted_loss.mean()  # Average over all dimensions (B, T, A)
+        # 3. Regression Loss (MSE) - ONLY calculate where the drug is actually active!
+        # This prevents the zero-baseline from warping the continuous weights.
+        active_mask = clinician_actions > 0.0
+        mse_loss = 0.0
+        for i in range(predicted_actions.shape[1]):
+            if active_mask[:, i].sum() > 0:
+                if i == 0: # fluid channel
+                    mse_loss += nn.MSELoss()(predicted_actions[active_mask[:, i], i], clinician_actions[active_mask[:, i], i])
+                else: # vaso channel - apply extra weight here since vaso predictions worse and we want to
+                    mse_loss += nn.MSELoss()(predicted_actions[active_mask[:, i], i], clinician_actions[active_mask[:, i], i]) * vaso_loss_weight * 10
+        
+        loss = bce_loss + mse_loss
+        return loss
 
-    return loss 
+    else:
+        # 1. Compute raw squared errors
+        squared_errors = (predicted_actions - clinician_actions) ** 2 # [B, T, 2]
+        
+        # 2. Define your weights
+        fluid_loss_weight = 1.0
+        vaso_loss_weight = 5.0  # Scale up the entire vasopressor channel
+        
+        active_vaso_multiplier = 10.0 # Heavily punish missing a true active dose
+        
+        # 3. Construct the weight matrix
+        weights = torch.ones_like(clinician_actions)
+        weights[:, 0] = fluid_loss_weight
+        weights[:, 1] = vaso_loss_weight
+
+        # Apply the extra multiplier ONLY where the true vasopressor dose is > 0
+        true_vaso = clinician_actions[:, 1]
+        weights[:, 1] = torch.where(true_vaso > 0, vaso_loss_weight * active_vaso_multiplier, vaso_loss_weight)
+        
+        # 4. Apply weights and mask out padding steps
+        weighted_loss = squared_errors * weights
+        loss = weighted_loss.mean()  # Average over all dimensions (B, T, A)
+
+        return loss 

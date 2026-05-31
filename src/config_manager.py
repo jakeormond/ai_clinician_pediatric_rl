@@ -74,15 +74,18 @@ class ConfigManager:
                     raise ValueError(f"Unsupported model_type for prediction: {self.model_type}")
 
                 if results_dir is not None:
-                    # get the path to the folder inside the results_dir
-                    model_folders = [f for f in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, f))]
-                    if len(model_folders) > 1:
-                        raise ValueError("Multiple model folders found in final_model_dir, please specify one")
-                    if len(model_folders) > 0:
-                        model_folder = model_folders[0]
-                        self.experiment_dir = Path(results_dir) / model_folder
-                    else:
+                    if not os.path.exists(results_dir):
                         self.experiment_dir = Path(results_dir)
+                    else:
+                        # get the path to the folder inside the results_dir
+                        model_folders = [f for f in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, f))]
+                        if len(model_folders) > 1:
+                            raise ValueError("Multiple model folders found in final_model_dir, please specify one")
+                        if len(model_folders) > 0:
+                            model_folder = model_folders[0]
+                            self.experiment_dir = Path(results_dir) / model_folder
+                        else:
+                            self.experiment_dir = Path(results_dir)
 
             elif self.experiment_type == "model_evaluation":               
                 results_dir = os.path.join(

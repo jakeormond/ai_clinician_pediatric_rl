@@ -10,7 +10,7 @@ tuning: False
 # loss type
 loss_metric: "total_loss" # "combined_loss"  # Which metric to use for early stopping
 loss_scale: 0.05 # Scale factor for total loss
-loss_scale_mse: 10.0 # Scale factor for MSE component of loss when using combined loss - set higher than binary loss since MSE values smaller and we want to encourage improvement
+mse_loss_weight: 10.0 # Scale factor for MSE component of loss when using combined loss - set higher than binary loss since MSE values smaller and we want to encourage improvement
 
 # batch size
 batch_size: 64  # Batch size for all networks

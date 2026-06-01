@@ -251,6 +251,10 @@ def create_trainer(training_dataset, hyperparams, config_manager):
 
     model_type = config_manager.model_type
     module = importlib.import_module(MODEL_MODULES[model_type])
+
+    # add training_dataset.action_proportions to config_manager.training_config for potential use in loss weighting
+    if model_type == 'bc_transformer':
+        config_manager.training_config['action_proportions'] = training_dataset.action_proportions
     
     return module.get_trainer(
         config_manager,

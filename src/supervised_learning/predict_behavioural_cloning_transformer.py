@@ -51,6 +51,7 @@ def instantiate_model(
         feature_dropout_p=hyperparams['feature_dropout_p'],
         n_actions=len(hyperparams['actions']),
         max_seq_len=config_manager.training_config['window_length'],
+        use_binary_loss = hyperparams['use_binary_loss']
     ).to(config_manager.training_config['device'])
     
     # load trained model weights from final_model.pt
@@ -191,6 +192,19 @@ def inference_loop(
 
                 # predicted_actions, output = model(windows_chunk, padding_mask=mask_chunk)
                 predicted_actions, action_logits, output = model(windows_chunk)
+                if action_logits is not None:
+                    action_logits = action_logits
+                    # 2. Map logits to probabilities
+                    probabilities = torch.sigmoid(action_logits) # Scale strictly to [0, 1]
+
+                    # 3. Create a binary mask (True = Give a dose, False = Do not give a dose)
+                    give_dose_mask_0 = probabilities[:,0] >= 0.5
+                    give_dose_mask_1 = probabilities[:,1] >= 0.15
+                    give_dose_mask = torch.stack([give_dose_mask_0, give_dose_mask_1], dim=1)
+
+                    # 4. Apply the binary to the predicted actions (set to 0 if False, keep original value if True)
+                    predicted_actions = predicted_actions * give_dose_mask.float()
+                
                 # risk_logits = [logits[:, -1, :].cpu() for logits in risk_logits]  # unpack tuple
                 # risk_logits = torch.stack(risk_logits, dim=2)  # (batch_size, num_risks, num_time_bins)
 

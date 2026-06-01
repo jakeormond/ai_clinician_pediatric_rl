@@ -143,6 +143,15 @@ class DynamicDeepHitTransformerDataset(Dataset):
         # model specific processing
         if self.task == "bc_transformer":
             self.target_actions = torch.tensor(data_processor.dynamic_deephit_dataset["trajectories"][:, targets_ind], dtype=torch.float32)
+            
+            # calculate proportion of timesteps where each action is given in the training set for potential use in loss weighting
+            self.action_proportions = {}
+            for i, ind in enumerate(targets_ind):
+                action_name = self.feature_names[ind]
+                action_given = self.target_actions[:, i] > 0.0
+                proportion_given = action_given.float().mean().item()
+                self.action_proportions[action_name] = proportion_given
+
             if not config_manager.training_config['actions_in_state']:
                 # remove all self.response_zero_ind and self.carry_forward_ind columns from trajectories
                 cols_to_remove = np.sort(list(set(self.response_zero_ind) | set(self.carry_forward_ind)))

@@ -289,6 +289,7 @@ class BCTransformerTrainer:
         final_timestep_only: bool = True,
         use_binary_loss: bool = False, # whether to include the binary loss component in addition to the regression loss for the vaso channel - ablation
         mse_loss_weight: float = 1.0,
+        action_proportions: Dict[str, float] = {} # dictionary of action name to proportion of timesteps where that action is given in the training set, for potential use in loss weighting
     ):
         """
         Args:
@@ -316,6 +317,7 @@ class BCTransformerTrainer:
         self.final_timestep_only = final_timestep_only
         self.use_binary_loss = use_binary_loss
         self.mse_loss_weight = mse_loss_weight
+        self.action_proportions = action_proportions
 
         self.total_it = 0
 
@@ -349,7 +351,8 @@ class BCTransformerTrainer:
             clinician_actions, 
             vaso_loss_weight=self.vaso_loss_weight,
             use_binary_loss=self.use_binary_loss,
-            mse_loss_weight=self.mse_loss_weight
+            mse_loss_weight=self.mse_loss_weight,
+            action_proportions=self.action_proportions
             )
 
         # Backward pass - compute gradients
@@ -426,7 +429,8 @@ class BCTransformerTrainer:
                 clinician_actions, 
                 vaso_loss_weight=self.vaso_loss_weight,
                 use_binary_loss=self.use_binary_loss,
-                mse_loss_weight=self.mse_loss_weight
+                mse_loss_weight=self.mse_loss_weight,
+                action_proportions=self.action_proportions
                 )
 
             neuron_stats = self.model.get_neuron_stats(X, padding_mask=mask)
@@ -502,6 +506,7 @@ def get_trainer(
             vaso_loss_weight=hyperparams['vaso_loss_weight'],
             use_binary_loss=hyperparams['use_binary_loss'],
             mse_loss_weight=hyperparams['mse_loss_weight'],
+            action_proportions=config_manager.training_config.get('action_proportions', {}),
             grad_clip = hyperparams['grad_clip'],
             scheduler=scheduler,
             verbose=True, 
@@ -518,6 +523,7 @@ def bc_loss(
         vaso_loss_weight=1.0,
         use_binary_loss=False,
         mse_loss_weight=1.0,
+        action_proportions={}
         ):
     """
     MSE loss between predicted continuous actions and clinician actions
@@ -543,8 +549,13 @@ def bc_loss(
         binary_targets = (clinician_actions > 0.0).float()   
 
         # 2. Classification Loss (BCE)
-        bce_fluid_loss = nn.BCEWithLogitsLoss()(action_logits[:, 0], binary_targets[:, 0])
-        bce_vaso_loss = nn.BCEWithLogitsLoss()(action_logits[:, 1], binary_targets[:, 1]) * vaso_loss_weight  # Scale up vaso loss since it's more important to get the classification right for vaso
+        fluid_pos_ratio = (1.0 - action_proportions['intake']) / action_proportions['intake']
+        vaso_pos_ratio = (1.0 - action_proportions['vis']) / action_proportions['vis']
+        device = action_logits.device
+        fluid_pos_weight = torch.tensor([fluid_pos_ratio], device=device)
+        vaso_pos_weight = torch.tensor([vaso_pos_ratio], device=device)
+        bce_fluid_loss = nn.BCEWithLogitsLoss(pos_weight=fluid_pos_weight)(action_logits[:, 0], binary_targets[:, 0])
+        bce_vaso_loss = nn.BCEWithLogitsLoss(pos_weight=vaso_pos_weight)(action_logits[:, 1], binary_targets[:, 1]) * vaso_loss_weight  # Scale up vaso loss since it's more important to get the classification right for vaso
 
         # 3. Regression Loss (MSE) - ONLY calculate where the drug is actually active!
         # This prevents the zero-baseline from warping the continuous weights.

@@ -76,7 +76,7 @@ class ShardProcessor:
             self.dynamic_deephit_dataset = self.load_dynamic_deephit_dataset_from_h5(final_file_path)
             
             # if we are running RL, load reward
-            if config_manager.data_config['model_type'] == 'reinforcement_learning' and config_manager.data_config['use_reward']:
+            if config_manager.data_config['model_type'] == 'reinforcement_learning': # and config_manager.data_config['use_reward']:
                 # get the parent directory for the supervised model which generates the health score
                 # supervised_model_dir = os.path.dirname(config_manager.paths['supervised_final_model_dir'])
                 # supervised_model_dir = os.path.join(supervised_model_dir, "five_splits", 
@@ -94,19 +94,25 @@ class ShardProcessor:
 
                 self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
                                                                         keys_to_exclude=['predictions', 'entropy'])
-                
+
+                # load behavioural cloning latents if using
+                if config_manager.data_config['use_behavior_cloning_latents']:
+                    bc_model_file_dir = config_manager.data_config['bc_latents_path']
+                    bc_prediction_file_path = os.path.join(bc_model_file_dir, f"{pred_split}_set_predictions.h5")
+
+                    self.bc_latents = self.load_dynamic_deephit_predictions_from_h5(bc_prediction_file_path, 
+                                                                        keys_to_load=['model_outputs', 'index_ptr', 'stay_ids'])
+                    
+
                 if self.split == 'tuning': # we need to filter the predictions to only include the stays in the tuning set, which are a subset of the training set
                     tuning_stay_ids = self.dynamic_deephit_dataset['stay_ids']
-                    self.filter_by_stay_ids(tuning_stay_ids, dataset_types = ['dynamic_deephit_predictions'])
+                    self.filter_by_stay_ids(tuning_stay_ids, dataset_types = ['dynamic_deephit_predictions', 'bc_latents'])
 
                 if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
                     # if we are filtering to a specific cohort, we also need to filter the predictions to only include that cohort
                     logger.info(f"Filtering dynamic deephit predictions to only include cohort: {config_manager._data_config['cohort']}")
-                    self.filter_cohort(config_manager)
+                    self.filter_cohort(config_manager)               
                 
-                # process the reward
-                # self.process_reward(config_manager)
-
                 return
 
             
@@ -387,14 +393,18 @@ class ShardProcessor:
 
         # get states
         if states == "model_outputs":
+            
+            # combine the self.dynamic_deephit_predictions["model_outputs"] and self.bc_latents["model_outputs"] by concatenating along the feature dimension, to create a larger state representation that includes both the dynamic deephit predictions and the behavioral cloning latents. We will then scale this combined state representation before feeding it into the RL model.
+            model_outputs = np.concatenate([self.dynamic_deephit_predictions["model_outputs"], self.bc_latents["model_outputs"]], axis=1)
+                        
             # need to scale the outputs
             if scaler == None:
                 # use StandardScaler to scale the model outputs, fit on the states in the training set
                 scaler = StandardScaler()
-                scaler.fit(self.dynamic_deephit_predictions["model_outputs"])
+                scaler.fit(model_outputs)
             
             # apply the scaler to the model outputs
-            scaled_model_outputs = scaler.transform(self.dynamic_deephit_predictions["model_outputs"])                            
+            scaled_model_outputs = scaler.transform(model_outputs)                            
             
             self.rl_dataset['states'] = torch.tensor(scaled_model_outputs[state_ind, :], dtype=torch.float32)
             self.rl_dataset['next_states'] = torch.tensor(scaled_model_outputs[next_state_ind, :], dtype=torch.float32)
@@ -486,7 +496,7 @@ class ShardProcessor:
     def filter_by_stay_ids(self, stay_ids_to_keep, dataset_types=None):
         
         if dataset_types is None:
-            dataset_types = ['dynamic_deephit_dataset', 'dynamic_deephit_predictions']
+            dataset_types = ['dynamic_deephit_dataset', 'dynamic_deephit_predictions', 'bc_latents']
         
         for dataset_type in dataset_types:
             # check if dataset_type is an attribute of the class
@@ -499,6 +509,8 @@ class ShardProcessor:
                 dataset = self.dynamic_deephit_dataset
             elif dataset_type == 'dynamic_deephit_predictions':
                 dataset = self.dynamic_deephit_predictions
+            elif dataset_type == 'bc_latents':
+                dataset = self.bc_latents
             else:
                 raise ValueError(f"Invalid dataset type: {dataset_type}. Supported dataset types are: 'dynamic_deephit_dataset' and 'dynamic_deephit_predictions'.")
 
@@ -558,6 +570,8 @@ class ShardProcessor:
                 self.dynamic_deephit_dataset = dataset
             elif dataset_type == 'dynamic_deephit_predictions':
                 self.dynamic_deephit_predictions = dataset
+            elif dataset_type == 'bc_latents':
+                self.bc_latents = dataset
 
         return
 

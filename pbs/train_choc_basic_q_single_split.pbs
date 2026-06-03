@@ -68,7 +68,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --mode single_split \
     --split_num 0 \
     --search_variant random_search \
-    --n_search_iterations 1 \
+    --n_search_iterations 10 \
     --n_epochs 200 \
     --action_mode continuous_only \
     --cohort sepsis \

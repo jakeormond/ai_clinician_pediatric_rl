@@ -293,20 +293,34 @@ class ConfigManager:
                 reward_path = os.path.join(final_model_dir, model_folder)
                 self._data_config['reward_path'] = reward_path
 
+            if self._data_config['use_behavior_cloning_latents']:
+                bc_latents_path = os.path.join(
+                    self.paths['bc_transformer_final_model_dir'], 
+                    "five_splits"
+                )
 
+                split_name = f"split_{self.split_num}"
+                if self.cohort is not None and self.cohort != "all":
+                    split_name = os.path.join(split_name, self.cohort)
                 
-                # if not reward_paths_config_path.exists():
-                #     raise FileNotFoundError(f"Reward paths config file not found: {reward_paths_config_path}")
-                # with open(reward_paths_config_path, 'r') as f:
-                #     reward_paths = yaml.safe_load(f).get("rewards", {})
-                # if reward_type:
-                #     if reward_type not in reward_paths:
-                #         raise ValueError(f"Reward type '{reward_type}' not found in reward paths config")
-                #     reward_path = reward_paths[reward_type]
-                #     if not os.path.isabs(reward_path):
-                #         reward_path = os.path.join(self.get_experiments_dir, reward_path)
-                #     self._data_config['reward_path'] = reward_path
-                #     print(f"Set reward_path to: {self._data_config['reward_path']}")
+                actions = self.data_config.get('actions', None)
+                if actions is not None:
+                    actions_name = "-".join(actions)
+                    split_name = os.path.join(split_name, actions_name)   
+                
+                final_model_dir = os.path.join(
+                    bc_latents_path,
+                    split_name,
+                    "final_model"
+                )
+
+                model_folders = [f for f in os.listdir(final_model_dir) if os.path.isdir(os.path.join(final_model_dir, f))]
+                if len(model_folders) > 1:
+                    raise ValueError("Multiple model folders found in reward path, please specify one")
+                model_folder = model_folders[0]
+                bc_path = os.path.join(final_model_dir, model_folder)
+                self._data_config['bc_latents_path'] = bc_path
+
 
     def _build_wandb_config(self):
         """Build W&B configuration and store it internally."""

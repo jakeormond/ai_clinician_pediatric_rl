@@ -3,7 +3,7 @@
     "group": "reinforcement_learning"
     name: "basic_q"
 
-    tuning: False
+    tuning: True
 
     window_length: 72 # 72 hours, same as dynamic deephit - we want to use same state representation, but we can simply use
     # transformer ouput from dynamic deephit - set by use_raw_states
@@ -13,7 +13,7 @@
     n_episodes: 1000  # How many episodes run during evaluation
     # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
-    discount: 0.8  # Discount factor
+    discount: 0.99  # Discount factor
     # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
     # max_traj_len: 72  # Max trajectory length - probably need to change this - in data config
     device: "cuda"  # Device (cuda or cpu)
@@ -45,8 +45,11 @@
     grad_clip: 0.5
 
     # reward scaling
-    reward_scaling: 1.5  # Scaling factor for rewards
-    health_score_scale: 0.1  # Scaling factor for health score component of reward
-    health_score_hourly_change_scale: 0.5  # Scaling factor for hourly change component of reward
-
+    # reward_scaling: 1.5  # Scaling factor for rewards
+    health_score_hourly_change_clip: 10.
+    health_score_scale: 0.01  # Scaling factor for health score component of reward
+    health_score_hourly_change_scale: 0.99  # Scaling factor for hourly change component of reward
+    total_health_score_scale: 15.  # Scaling factor for total health score component of reward
+    potential_based_reward_shaping: True  # Whether to use potential-based reward shaping
+    terminal_health_score_reward: 2.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
 

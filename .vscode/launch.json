@@ -454,7 +454,6 @@
                 "--n_epochs", "200",
                 "--cohort", "sepsis",
                 "--action_mode", "continuous_only",
-                "--seed", "2",
                 "--testing"  
             ],
             "console": "integratedTerminal",

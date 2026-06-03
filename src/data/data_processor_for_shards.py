@@ -241,83 +241,111 @@ class ShardProcessor:
     def process_reward(self, config_manager, hyperparams):
         reward_type = config_manager.data_config['reward_type']
         if reward_type == 'health_score':
+            """ 
+            Health score and hourly change are scaled equally and then combined to get the final reward, 
+            which is then scaled again to keep gradients in an ideal range.
+            """
             # score is 0 to 100
             health_score = self.dynamic_deephit_predictions['health_score'] 
             index_ptr = self.dynamic_deephit_dataset['index_ptr']
 
             # get hourly_health_change            
-            hourly_health_change = np.append(np.diff(health_score), 0.) 
-            hourly_health_change[index_ptr[:-1]-1] = 0.0  
+            if hyperparams['potential_based_reward_shaping']: # we apply discount to the next state's health score, so we need to shift the hourly health change by one timestep to align with the current state
+                health_score_pbrs = copy.deepcopy(health_score)
+                # we zero out the final timestep health score, since this is only used as next state,
+                # the final timestep is the one before. And with the shifted health score, 
+                # we also need to zero out the last used timestamp, this handles that
+                health_score_pbrs[index_ptr[1:]-1] = 0.0
+
+                # shift one timestep back to get the next health score for each current state
+                health_score_pbrs_next = copy.deepcopy(health_score_pbrs)
+                health_score_pbrs_next = health_score_pbrs_next[1:]
+                # make final timestep health score 0, since these have no next state
+                health_score_pbrs_next[index_ptr[1:-1] - 1] = 0.0
+                # append on a final zero
+                health_score_pbrs_next = np.append(health_score_pbrs_next, 0.0)
+                # also make the second to last timestep health score 0, 
+                # since for pbrs, we have to zero out the final next health state
+                health_score_pbrs_next[index_ptr[1:]-2] = 0.0
+                
+                # discount the next health score by the discount factor
+                discount = hyperparams['discount']
+                discounted_health_score_pbrs_next = health_score_pbrs_next * discount
+             
+                # calculate the potential-based reward shaping term as the difference between the discounted next health score and the current health score
+                hourly_health_change = discounted_health_score_pbrs_next - health_score_pbrs
             
-            # clip hourly_health_change to hyperparms['health_score_hourly_change_clip']
-            hourly_max = hyperparams['health_score_hourly_change_clip']
-            hourly_min = -hyperparams['health_score_hourly_change_clip']
-            hourly_health_change = np.clip(hourly_health_change, hourly_min, hourly_max)
+                # apply symmetric scaling -  we want max abs value to be about 2/3 of hyperparams['terminal_health_score_reward']
+                hourly_health_change = hourly_health_change / np.max(np.abs(hourly_health_change))
+
+            else:
+                hourly_health_change = np.append(np.diff(health_score), 0.) 
+                hourly_health_change[index_ptr[:-1]-1] = 0.0  
             
-            # min_max scale the health score to [-1, 1] 
+                # clip hourly_health_change to hyperparms['health_score_hourly_change_clip']
+                hourly_max = hyperparams['health_score_hourly_change_clip']
+                hourly_min = -hyperparams['health_score_hourly_change_clip']
+                hourly_health_change = np.clip(hourly_health_change, hourly_min, hourly_max)
+                            
+                # min_max the hourly_health_change to [-1, 1]
+                hourly_health_change = ((hourly_health_change - hourly_min) / \
+                    (hourly_max - hourly_min)) * 2 - 1            
+            
+            # shift health score back one index, as we want the reward based on next health score
+            health_score = health_score[1:]
+            # make final timestep health score 0, since these have no next state
+            health_score[index_ptr[1:-1] - 1] = 0.0
+            # append on a final 0
+            health_score = np.append(health_score, 0.0)
+            
+            # min_max scale the health score to [-1, 1] !!!!! CHECK IF YOU SHOULD BE USING THE NEXT TIMESTEP !!!!!!!!!!!!!
             max_health_score = 100.0
             min_health_score = 0.0
             health_score = (((health_score - min_health_score) / \
                 (max_health_score - min_health_score))) * 2 - 1
             
-            # min_max the hourly_health_change to [-1, 1]
-            hourly_health_change = ((hourly_health_change - hourly_min) / \
-                (hourly_max - hourly_min)) * 2 - 1
-            
-            # scale by hyperparameters
+            # raise value error if health_score_scale and hourly_health_change_scale don't sum to 1
             health_score_scale = hyperparams['health_score_scale']
-            hourly_change_scale = hyperparams['health_score_hourly_change_scale']
-
-            # scale the scales so they sum to 1
-            total_scale = health_score_scale + hourly_change_scale
-            health_score_scale = health_score_scale / total_scale
-            hourly_change_scale = hourly_change_scale / total_scale
-          
+            hourly_change_scale = hyperparams['health_score_hourly_change_scale']            
+            if health_score_scale + hourly_change_scale != 1.0:
+                raise ValueError("health_score_scale and hourly_health_change_scale should sum to 1, " \
+                    f"but got health_score_scale = {health_score_scale} and hourly_health_change_scale = \
+                        {hourly_change_scale}. Please adjust the hyperparameters accordingly.")
+            # scale by hyperparameters
             health_score *= hyperparams['health_score_scale']
             hourly_health_change *= hyperparams['health_score_hourly_change_scale']
 
             # add them together to get the final reward
             health_score_total = health_score + hourly_health_change
 
-            # apply a final scaling to [-1, 1]
-            health_score_total = (health_score_total - health_score_total.min()) / \
-                (health_score_total.max() - health_score_total.min()) * 2 - 1
+            # apply scaling to total
+            if hyperparams['potential_based_reward_shaping']:
+                # apply symmetric scaling to the total health score
+                health_score_total = health_score_total / np.max(np.abs(health_score_total))
             
+            else: 
+                # min max scaling (to [-1, 1])
+                health_score_total = (health_score_total - health_score_total.min()) / \
+                    (health_score_total.max() - health_score_total.min()) * 2 - 1            
 
             # finally apply a scaling factor to keep gradients in the sweet spot
             total_health_score_scale = hyperparams['total_health_score_scale']
             health_score_total *= total_health_score_scale
-                      
-            # index_ptr = self.dynamic_deephit_dataset['index_ptr']
 
-            # # calculate hourly change; last hour should be 0
-            # hourly_health_change = np.zeros_like(health_score)
-            # for j in range(len(index_ptr) - 1):
-            #     start_idx = index_ptr[j]
-            #     end_idx = index_ptr[j + 1]
-            #     hourly_health_change[start_idx:end_idx] = np.diff(health_score[start_idx:end_idx], append=health_score[end_idx-1])
+            # add terminal rewards if using PBRS
+            if hyperparams['potential_based_reward_shaping']:
+                terminal_survival_score = hyperparams['terminal_health_score_reward'] * total_health_score_scale
+                terminal_mortality_score = -hyperparams['terminal_health_score_reward'] * total_health_score_scale
 
-            # # health score is from 0 to 100, we need to centre it so it is -50 to 50
-            # health_score = health_score - 50.0            
-            
+                final_indices = index_ptr[1:] - 2
+                outcome = self.dynamic_deephit_dataset['event']  # 1 for mortality, 0 for survival
+                
+                # apply terminal_survival_score to outcome == 0 and terminal_mortality_score to outcome == 1 at the final indices
+                health_score_total[final_indices] += np.where(outcome == 1, terminal_mortality_score, terminal_survival_score)
 
-            # # reward_std = hourly_health_change.std()
-            # #clip rewards to -5, 5
-            # hourly_health_change = np.clip(hourly_health_change, -5.0, 5.0)
-           
-            # # scale the raw health_score to [-1, 1]
-            # health_score = health_score / 50.0
-            
-            # # scale the hourly change
-            # hourly_change_scale = hyperparams['health_score_hourly_change_scale']
-            # hourly_health_change *= hourly_change_scale
-
-            # # scale the raw health score
-            # health_score_scale = hyperparams['health_score_scale']
-            # health_score *= health_score_scale
-
-            # # add the scaled health score to the hourly change to get the final reward  
-            # health_score_total = hourly_health_change + health_score        
+            # make final timestep rewards 0, since these have no next state and don't get used
+            health_score_total[index_ptr[1:] - 1] = 0.0
+              
             self.dynamic_deephit_predictions['reward'] = health_score_total.astype(np.float32)                                         
         
         else: 

@@ -556,7 +556,7 @@ class CQL:
 
 		self.critic.train()          # Dropout ACTIVE for the network we are updating
 		
-		with torch.no_grad():
+		with torch.no_grad(): # uses target actor for next action
 			target_Q = self.target_q(action, next_state, reward, not_done, noise=True)
 
 		# Get current Q estimates>
@@ -706,7 +706,8 @@ class CQL:
 			ent_alpha = 0.05
 			actor_loss_ent = ent_alpha * log_prob.mean() if log_prob is not None else 0.0
 
-			actor_loss = actor_loss_q + self.beta * actor_loss_bc + actor_loss_ent # i think CQL doesn't normally include a BC 
+			actor_loss = actor_loss_q 
+			# actor_loss = actor_loss_q + self.beta * actor_loss_bc + actor_loss_ent # i think CQL doesn't normally include a BC 
 			# component, but gemini says keep if for medical, probably use a very small beta
 			losses.update({
 				"actor_loss_total": actor_loss.item(),

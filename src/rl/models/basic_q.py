@@ -294,18 +294,18 @@ def get_q_stats_sarsa(q_clinician, q_rl, mortality) -> Dict[str, float]:
 
     q_stats_sarsa = {
         "batch_n": batch_n,
-        "advantage_mean": advantage_mean,
-        "advantage_variance": advantage_variance,
-        "survival_n": survival_n,
-        "advantage_survival_mean": advantage_survival_mean,
-        "variance_advantage_survival": variance_advantage_survival,            
-        "q_clinician_survival": q_clinician_survival,
-        "q_rl_survival": q_rl_survival,
-        "non_survival_n": non_survival_n,
-        "advantage_non_survival_mean": advantage_non_survival_mean,
-        "variance_advantage_non_survival": variance_advantage_non_survival,
-        "q_clinician_non_survival": q_clinician_non_survival,
-        "q_rl_non_survival": q_rl_non_survival,            
+        "sarsa_advantage_mean": advantage_mean,
+        "sarsa_advantage_variance": advantage_variance,
+        # "survival_n": survival_n,
+        "sarsa_advantage_survival_mean": advantage_survival_mean,
+        "sarsa_variance_advantage_survival": variance_advantage_survival,            
+        "sarsa_q_clinician_survival": q_clinician_survival,
+        "sarsa_q_rl_survival": q_rl_survival,
+        # "non_survival_n": non_survival_n,
+        "sarsa_advantage_non_survival_mean": advantage_non_survival_mean,
+        "sarsa_variance_advantage_non_survival": variance_advantage_non_survival,
+        "sarsa_q_clinician_non_survival": q_clinician_non_survival,
+        "sarsa_q_rl_non_survival": q_rl_non_survival,            
     }
     return q_stats_sarsa
 

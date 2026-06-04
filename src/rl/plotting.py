@@ -30,13 +30,18 @@ def plot_results(training_metrics, plot_dir, config_manager):
 
     all_keys = get_keys(training_metrics)
     
+    if hasattr(config_manager.training_config, 'policy_freq'):
+        policy_freq = config_manager.training_config['policy_freq']
+    else:
+        policy_freq = None
+
     plot_data(
         training_metrics, 
         x_axes, 
         all_keys, 
         'losses', 
         plot_dir, 
-        policy_frequency=config_manager.training_config['policy_freq']
+        policy_frequency=policy_freq
     )
     
     if 'q_stats' in all_keys:
@@ -46,7 +51,7 @@ def plot_results(training_metrics, plot_dir, config_manager):
             all_keys, 
             'q_stats', 
             plot_dir,
-            policy_frequency=config_manager.training_config['policy_freq']
+            policy_frequency=policy_freq
         )
     
     if 'advantage_keys' in all_keys:
@@ -56,7 +61,7 @@ def plot_results(training_metrics, plot_dir, config_manager):
             all_keys, 
             'advantages', 
             plot_dir,
-            policy_frequency=config_manager.training_config['policy_freq']
+            policy_frequency=policy_freq
         )
     
     plot_data(
@@ -65,7 +70,7 @@ def plot_results(training_metrics, plot_dir, config_manager):
         all_keys, 
         'neuron_stats', 
         plot_dir,
-        policy_frequency=config_manager.training_config['policy_freq']
+        policy_frequency=policy_freq
     )
 
     plot_data(
@@ -74,7 +79,7 @@ def plot_results(training_metrics, plot_dir, config_manager):
         all_keys, 
         'grad_norms', 
         plot_dir,
-        policy_frequency=config_manager.training_config['policy_freq']
+        policy_frequency=policy_freq
     )
 
     pass

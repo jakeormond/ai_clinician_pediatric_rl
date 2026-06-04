@@ -81,25 +81,55 @@ def create_buffer(processor, batch_size, shuffle=True, scaler=None, action_names
     return buffer, scaler
 
 
-def create_trainer(train_processor, hyperparams, config_manager):
+def create_trainer(train_processor, hyperparams, config_manager, actor=None):
     state_dim = train_processor.rl_dataset["states"].shape[1]
     action_dim = train_processor.rl_dataset["actions"].shape[1]
     
     model_type = config_manager.model_type
     module = importlib.import_module(MODEL_MODULES[model_type])
     
-    return module.get_trainer(
-        config_manager,
+    if model_type == "fqe" and actor is None:
+        raise ValueError("Actor must be provided for FQE model type.")
+    
+    if model_type == "fqe":
+        return module.get_trainer(
+            config_manager,
+            state_dim,
+            action_dim,
+            hyperparams,
+            actor=actor
+        )
+    else:
+        return module.get_trainer(
+            config_manager,
+            state_dim,
+            action_dim,
+            hyperparams
+        )
+
+
+def load_actor(train_processor, hyperparams, config_manager):
+    state_dim = train_processor.rl_dataset["states"].shape[1]
+    action_dim = train_processor.rl_dataset["actions"].shape[1]
+
+    actor_type = config_manager.actor_type
+    module = importlib.import_module(MODEL_MODULES[actor_type])
+
+    actor = module.load_trained_actor(
         state_dim,
         action_dim,
-        hyperparams
-    )
+        config_manager=config_manager        
+    ) # Assuming the module has a load_trained_actor function
+
+    return actor
 
 
-def create_evaluator(config_manager):   
+def create_evaluator(config_manager, train_processor):   
+    state_dim = train_processor.rl_dataset["states"].shape[1]
+    action_dim = train_processor.rl_dataset["actions"].shape[1]
     # evaluator is the sarsa critic 
     module = importlib.import_module(MODEL_MODULES['basic_q'])
-    return module.get_evaluator(config_manager)
+    return module.get_evaluator(state_dim, action_dim, config_manager)
 
    
 def get_early_stopping_config(config_manager):
@@ -173,7 +203,7 @@ class TrainingMetrics:
             # Safety check specifically for the 'advantages' edge case
             # (Checking if the dictionary is empty or has uninitialized keys)
             if "advantages" in container_name and (
-                not incoming_dict or len(list(incoming_dict.values())[0]) == 0
+                not incoming_dict or len(list(incoming_dict.values())) == 0
             ):
                 continue
 
@@ -280,9 +310,9 @@ def evaluate_during_training(
                 
                 advantages = evaluator.evaluate_sarsa(batch, mortality, rl_actions)
             
-            # check that advantages['survival_n'] == batch_losses['survival_n'] and advantages['non_survival_n'] == batch_losses['non_survival_n'], "Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict"
-            if not (advantages['survival_n'] == batch_losses['survival_n'] and advantages['non_survival_n'] == batch_losses['non_survival_n']):
-                logger.warning(f"Mismatch in survival/non-survival counts between batch_losses and advantages for batch_idx {batch_idx}. batch_losses: {batch_losses}, advantages: {advantages}")
+            # # check that advantages['survival_n'] == batch_losses['survival_n'] and advantages['non_survival_n'] == batch_losses['non_survival_n'], "Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict"
+            # if not (advantages['survival_n'] == batch_losses['survival_n'] and advantages['non_survival_n'] == batch_losses['non_survival_n']):
+            #     logger.warning(f"Mismatch in survival/non-survival counts between batch_losses and advantages for batch_idx {batch_idx}. batch_losses: {batch_losses}, advantages: {advantages}")
 
         else:
             advantages = None        
@@ -331,50 +361,50 @@ def evaluate_during_training(
     return val_losses, val_q_stats, val_neuron_stats, val_advantages
 
 
-def evaluate_final_model(trainer, evaluator, val_buffer, val_processor, model_dir, config_manager):
-    test_losses = defaultdict(list)
-    all_targets = []
-    all_predictions = []
+# def evaluate_final_model(trainer, evaluator, val_buffer, val_processor, model_dir, config_manager):
+#     test_losses = defaultdict(list)
+#     all_targets = []
+#     all_predictions = []
 
-     # load sarsa critic if we're not actually training it
-    # if config_manager.model_type != "basic_q":
-    #     sarsa_critic = load_sarsa_critic(config_manager)
+#      # load sarsa critic if we're not actually training it
+#     # if config_manager.model_type != "basic_q":
+#     #     sarsa_critic = load_sarsa_critic(config_manager)
 
-    # Final evaluation on test set
-    for batch_idx, batch in enumerate(val_buffer):       
+#     # Final evaluation on test set
+#     for batch_idx, batch in enumerate(val_buffer):       
         
-        batch_losses, targets, predictions = trainer.evaluate(batch)
+#         batch_losses, targets, predictions = trainer.evaluate(batch)
 
-        # Automatically append all validation metrics
-        for key, value in batch_losses.items():
-            test_losses[key].append(value)
+#         # Automatically append all validation metrics
+#         for key, value in batch_losses.items():
+#             test_losses[key].append(value)
 
-        if targets is not None and predictions is not None:
-            all_targets.append(targets.cpu())
-            all_predictions.append(predictions.cpu())
+#         if targets is not None and predictions is not None:
+#             all_targets.append(targets.cpu())
+#             all_predictions.append(predictions.cpu())
 
-        mortality = batch[6]  # assuming mortality is the 7th element in the batch tuple
-        with torch.no_grad():
-            if config_manager.model_type == "cvp":
-                rl_actions = trainer.actor_forward_for_sarsa(batch, rescale=True) 
-            else:
-                rl_actions = trainer.actor_forward_for_sarsa(batch)
+#         mortality = batch[6]  # assuming mortality is the 7th element in the batch tuple
+#         with torch.no_grad():
+#             if config_manager.model_type == "cvp":
+#                 rl_actions = trainer.actor_forward_for_sarsa(batch, rescale=True) 
+#             else:
+#                 rl_actions = trainer.actor_forward_for_sarsa(batch)
 
-            advantage_log_dict = evaluator.evaluate_sarsa(batch, mortality, rl_actions)
+#             advantage_log_dict = evaluator.evaluate_sarsa(batch, mortality, rl_actions)
 
 
-        # check that advantage_log_dict['survival_n'] == batch_losses['survival_n'] and advantage_log_dict['non_survival_n'] == batch_losses['non_survival_n'], "Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict"
-        if not (advantage_log_dict['survival_n'] == batch_losses['survival_n'] and advantage_log_dict['non_survival_n'] == batch_losses['non_survival_n']):
-            logger.warning(f"Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict for batch_idx {batch_idx}. batch_losses: {batch_losses}, advantage_log_dict: {advantage_log_dict}")
-        else:
-            # drop the batch_n, survival_n, and non_survival_n keys from advantage_log_dict since they are redundant with batch_losses
-            advantage_log_dict.pop('batch_n', None)
-            advantage_log_dict.pop('survival_n', None)
-            advantage_log_dict.pop('non_survival_n', None)
+#         # check that advantage_log_dict['survival_n'] == batch_losses['survival_n'] and advantage_log_dict['non_survival_n'] == batch_losses['non_survival_n'], "Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict"
+#         if not (advantage_log_dict['survival_n'] == batch_losses['survival_n'] and advantage_log_dict['non_survival_n'] == batch_losses['non_survival_n']):
+#             logger.warning(f"Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict for batch_idx {batch_idx}. batch_losses: {batch_losses}, advantage_log_dict: {advantage_log_dict}")
+#         else:
+#             # drop the batch_n, survival_n, and non_survival_n keys from advantage_log_dict since they are redundant with batch_losses
+#             advantage_log_dict.pop('batch_n', None)
+#             advantage_log_dict.pop('survival_n', None)
+#             advantage_log_dict.pop('non_survival_n', None)
 
-        # append q values to losses 
-        for key, value in advantage_log_dict.items():
-            test_losses[key].append(value)
+#         # append q values to losses 
+#         for key, value in advantage_log_dict.items():
+#             test_losses[key].append(value)
         
 
     # if config_manager.model_type != "basic_q" and sarsa_critic is not None:
@@ -402,9 +432,9 @@ def evaluate_final_model(trainer, evaluator, val_buffer, val_processor, model_di
 
         
     # calculate q value stats if available
-    if "mean_Q" in test_losses:
-        with torch.no_grad():
-            q_stats, test_losses = calculate_q_stats(test_losses)
+    # if "mean_Q" in test_losses:
+    #     with torch.no_grad():
+    #         q_stats, test_losses = calculate_q_stats(test_losses)
     
     # Calculate average test losses across all batches
     test_losses = {key: np.mean(values) for key, values in test_losses.items()}
@@ -587,14 +617,22 @@ def train_with_hyperparameters(
     # get total number of steps for scheduler if needed
     hyperparams['total_steps'] = n_epochs * len(training_buffer)
     
-    # create trainer
-    trainer = create_trainer(train_processor, hyperparams, config_manager)
+    if config_manager.model_type == "fqe":
+        actor_type = config_manager.actor_type
+        actor = load_actor(train_processor, hyperparams, config_manager)
+
+        trainer = create_trainer(train_processor, hyperparams, config_manager, actor=actor)
+    else:    
+        # create trainer
+        trainer = create_trainer(train_processor, hyperparams, config_manager)
 
     # create sarsa_evaluator if model_type is not basic_q, since we want to evaluate the advantage of the learned policy compared to the clinician policy during training
-    if config_manager.model_type != "basic_q":
-        evaluator = create_evaluator(config_manager)
+    if config_manager.model_type != "basic_q" and config_manager.model_type != "fqe":
+        evaluator = create_evaluator(config_manager, train_processor)
     else:
         evaluator = None
+
+    
         
     # Early stopping configuration 
     early_stopping = get_early_stopping_config(config_manager)

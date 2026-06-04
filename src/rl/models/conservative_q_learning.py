@@ -1,12 +1,15 @@
 import typing
 from typing import Dict, List, Tuple
 import copy
+import os
+import json
 # import config_manager
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
+from sklearn.metrics import roc_auc_score
 
 from .shared_components import TrainerUtils # Actor, MixedActionActor, 
 
@@ -251,10 +254,17 @@ class Critic(nn.Module):
 		for layer in self.q1_net:
 			x = layer(x)
 			if isinstance(layer, nn.LeakyReLU):
-				# (x <= 0) is 1 for inactive, 0 for active
-				pct_inactive = (x <= 0).float().mean().item() * 100
-				stats[f"inactive_L{leaky_idx}_pct"] = pct_inactive
-				leaky_idx += 1
+				# 1. Percent of inputs utilizing the negative slope in this batch
+				pct_negative = (x < 0).float().mean().item() * 100
+				stats[f"negative_regime_L{leaky_idx}_pct"] = pct_negative
+				
+				# 2. True Inactive/Dead Neurons: Variance across the batch is essentially 0
+				# (dim=0 calculates variance across the batch for each individual neuron)
+				neuron_vars = torch.var(x, dim=0)
+				pct_dead = (neuron_vars < 1e-6).float().mean().item() * 100
+				stats[f"dead_neurons_L{leaky_idx}_pct"] = pct_dead 
+
+				leaky_idx += 1            
 				
 		return stats
 
@@ -291,6 +301,106 @@ class Critic(nn.Module):
 		# Reshape back to [batch_size, num_samples]
 		return q1.view(batch_size, num_samples), q2.view(batch_size, num_samples) 
 	
+
+def get_q_stats(current_Q1, current_Q2, actor_Q, mortality):
+	
+	# create current_Q as the mean of current_Q1 and current_Q2
+	current_Q = (current_Q1 + current_Q2) / 2.0
+	mean_Q = current_Q.mean().item()
+	variance_Q = current_Q.var().item()
+	batch_n = current_Q.shape[0]
+	uncertainty_Q = F.mse_loss(current_Q1, current_Q2).item() # simple measure of uncertainty based on disagreement between the two critics
+
+	# masks and counts
+	survival_mask = (mortality == 0)
+	non_survival_mask = (mortality == 1)
+
+	survival_n = survival_mask.sum().item()
+	non_survival_n = non_survival_mask.sum().item()
+	
+	# only compute subgroup mean/variance together when n > 2
+	if survival_n > 2:
+		survival_vals = current_Q[survival_mask]
+		survival_Q = survival_vals.mean().item()
+		survival_variance_Q = survival_vals.var().item()
+	else:
+		survival_Q = float('nan')
+		survival_variance_Q = float('nan')
+		survival_n = 0
+
+	if non_survival_n > 2:
+		non_survival_vals = current_Q[non_survival_mask]
+		non_survival_Q = non_survival_vals.mean().item()
+		non_survival_variance_Q = non_survival_vals.var().item()
+	else:
+		non_survival_Q = float('nan')
+		non_survival_variance_Q = float('nan')
+		non_survival_n = 0
+
+	if survival_n >= 2 and non_survival_n >= 2:
+		# calculate signal to noise ratio of the difference between survival and non-survival Q values
+		signal = abs(survival_Q - non_survival_Q)
+		pooled_variance = (survival_variance_Q + non_survival_variance_Q) / 2.0
+		noise = pooled_variance ** 0.5
+		signal_to_noise = signal / noise if noise > 0 else float('inf')
+
+		# also calculate AUC of using Q value to predict mortality, as an alternative measure of signal to noise
+		auc_Q = roc_auc_score(1-mortality.detach().cpu().numpy(), current_Q.detach().cpu().numpy())
+
+	else:
+		signal_to_noise = float('nan')
+		auc_Q = float('nan')
+
+	q_stats = {
+		"batch_n": batch_n,
+		"mean_Q": mean_Q,
+		"variance_Q": variance_Q,
+		"uncertainty_Q": uncertainty_Q,                
+		"survival_n": survival_n,
+		"survival_Q": survival_Q,
+		"survival_variance_Q": survival_variance_Q,
+		"non_survival_n": non_survival_n,
+		"non_survival_Q": non_survival_Q,
+		"non_survival_variance_Q": non_survival_variance_Q,
+		"signal_to_noise": signal_to_noise,
+		"auc_Q": auc_Q
+	}
+
+	# log_dict.update({
+	# 	"batch_n": batch_n,
+	# 	"mean_Q": mean_Q,
+	# 	"variance_Q": variance_Q,
+	# 	"uncertainty_Q": uncertainty_Q,
+	# 	"survival_n": survival_n,
+	# 	"survival_Q": survival_Q,
+	# 	"survival_variance_Q": survival_variance_Q,
+	# 	"non_survival_n": non_survival_n,
+	# 	"non_survival_Q": non_survival_Q,
+	# 	"non_survival_variance_Q": non_survival_variance_Q
+	# })
+
+	if actor_Q is not None:
+		advantage_Q = actor_Q - current_Q # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
+		advantage_Q_mean = (actor_Q - current_Q).mean().item() # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
+		survival_advantage_Q = advantage_Q[survival_mask].mean().item() if survival_n > 0 else float('nan')
+		non_survival_advantage_Q = advantage_Q[non_survival_mask].mean().item() if non_survival_n > 0 else float('nan')
+		
+		q_stats.update({
+			"advantage_Q_mean": advantage_Q_mean,
+			"survival_advantage_Q": survival_advantage_Q,
+			"non_survival_advantage_Q": non_survival_advantage_Q
+		})	
+		
+		# log_dict.update({
+		#     "actor_Q": actor_Q.mean().item(),
+		#     "advantage_Q": advantage_Q_mean,
+		#     "survival_advantage_Q": survival_advantage_Q,
+		#     "non_survival_advantage_Q": non_survival_advantage_Q
+		# })
+			
+	return q_stats
+
+
 
 class CQL:
 	def __init__(
@@ -404,7 +514,7 @@ class CQL:
 			"pi_mean_val": pi.mean().item()
 		}
 		
-		return total_bc_loss, actor_dict
+		return actor_dict
 		
 
 	def target_q(self, action, next_state, reward, not_done, noise=True):
@@ -426,68 +536,6 @@ class CQL:
 			target_Q = reward + not_done * self.discount * target_Q			
 			
 			return target_Q
-
-
-	def get_q_stats(self, current_Q1, current_Q2, actor_Q, mortality, log_dict) -> Dict[str, float]:
-		
-		# create current_Q as the mean of current_Q1 and current_Q2
-		current_Q = (current_Q1 + current_Q2) / 2.0
-		mean_Q = current_Q.mean().item()
-		variance_Q = current_Q.var().item()
-		batch_n = current_Q.shape[0]
-		uncertainty_Q = F.mse_loss(current_Q1, current_Q2).item() # simple measure of uncertainty based on disagreement between the two critics
-
-		# masks and counts
-		survival_mask = (mortality == 0)
-		non_survival_mask = (mortality == 1)
-
-		survival_n = survival_mask.sum().item()
-		non_survival_n = non_survival_mask.sum().item()
-		
-		# only compute subgroup mean/variance together when n > 2
-		if survival_n > 2:
-			survival_vals = current_Q[survival_mask]
-			survival_Q = survival_vals.mean().item()
-			survival_variance_Q = survival_vals.var().item()
-		else:
-			survival_Q = float('nan')
-			survival_variance_Q = float('nan')
-			survival_n = 0
-
-		if non_survival_n > 2:
-			non_survival_vals = current_Q[non_survival_mask]
-			non_survival_Q = non_survival_vals.mean().item()
-			non_survival_variance_Q = non_survival_vals.var().item()
-		else:
-			non_survival_Q = float('nan')
-			non_survival_variance_Q = float('nan')
-			non_survival_n = 0
-
-		log_dict.update({
-			"batch_n": batch_n,
-			"mean_Q": mean_Q,
-			"variance_Q": variance_Q,
-			"uncertainty_Q": uncertainty_Q,
-			"survival_n": survival_n,
-			"survival_Q": survival_Q,
-			"survival_variance_Q": survival_variance_Q,
-			"non_survival_n": non_survival_n,
-			"non_survival_Q": non_survival_Q,
-			"non_survival_variance_Q": non_survival_variance_Q
-		})
-
-		if actor_Q is not None:
-			advantage_Q = actor_Q - current_Q # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
-			advantage_Q_mean = (actor_Q - current_Q).mean().item() # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
-			survival_advantage_Q = advantage_Q[survival_mask].mean().item() if survival_n > 0 else float('nan')
-			non_survival_advantage_Q = advantage_Q[non_survival_mask].mean().item() if non_survival_n > 0 else float('nan')
-			log_dict.update({
-                "actor_Q": actor_Q.mean().item(),
-                "advantage_Q": advantage_Q_mean,
-                "survival_advantage_Q": survival_advantage_Q,
-                "non_survival_advantage_Q": non_survival_advantage_Q
-			})
-		return log_dict
 
 
 	def train(self, batch: TensorBatch) -> Tuple[Dict[str, float], Dict[str, float]]:
@@ -567,18 +615,32 @@ class CQL:
 		bellman_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
 		cql_loss = cql_loss1 + cql_loss2
 		# dynamic warm up for cql_alpha
-		current_alpha = 0.0 if self.total_it < 5000 else self.cql_alpha
+		if self.total_it < 5000:
+			current_alpha = 0.0
+		elif 5000 <= self.total_it < 15000:
+			# Linearly scale alpha from 0.0 to your target_alpha over 10,000 steps
+			progress = (self.total_it - 5000) / 10000
+			current_alpha = progress * self.cql_alpha
+		else:
+			current_alpha = self.cql_alpha
 
 		critic_loss = bellman_loss + current_alpha * cql_loss			
 					
-		log_dict = {
-			"cql_q_gap": (q_gap1 + q_gap2).item() / 2.0,
-			"cql_q_rand": (q1_rand.mean() + q2_rand.mean()).item() / 2.0,
-    		"cql_q_data": (current_Q1.mean() + current_Q2.mean()).item() / 2.0,
-			"cql_q_next": (q1_next.mean() + q2_next.mean()).item() / 2.0,
+		losses = {
 			"bellman_loss": bellman_loss.item(),
-			"cql_loss": current_alpha * (cql_loss1 + cql_loss2).item(),
-			"critic_loss": critic_loss.item()}
+			"cql_loss": cql_loss.item(),
+			"current_alpha": current_alpha,
+			"critic_loss": critic_loss.item(), 
+		}
+				
+		# log_dict = {
+		# 	"cql_q_gap": (q_gap1 + q_gap2).item() / 2.0,
+		# 	"cql_q_rand": (q1_rand.mean() + q2_rand.mean()).item() / 2.0,
+    	# 	"cql_q_data": (current_Q1.mean() + current_Q2.mean()).item() / 2.0,
+		# 	"cql_q_next": (q1_next.mean() + q2_next.mean()).item() / 2.0,
+		# 	"bellman_loss": bellman_loss.item(),
+		# 	"cql_loss": current_alpha * (cql_loss1 + cql_loss2).item(),
+		# 	"critic_loss": critic_loss.item()}
 
 		# Optimize the critic
 		self.critic_optimizer.zero_grad()
@@ -605,34 +667,40 @@ class CQL:
 		self.critic_optimizer.step()
 		if self.critic_scheduler is not None:
 			self.critic_scheduler.step()
-		log_dict.update(lr_critic=self.critic_optimizer.param_groups[0]['lr'])
+		# log_dict.update(lr_critic=self.critic_optimizer.param_groups[0]['lr'])
+		losses.update(lr_critic=self.critic_optimizer.param_groups[0]['lr'])
 
 
 		# Delayed policy updates
 		if self.total_it % self.policy_freq != 0:
 			with torch.no_grad():
 				pi, log_prob = self.actor(state)
-				Q1, Q2 = self.critic(state, pi)
-			Q = torch.min(Q1, Q2)
-			log_dict = self.get_q_stats(current_Q1, current_Q2, Q, mortality, log_dict)
+				Q1_pi, Q2_pi = self.critic(state, pi)
+			Q_pi = torch.min(Q1_pi, Q2_pi)
+			q_stats = get_q_stats(current_Q1, current_Q2, Q_pi, mortality)
+
+			
+		
 		else:
 			# Compute actor loss
 			self.actor.train() # Dropout ACTIVE for the network we are updating
 			
 			# Sample actions from the stochastic actor
 			pi, log_prob = self.actor(state)
-			Q1, Q2 = self.critic(state, pi)
-			Q = torch.min(Q1, Q2)
+			Q1_pi, Q2_pi = self.critic(state, pi)
+			Q_pi = torch.min(Q1_pi, Q2_pi)
 
-			log_dict = self.get_q_stats(current_Q1, current_Q2, Q, mortality, log_dict)
+			q_stats = get_q_stats(current_Q1, current_Q2, Q_pi, mortality)
 					
 			# Standard SAC-style or TD3-style actor loss
 			# Note: We usually keep a small BC component for safety in medical RL
 			# but the lmbda logic is usually replaced by pure Q maximization in CQL
-			actor_loss_q = -Q.mean()
+			actor_loss_q = -Q_pi.mean()
 
 			# BC Loss - compute actor loss using TrainerUtils function - the "anchor"
-			actor_loss_bc, actor_dict = self.compute_actor_loss(pi, action)
+			actor_dict = self.compute_actor_loss(pi, action)
+			actor_loss_bc = actor_dict['total_bc_loss'] # this is the combined BC loss that includes both the weighted MSE and the sparsity penalty
+			losses.update(actor_dict) # add the actor_dict components to the losses dict for logging
 
 			# add a small entropy bonus
 			ent_alpha = 0.05
@@ -640,7 +708,12 @@ class CQL:
 
 			actor_loss = actor_loss_q + self.beta * actor_loss_bc + actor_loss_ent # i think CQL doesn't normally include a BC 
 			# component, but gemini says keep if for medical, probably use a very small beta
-
+			losses.update({
+				"actor_loss_total": actor_loss.item(),
+				"actor_loss_q": actor_loss_q.item(),
+				"actor_loss_ent": actor_loss_ent.item()
+			})
+						
 			# Final combined update
 			self.actor_optimizer.zero_grad()
 			actor_loss.backward()
@@ -663,19 +736,20 @@ class CQL:
 			self.actor_optimizer.step()
 			if self.actor_scheduler is not None:
 				self.actor_scheduler.step()
-				log_dict.update(lr_actor=self.actor_optimizer.param_groups[0]['lr'])
+				# log_dict.update(lr_actor=self.actor_optimizer.param_groups[0]['lr'])
+				losses.update(lr_actor=self.actor_optimizer.param_groups[0]['lr'])
 
-			# Log the actor loss and its components
-			log_dict.update({
-				"actor_loss": actor_loss.item(),
-				"actor_loss_q": actor_loss_q.item(),
-				"actor_loss_bc": actor_loss_bc.item(),
-				"pi_mean_val": pi.mean().item(),
-				"log_prob_mean": log_prob.mean().item() if log_prob is not None else float('nan'),
-				"Q_mean": Q.mean().item(),
-				"actor_loss_ent": actor_loss_ent.item()})
+			# # Log the actor loss and its components
+			# log_dict.update({
+			# 	"actor_loss": actor_loss.item(),
+			# 	"actor_loss_q": actor_loss_q.item(),
+			# 	"actor_loss_bc": actor_loss_bc.item(),
+			# 	"pi_mean_val": pi.mean().item(),
+			# 	"log_prob_mean": log_prob.mean().item() if log_prob is not None else float('nan'),
+			# 	"Q_mean": Q.mean().item(),
+			# 	"actor_loss_ent": actor_loss_ent.item()})
 			
-			log_dict.update(actor_dict)
+			# log_dict.update(actor_dict)
 			
 			with torch.no_grad():
 				for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
@@ -686,7 +760,8 @@ class CQL:
 					target_param.mul_(1.0 - self.tau)
 					target_param.add_(param.data * self.tau)
 						
-		return log_dict, grad_norm
+		# return log_dict, grad_norm
+		return losses, q_stats, grad_norm
 	
 
 	def actor_forward_for_sarsa(self, batch: TensorBatch) -> torch.Tensor:
@@ -764,20 +839,33 @@ class CQL:
 			eval_q_gap = (Q_pi - ((current_Q1 + current_Q2)/2.0)).mean().item()
 
 			# 4. BC Loss (How much we deviate from the doctor)
-			actor_loss_bc, actor_dict = self.compute_actor_loss(pi, action)
+			actor_dict = self.compute_actor_loss(pi, action)
 
-			log_dict = {
+
+			# ADD THIS LINE:
+			neuron_stats = self.critic.get_neuron_stats(state, action)
+	
+			losses = {
 				"bellman_loss": bellman_loss.item(),
-				"pi_Q_mean": Q_pi.mean().item(),
-				"current_Q_mean": ((current_Q1 + current_Q2) / 2.0).mean().item(),
-				"eval_q_gap": eval_q_gap,
-				"actor_loss_bc": actor_loss_bc.item()
 			}
+			losses.update(actor_dict)
 
-			log_dict = self.get_q_stats(current_Q1, current_Q2, Q_pi, mortality, log_dict)
-			log_dict.update(actor_dict)
+			# get Q statistics
+			q_stats = get_q_stats(current_Q1, current_Q2, Q_pi, mortality)
+
+			# log_dict = {
+			# 	"bellman_loss": bellman_loss.item(),
+			# 	"pi_Q_mean": Q_pi.mean().item(),
+			# 	"current_Q_mean": ((current_Q1 + current_Q2) / 2.0).mean().item(),
+			# 	"eval_q_gap": eval_q_gap,
+			# 	"actor_loss_bc": actor_loss_bc.item()
+			# }
+
+			# log_dict = self.get_q_stats(current_Q1, current_Q2, Q_pi, mortality, log_dict)
+			# log_dict.update(actor_dict)
 			   
-		return log_dict, action, pi
+		# return log_dict, action, pi
+		return losses, q_stats, neuron_stats
 
 	
 	def state_dict(self) -> Dict[str, torch.Tensor]:
@@ -838,7 +926,14 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		eta_min=learning_rate_actor * .10
 	)
 	
-	critic = Critic(state_dim, action_dim).to(config_manager.training_config['device'])
+	hidden_dim = hyperparams['hidden_dim']
+	dropout = hyperparams['dropout']
+	critic = Critic(
+		state_dim, 
+		action_dim,
+		hidden_dim=hidden_dim,
+		dropout=dropout
+	).to(config_manager.training_config['device'])
 
 	critic_optimizer = torch.optim.AdamW(
 		critic.parameters(),
@@ -875,3 +970,37 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 	)
 
 	return trainer
+
+
+def load_trained_actor(state_dim, action_dim, config_manager = None, model_path = None):
+	"""
+	used to load a trained actor for train of Fitted Q Evaluation (FQE) or for deployment. 
+	"""
+	if model_path is None and config_manager is not None:
+		model_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.model_type, 
+						f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions, "final_model")
+
+		# get folder inside model_path
+		model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
+		model_path = os.path.join(model_path, model_folder)
+
+	final_model_path = os.path.join(model_path, "final_model.pt")
+
+	# load results.json from model_folder, which has state_dim 
+	results_path = os.path.join(model_path, "results.json")
+	if os.path.exists(results_path):
+		with open(results_path, "r") as f:
+			results = json.load(f)
+			hidden_dim = results["hyperparameters"]["hidden_dim"]
+			dropout = results["hyperparameters"]["dropout"]
+
+	actor = Actor(
+		state_dim = state_dim, 
+		action_dim = action_dim, 
+		hidden_dim = hidden_dim
+	).to(config_manager.training_config['device'])
+
+	actor.load_state_dict(torch.load(final_model_path, weights_only=True))
+	actor.eval()
+
+	return actor

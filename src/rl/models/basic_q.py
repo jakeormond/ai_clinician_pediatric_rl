@@ -165,7 +165,9 @@ class Critic(nn.Module):
                 # (dim=0 calculates variance across the batch for each individual neuron)
                 neuron_vars = torch.var(x, dim=0)
                 pct_dead = (neuron_vars < 1e-6).float().mean().item() * 100
-                stats[f"dead_neurons_L{leaky_idx}_pct"] = pct_dead                
+                stats[f"dead_neurons_L{leaky_idx}_pct"] = pct_dead 
+
+                leaky_idx += 1               
                 
         return stats
 
@@ -563,14 +565,15 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
     return trainer
 
 
-def get_evaluator(config_manager):
+def get_evaluator(state_dim, action_dim, config_manager):
     model_path = os.path.join(config_manager.paths['rl_models_dir'], 
         'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
         config_manager.actions, 'final_model')
     model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
     model_path = os.path.join(model_path, model_folder)
 
-    critic, hyperparams = load_critic(model_path=model_path)
+    
+    critic, hyperparams = load_critic(state_dim, action_dim,model_path=model_path)
 
     evaluator = Q_Learner(
         critic=critic,
@@ -579,7 +582,7 @@ def get_evaluator(config_manager):
 
     return evaluator
 
-def load_critic(config_manager = None, model_path = None):
+def load_critic(state_dim, action_dim, config_manager = None, model_path = None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if model_path is None and config_manager is not None:
         model_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.model_type, 
@@ -598,8 +601,9 @@ def load_critic(config_manager = None, model_path = None):
             results = json.load(f)
             hidden_dim = results["hyperparameters"]["hidden_dim"]
 
-    critic = Critic(512,2, hidden_dim=hidden_dim).to(device)
-    critic.load_state_dict(torch.load(final_model_path, weights_only=True))
+    critic = Critic(state_dim, action_dim, hidden_dim=hidden_dim).to(device)
+    checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
+    critic.load_state_dict(checkpoint['critic_state_dict'])
     critic.eval()
 
     hyperparameters = results["hyperparameters"]

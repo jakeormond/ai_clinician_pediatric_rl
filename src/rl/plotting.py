@@ -30,17 +30,52 @@ def plot_results(training_metrics, plot_dir, config_manager):
 
     all_keys = get_keys(training_metrics)
     
-    plot_data(training_metrics, x_axes, all_keys, 'losses', plot_dir)
+    plot_data(
+        training_metrics, 
+        x_axes, 
+        all_keys, 
+        'losses', 
+        plot_dir, 
+        policy_frequency=config_manager.training_config['policy_freq']
+    )
     
     if 'q_stats' in all_keys:
-        plot_data(training_metrics, x_axes, all_keys, 'q_stats', plot_dir)
+        plot_data(
+            training_metrics, 
+            x_axes, 
+            all_keys, 
+            'q_stats', 
+            plot_dir,
+            policy_frequency=config_manager.training_config['policy_freq']
+        )
     
     if 'advantage_keys' in all_keys:
-        plot_data(training_metrics, x_axes, all_keys, 'advantages', plot_dir)
+        plot_data(
+            training_metrics, 
+            x_axes, 
+            all_keys, 
+            'advantages', 
+            plot_dir,
+            policy_frequency=config_manager.training_config['policy_freq']
+        )
     
-    plot_data(training_metrics, x_axes, all_keys, 'neuron_stats', plot_dir)
-    
-    plot_data(training_metrics, x_axes, all_keys, 'grad_norms', plot_dir)
+    plot_data(
+        training_metrics, 
+        x_axes, 
+        all_keys, 
+        'neuron_stats', 
+        plot_dir,
+        policy_frequency=config_manager.training_config['policy_freq']
+    )
+
+    plot_data(
+        training_metrics, 
+        x_axes, 
+        all_keys, 
+        'grad_norms', 
+        plot_dir,
+        policy_frequency=config_manager.training_config['policy_freq']
+    )
 
     pass
 
@@ -107,7 +142,7 @@ def get_keys(training_metrics):
 
 
 
-def plot_data(training_metrics, x_axes, all_keys, group, plot_dir):
+def plot_data(training_metrics, x_axes, all_keys, group, plot_dir, policy_frequency=None):
     if group not in all_keys:
         logger.warning(f"No keys found for group {group}. Skipping plotting for this group.")
         return
@@ -165,8 +200,17 @@ def plot_data(training_metrics, x_axes, all_keys, group, plot_dir):
             if batch_training_data is not None:
                 batch_key = f'train/batch_{key}'
                 if batch_key in batch_training_data:
+                    x_axis_data = x_axes['train/batch']                  
                     batch_data = [item for sublist in batch_training_data[batch_key] for item in sublist]
-                    plt.plot(x_axes['train/batch'], batch_data, color=plt.cm.Reds(0.6), linewidth=1, label='Batch Training')
+                    
+                    if len(batch_data) != x_axis_data.shape[0]:
+                        # if policy_frequency is not None, we can try to adjust x_axis_data by multiplying the number of epochs by the policy frequency
+                        if policy_frequency is not None:
+                            # subsample x_axis_data by policy_frequency starting
+                            # from index policy_frequency-1
+                            x_axis_data = x_axis_data[policy_frequency-1::policy_frequency]
+                            
+                    plt.plot(x_axis_data, batch_data, color=plt.cm.Reds(0.6), linewidth=1, label='Batch Training')
             
             # check if epoch_training data exists
             if epoch_training_data is not None:

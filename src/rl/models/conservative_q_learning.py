@@ -26,7 +26,8 @@ class Actor(nn.Module):
 			self, 
 			state_dim: int, 
 			action_dim: int, 
-			hidden_dim: List[int] = [512, 256, 128], 
+			# hidden_dim: List[int] = [512, 256, 128], 
+			hidden_dim: int = 256,
 			dropout: float = 0.1,
 			negative_slope: float = 0.1,
 			log_std_min: float = -20,
@@ -34,74 +35,159 @@ class Actor(nn.Module):
 		):
 		
 		super(Actor, self).__init__()
+		self.state_dim = state_dim
+		self.action_dim = action_dim
 		self.log_std_min = log_std_min
 		self.log_std_max = log_std_max
 
-		layers = []
-		input_dim = state_dim
+		# layers = []
+		# input_dim = state_dim
 
-		for h_dim in hidden_dim:
-			layers.append(nn.Linear(input_dim, h_dim))
-			# Critical: Always keep the activation, then apply dropout
-			layers.append(nn.LeakyReLU(negative_slope)) 
-			if dropout > 0:
-				layers.append(nn.Dropout(dropout))
-			input_dim = h_dim
+		# for h_dim in hidden_dim:
+		# 	layers.append(nn.Linear(input_dim, h_dim))
+		# 	# Critical: Always keep the activation, then apply dropout
+		# 	layers.append(nn.LeakyReLU(negative_slope)) 
+		# 	if dropout > 0:
+		# 		layers.append(nn.Dropout(dropout))
+		# 	input_dim = h_dim
 
-		self.backbone = nn.Sequential(*layers)
+		# self.backbone = nn.Sequential(*layers)
 
-		# Two heads: one for the Mean, one for the Log Standard Deviation
-		self.mu_head = nn.Linear(input_dim, action_dim)
-		self.log_std_head = nn.Linear(input_dim, action_dim)
+		# # Two heads: one for the Mean, one for the Log Standard Deviation
+		# self.mu_head = nn.Linear(input_dim, action_dim)
+		# self.log_std_head = nn.Linear(input_dim, action_dim)
 
-		# Initialize weights
-		# Initialize backbone for LeakyReLU signal flow
-		for m in self.backbone:
-			if isinstance(m, nn.Linear):
-				nn.init.kaiming_normal_(
-					m.weight, 
-					a=negative_slope, 
-					mode='fan_in',
-					nonlinearity='leaky_relu'
-				)
+		# Create completely independent networks for each continuous action dimension
+        # Just like your successful BC policy heads!
+		self.action_pipelines = nn.ModuleList([
+			nn.Sequential(
+				nn.Linear(self.state_dim, hidden_dim),
+				nn.LayerNorm(hidden_dim), # Crucial: Stops the 1024 latent scale from causing runaway activations
+				nn.LeakyReLU(negative_slope),
+				nn.Dropout(dropout),
+				nn.Linear(hidden_dim, hidden_dim),
+				nn.LayerNorm(hidden_dim),
+				nn.LeakyReLU(negative_slope)
+			) for _ in range(action_dim)
+		])
+
+		# Separate output heads for mean and log_std per action dimension
+		self.mu_heads = nn.ModuleList([nn.Linear(hidden_dim, 1) for _ in range(action_dim)])
+		self.log_std_heads = nn.ModuleList([nn.Linear(hidden_dim, 1) for _ in range(action_dim)])
+
+		# # Initialize weights
+		# # Initialize backbone for LeakyReLU signal flow
+		# for m in self.action_pipelines:
+		# 	if isinstance(m, nn.Linear):
+		# 		nn.init.kaiming_normal_(
+		# 			m.weight, 
+		# 			a=negative_slope, 
+		# 			mode='fan_in',
+		# 			nonlinearity='leaky_relu'
+		# 		)
 		
-		# We use a very small range so the Sigmoid starts around 0.5 
-		# (the middle of your log-min-maxed range).
-		nn.init.uniform_(self.mu_head.weight, -3e-3, 3e-3)
-		nn.init.constant_(self.mu_head.bias, 0.0)
+		# # We use a very small range so the Sigmoid starts around 0.5 
+		# # (the middle of your log-min-maxed range).
+		# nn.init.uniform_(self.mu_heads.weight, -3e-3, 3e-3)
+		# nn.init.constant_(self.mu_head.bias, 0.0)
 
-		nn.init.uniform_(self.log_std_head.weight, -3e-3, 3e-3)
-		nn.init.constant_(self.log_std_head.bias, 0.0)
+		# nn.init.uniform_(self.log_std_head.weight, -3e-3, 3e-3)
+		# nn.init.constant_(self.log_std_head.bias, 0.0)
+
+		# 1. Initialize all independent backbones for LeakyReLU signal flow
+		for pipeline in self.action_pipelines:
+			for m in pipeline:
+				if isinstance(m, nn.Linear):
+					nn.init.kaiming_normal_(
+						m.weight, 
+						a=negative_slope, # 0.1
+						mode='fan_in',
+						nonlinearity='leaky_relu'
+					)
+					if m.bias is not None:
+						nn.init.constant_(m.bias, 0.0)
+		
+		# 2. Initialize all independent mu and log_std heads for Sigmoid stability
+		for i in range(self.action_dim):
+			# Mu head: forces initial output to 0.0 (sigmoid(0) = 0.5)
+			nn.init.uniform_(self.mu_heads[i].weight, -3e-3, 3e-3)
+			nn.init.constant_(self.mu_heads[i].bias, 0.0)
+
+			# Log_std head: forces initial log_std close to 0.0 (std = e^0 = 1.0)
+			# This gives your actor healthy, balanced initial exploration
+			nn.init.uniform_(self.log_std_heads[i].weight, -3e-3, 3e-3)
+			nn.init.constant_(self.log_std_heads[i].bias, -2.)
 
 
 	def forward(self, state: torch.Tensor, deterministic: bool = False, with_log_prob: bool = True):
-		features = self.backbone(state)
-		mu = self.mu_head(features)
-		log_std = self.log_std_head(features)
+		# features = self.backbone(state)
+		# mu = self.mu_head(features)
+		# log_std = self.log_std_head(features)
 
-		# Clip log_std for numerical stability
-		log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
-		std = torch.exp(log_std)
+		# # Clip log_std for numerical stability
+		# log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
+		# std = torch.exp(log_std)
 
-		dist = Normal(mu, std)
+		# dist = Normal(mu, std)
+
+		# if deterministic:
+		# 	x_t = mu
+		# else:
+		# 	x_t = dist.rsample() # Reparameterization trick (allows gradients)
+
+		# # Apply Tanh to bound [-1, 1], then scale to [0, 1] for your environment
+		# y_t = torch.tanh(x_t)
+		# action = (y_t + 1.0) / 2.0 # Transformation to [0, 1]
+
+		mus = []
+		log_stds = []
+		
+		# Process each action dimension through its own dedicated architecture
+		for i in range(self.action_dim):
+			features = self.action_pipelines[i](state)
+			
+			mu = self.mu_heads[i](features)
+			# Hard clip log_std to prevent variance from exploding/collapsing
+			log_std = torch.clamp(
+				self.log_std_heads[i](features), 
+				min=self.log_std_min, 
+				max=self.log_std_max
+			)
+			
+			mus.append(mu)
+			log_stds.append(log_std)
+			
+		total_mu = torch.cat(mus, dim=-1)
+		total_log_std = torch.cat(log_stds, dim=-1)
 
 		if deterministic:
-			x_t = mu
+			raw_action = total_mu
 		else:
-			x_t = dist.rsample() # Reparameterization trick (allows gradients)
+			std = torch.exp(total_log_std)
+			dist = Normal(total_mu, std)
+			raw_action = dist.rsample() # Reparameterization trick (allows gradients)
 
-		# Apply Tanh to bound [-1, 1], then scale to [0, 1] for your environment
-		y_t = torch.tanh(x_t)
-		action = (y_t + 1.0) / 2.0 # Transformation to [0, 1]
+		# truncated_raw = torch.clamp(raw_action, min=-5.0, max=5.0)
+		# Direct Sigmoid output eliminates the need for the (y + 1) / 2 shift!
+		action = torch.sigmoid(raw_action)
 
-		if with_log_prob:
-			# We must adjust log_prob because of the Tanh and Scaling transformations
-			# 1. Standard log_prob from the Normal dist
-			log_prob = dist.log_prob(x_t)
-			# 2. Correction for Tanh: log(1 - tanh(x)^2)
-			log_prob -= torch.log(1 - y_t.pow(2) + 1e-6)
-			# 3. Correction for [0, 1] scaling (multiplying by 0.5 means adding log(2) to log_prob)
-			log_prob -= torch.log(torch.tensor(0.5, device=state.device))
+		# if with_log_prob:
+		# 	# We must adjust log_prob because of the Tanh and Scaling transformations
+		# 	# 1. Standard log_prob from the Normal dist
+		# 	log_prob = dist.log_prob(x_t)
+		# 	# 2. Correction for Tanh: log(1 - tanh(x)^2)
+		# 	log_prob -= torch.log(1 - y_t.pow(2) + 1e-6)
+		# 	# 3. Correction for [0, 1] scaling (multiplying by 0.5 means adding log(2) to log_prob)
+		# 	log_prob -= torch.log(torch.tensor(0.5, device=state.device))
+		# 	log_prob = log_prob.sum(dim=-1, keepdim=True)
+		# else:
+		# 	log_prob = None
+		if with_log_prob and not deterministic:
+			# Pass the raw, un-squashed sample x_t into the base distribution
+			log_prob = dist.log_prob(raw_action)
+			
+			# Correct the density using the final squashed action
+			log_prob -= torch.log(action * (1.0 - action) + 1e-6)
 			log_prob = log_prob.sum(dim=-1, keepdim=True)
 		else:
 			log_prob = None
@@ -674,7 +760,7 @@ class CQL:
 		# Delayed policy updates
 		if self.total_it % self.policy_freq != 0:
 			with torch.no_grad():
-				pi, log_prob = self.actor(state)
+				pi, log_prob = self.actor(state, with_log_prob=True)
 				Q1_pi, Q2_pi = self.critic(state, pi)
 			Q_pi = torch.min(Q1_pi, Q2_pi)
 			q_stats = get_q_stats(current_Q1, current_Q2, Q_pi, mortality)
@@ -686,7 +772,7 @@ class CQL:
 			self.actor.train() # Dropout ACTIVE for the network we are updating
 			
 			# Sample actions from the stochastic actor
-			pi, log_prob = self.actor(state)
+			pi, log_prob = self.actor(state, with_log_prob=True)
 			Q1_pi, Q2_pi = self.critic(state, pi)
 			Q_pi = torch.min(Q1_pi, Q2_pi)
 
@@ -770,7 +856,7 @@ class CQL:
 
 		self.actor.eval()  # Set actor to eval mode to disable Dropout
 		with torch.no_grad():
-			new_actions, _ = self.actor(state) 
+			new_actions, _ = self.actor(state, deterministic=True)  # Get the "best" action without noise or log probabilities
 		
 		return new_actions
 

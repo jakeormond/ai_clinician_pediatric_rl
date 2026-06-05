@@ -12,7 +12,7 @@
     # max_traj_len: 2000  # Max trajectory length - probably need to change this
     device: "cuda"  # Device (cuda or cpu)
     learning_rate_critic: 6.e-5 # 5e-6 # "loguniform(1e-4, 1e-3)"   
-    learning_rate_actor: 6e-5 # "loguniform(1e-4, 1e-3)"   
+    learning_rate_actor: 6e-3 # "loguniform(1e-4, 1e-3)"   
     dropout: 0.1 # 0.05 # "uniform(0.0, 0.5)"
     tau: 0.005 # 0.0005 # Target network update rate
     weight_decay: 1.e-5 #1e-4 # L2 regularization strength

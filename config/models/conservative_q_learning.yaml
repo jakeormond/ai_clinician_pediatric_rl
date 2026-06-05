@@ -7,26 +7,26 @@
     n_episodes: 1000  # How many episodes run during evaluation
     # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
-    discount: 0.8 # 0.999  # Discount factor
+    discount: 0.99 # 0.999  # Discount factor
     # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
     # max_traj_len: 2000  # Max trajectory length - probably need to change this
     device: "cuda"  # Device (cuda or cpu)
     learning_rate_critic: "loguniform(1e-6, 1e-5)" # "loguniform(1e-4, 1e-3)"   
     learning_rate_actor: "loguniform(1e-6, 1e-5)" # "loguniform(1e-4, 1e-3)"   
     dropout: 0.1 # "uniform(0.0, 0.5)"
-    tau: [0.001, 0.005, 0.01, 0.025] # Target network update rate
+    tau: [0.001, 0.005, 0.01] # Target network update rate
     weight_decay: 1e-4 # L2 regularization strength
     
     policy_noise: 0.2 # Noise added to target policy during critic updates
     noise_clip: 0.5 # Range to clip target policy noise
     policy_freq: 2 # Frequency of delayed policy updates
     beta: 0.1 # Weighting for BC loss term
-    cql_alpha: [0.08, 0.1]  # [0.01, 0.05, 0.1] # [0.1, 0.2, 0.5] # [1.0, 5.0, 10.0] # Weighting for CQL penalty term
-    temp: [5, 8]  # [1., 2., 5.]  # [5.0, 10.0] # [2.0, 5.0] # Temperature for CQL penalty term
+    cql_alpha: 0.  # [0.01, 0.05, 0.1] # [0.1, 0.2, 0.5] # [1.0, 5.0, 10.0] # Weighting for CQL penalty term
+    temp: 1.0 # [5, 8]  # [1., 2., 5.]  # [5.0, 10.0] # [2.0, 5.0] # Temperature for CQL penalty term
     num_samples: 10 # Number of samples for CQL penalty term
 
     batch_size: 1024 # [256, 512, 1024]  # Batch size for all networks
-    # hidden_dim: [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
+    hidden_dim: 128 # [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
 
     # Early stopping parameters (fixed for all combinations)
     early_stopping_flag: False  # Whether to use early stopping
@@ -50,6 +50,9 @@
     grad_clip: 0.5
 
     # reward scaling
-    reward_scaling: 1.5  # Scaling factor for rewards
-    health_score_scale: 0.1  # Scaling factor for health score component of reward
-    health_score_hourly_change_scale: 0.5  # Scaling factor for hourly change component of reward
+    health_score_hourly_change_clip: 10. # health score is 0 to 100, clip prevents large spikes in reward
+    health_score_scale: 0.01 # [0.05, 0.1, 0.2]  # Scaling factor for health score component of reward
+    health_score_hourly_change_scale: .99 # [0.5,
+    total_health_score_scale: 10.  # Scaling factor for total health score component of reward
+    potential_based_reward_shaping: False 
+    terminal_health_score_reward: 2.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory

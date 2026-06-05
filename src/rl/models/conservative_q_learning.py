@@ -13,6 +13,9 @@ from sklearn.metrics import roc_auc_score
 
 from .shared_components import TrainerUtils # Actor, MixedActionActor, 
 
+import logging
+logger = logging.getLogger(__name__)
+
 """
 Gemini is suggesting training only the Actor for first 1000 steps, claims this can allow can prevent the policy
 from "overreacting" to initial, noisy Critic estimates. 
@@ -570,34 +573,61 @@ class CQL:
 		return self.actor(state).cpu().data.numpy().flatten()
 
 
-	def compute_actor_loss(self,pi: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+	def compute_actor_loss(self,pi: torch.Tensor, action: torch.Tensor, exp_weights: torch.Tensor) -> torch.Tensor:
 		"""
 		Refined BC Loss for sparse clinical actions (Fluids/Vasopressors).
 		"""
-		# 1. Standard MSE for the base BC loss
-		mse_loss = F.mse_loss(pi, action, reduction='none') # MSE loss penalizes large deviations, gemini thinks this is best for the actor
+		# # 1. Standard MSE for the base BC loss
+		# mse_loss = F.mse_loss(pi, action, reduction='none') # MSE loss penalizes large deviations, gemini thinks this is best for the actor
 		
-		# 2. Create a 'Clinical Importance' weight
-		# We weight time-steps where the doctor actually intervened (action > 0)
-		# This prevents the model from just learning to 'do nothing'
-		weights = torch.where(action > 0, 5.0, 1.0) # You can tune this weight (5.0) based on how much you want to encourage matching the doctor's interventions
-		# we will probably want to implement different weights for fluids vs vasopressors in the mixed action setting, but for now we can just apply the same weight to all non-zero actions
+		# # 2. Create a 'Clinical Importance' weight
+		# # We weight time-steps where the doctor actually intervened (action > 0)
+		# # This prevents the model from just learning to 'do nothing'
+		# weights = torch.where(action > 0, 5.0, 1.0) # You can tune this weight (5.0) based on how much you want to encourage matching the doctor's interventions
+		# # we will probably want to implement different weights for fluids vs vasopressors in the mixed action setting, but for now we can just apply the same weight to all non-zero actions
 
-		weighted_bc_loss = (mse_loss * weights).mean()
+		# weighted_bc_loss = (mse_loss * weights).mean()
 
-		# 3. Optional: Add a small L1 penalty to keep the policy sparse
-		# (Only if you find the AI is 'micro-dosing' constantly)
-		l1_sparse = pi.abs().mean() * 1e-3 # this should prevent many small non-zero actions, while still allowing for 
-										# large actions when clinically indicated. Tune the 1e-3 coefficient as needed.
+		# # 3. Optional: Add a small L1 penalty to keep the policy sparse
+		# # (Only if you find the AI is 'micro-dosing' constantly)
+		# l1_sparse = pi.abs().mean() * 1e-3 # this should prevent many small non-zero actions, while still allowing for 
+		# 								# large actions when clinically indicated. Tune the 1e-3 coefficient as needed.
 		
-		total_bc_loss = weighted_bc_loss + l1_sparse
+		# total_bc_loss = weighted_bc_loss + l1_sparse
 
+		# actor_dict = {
+		# 	"total_bc_loss": total_bc_loss.item(),
+		# 	"bc_mse_only": mse_loss.mean().item(),
+		# 	"weighted_bc_loss": weighted_bc_loss.item(),
+		# 	"l1_sparse": l1_sparse.item(),
+		# 	"pi_mean_val": pi.mean().item()
+		# }
+
+		# 1. Compute raw squared errors
+		squared_errors = (pi - action) ** 2 # [B, T, 2]
+		
+		# 2. Define your weights
+		fluid_loss_weight = 1.0
+		vaso_loss_weight = 5.0  # Scale up the entire vasopressor channel        
+		active_vaso_multiplier = 10.0 # Heavily punish missing a true active dose
+		
+		# 3. Construct the weight matrix
+		weights = torch.ones_like(action)
+		weights[:, 0] = fluid_loss_weight
+		weights[:, 1] = vaso_loss_weight
+
+		# Apply the extra multiplier ONLY where the true vasopressor dose is > 0
+		true_vaso = action[:, 1]
+		weights[:, 1] = torch.where(true_vaso > 0, vaso_loss_weight * active_vaso_multiplier, vaso_loss_weight)
+		
+		# 4. Apply weights and mask out padding steps
+		fluid_loss = ((squared_errors[:, 0] * weights[:, 0])* exp_weights.squeeze()).mean()
+		vaso_loss = ((squared_errors[:, 1] * weights[:, 1])* exp_weights.squeeze()).mean()
+		total_loss = fluid_loss + vaso_loss
 		actor_dict = {
-			"total_bc_loss": total_bc_loss.item(),
-			"bc_mse_only": mse_loss.mean().item(),
-			"weighted_bc_loss": weighted_bc_loss.item(),
-			"l1_sparse": l1_sparse.item(),
-			"pi_mean_val": pi.mean().item()
+			"total_bc_loss": total_loss,
+			"mse_fluid_loss": fluid_loss,
+			"mse_vaso_loss": vaso_loss
 		}
 		
 		return actor_dict
@@ -781,10 +811,21 @@ class CQL:
 			# Standard SAC-style or TD3-style actor loss
 			# Note: We usually keep a small BC component for safety in medical RL
 			# but the lmbda logic is usually replaced by pure Q maximization in CQL
-			actor_loss_q = -Q_pi.mean()
+			with torch.no_grad():
+				current_Q = torch.min(current_Q1, current_Q2)
+			raw_advantage = Q_pi - current_Q			
+			actor_loss_q = -(raw_advantage).mean()
 
+			# Apply an exponential filter (beta controls how aggressively we chase positive advantage)
+			# This acts like a soft-maximum that amplifies positive gains 
+			# beta = 1
+			beta = raw_advantage.std()*2.5 + 1e-6
+			scaled_advantage = -raw_advantage / beta
+			exp_weights = torch.exp(scaled_advantage / beta).detach()
+			exp_weights = torch.clamp(exp_weights, min=0.01, max=10.0)
+			
 			# BC Loss - compute actor loss using TrainerUtils function - the "anchor"
-			actor_dict = self.compute_actor_loss(pi, action)
+			actor_dict = self.compute_actor_loss(pi, action, exp_weights)
 			actor_loss_bc = actor_dict['total_bc_loss'] # this is the combined BC loss that includes both the weighted MSE and the sparsity penalty
 			losses.update(actor_dict) # add the actor_dict components to the losses dict for logging
 
@@ -792,7 +833,13 @@ class CQL:
 			ent_alpha = 0.05
 			actor_loss_ent = ent_alpha * log_prob.mean() if log_prob is not None else 0.0
 
-			actor_loss = actor_loss_q 
+			# every 500 iterations, logg actor_loss_q, actor_loss_bc, and actor_loss_ent separately to see how they are contributing to the total loss
+			if self.total_it % 500 == 0:
+				logging.info(f"Iteration {self.total_it}: actor_loss_q={actor_loss_q.item():.4f}, actor_loss_bc={actor_loss_bc.item():.4f}, actor_loss_ent={actor_loss_ent.item():.4f}")
+
+			actor_loss = actor_loss_bc + 200*actor_loss_q
+			# actor_loss = actor_loss_bc 
+			# actor_loss = actor_loss_q 
 			# actor_loss = actor_loss_q + self.beta * actor_loss_bc + actor_loss_ent # i think CQL doesn't normally include a BC 
 			# component, but gemini says keep if for medical, probably use a very small beta
 			losses.update({
@@ -917,6 +964,10 @@ class CQL:
 			current_Q1, current_Q2 = self.critic(state, action) # critic value of action taken by doctor
 			bellman_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
 
+			losses = {
+				"bellman_loss": bellman_loss.item(),
+			}
+
 			# 3. Actor Actions and their Critic Values
             # We use deterministic=True to see the "best" action the model recommends
 			pi, _ = self.actor(state, deterministic=True)
@@ -925,16 +976,30 @@ class CQL:
 
 			eval_q_gap = (Q_pi - ((current_Q1 + current_Q2)/2.0)).mean().item()
 
-			# 4. BC Loss (How much we deviate from the doctor)
-			actor_dict = self.compute_actor_loss(pi, action)
+					
+			current_Q = torch.min(current_Q1, current_Q2)
+			raw_advantage = Q_pi - current_Q			
+			losses['actor_loss_q'] = -(raw_advantage).mean()
+
+			# Apply an exponential filter (beta controls how aggressively we chase positive advantage)
+			# This acts like a soft-maximum that amplifies positive gains 
+			beta = 0.1
+			scaled_advantage = -raw_advantage / beta
+			exp_weights = torch.exp(scaled_advantage).detach()
+			
+			# BC Loss - compute actor loss using TrainerUtils function - the "anchor"
+			actor_dict = self.compute_actor_loss(pi, action, exp_weights)
+			# actor_loss_bc = actor_dict['total_bc_loss'] # this is the combined BC loss that includes both the weighted MSE and the sparsity penalty
+			losses.update(actor_dict) # add the actor_dict components to the losses dict for logging
+
+			
+			# # 4. BC Loss (How much we deviate from the doctor)
+			# actor_dict = self.compute_actor_loss(pi, action, exp_weights)
 
 
 			# ADD THIS LINE:
 			neuron_stats = self.critic.get_neuron_stats(state, action)
 	
-			losses = {
-				"bellman_loss": bellman_loss.item(),
-			}
 			losses.update(actor_dict)
 
 			# get Q statistics

@@ -30,7 +30,7 @@ def plot_results(training_metrics, plot_dir, config_manager):
 
     all_keys = get_keys(training_metrics)
     
-    if hasattr(config_manager.training_config, 'policy_freq'):
+    if 'policy_freq' in config_manager.training_config:
         policy_freq = config_manager.training_config['policy_freq']
     else:
         policy_freq = None

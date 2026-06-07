@@ -21,7 +21,7 @@
     noise_clip: 0.5 # Range to clip target policy noise
     policy_freq: 2 # Frequency of delayed policy updates
     beta: 0.1 # Weighting for BC loss term
-    cql_alpha: 0.1 #.001 # Weighting for CQL penalty term
+    cql_alpha: 0.001 #.001 # Weighting for CQL penalty term
     temp: 1.0 # Temperature for CQL penalty term
     num_samples: 10 # Number of samples for CQL penalty term
 
@@ -51,10 +51,10 @@
 
     # health score reward shaping parameters
     health_score_hourly_change_clip: 10. # health score is 0 to 100, clip prevents large spikes in reward
-    health_score_scale: 0.01 # [0.05, 0.1, 0.2]  # Scaling factor for health score component of reward
-    health_score_hourly_change_scale: .99 # [0.5,
+    health_score_scale: 0. # [0.05, 0.1, 0.2]  # Scaling factor for health score component of reward
+    health_score_hourly_change_scale: 1. # [0.5,
     total_health_score_scale: 10.  # Scaling factor for total health score component of reward
     potential_based_reward_shaping: False 
     terminal_health_score_reward: 2.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
 
-    monte_carlo_terminal_returns: True
+    monte_carlo_terminal_returns: False

@@ -619,7 +619,7 @@ class CQL:
 		
 		# macro and micro weight
 		lambda_macro = 10.0
-		lambda_micro = 0.
+		lambda_micro = 5.0
 
 		fluid_loss = lambda_macro * fluid_volume_loss + lambda_micro * micro_fluid_loss
 		vaso_volume_loss = vaso_volume_loss * vaso_volume_loss_weight # we can scale up the macro vaso loss separately if we want to encourage better matching of overall vaso usage, which is clinically important
@@ -670,7 +670,7 @@ class CQL:
 		with torch.no_grad():
 			# add noise to states
 			state_std = state.std(dim=0, keepdim=True)
-			noise_scale = state_std * 0.4 + 1e-6
+			noise_scale = state_std * 0.04 + 1e-6
 			state_noise = torch.randn_like(state) * noise_scale
 			smoothed_states = state + state_noise
 			
@@ -841,7 +841,7 @@ class CQL:
 			
 			# Sample actions from the stochastic actor
 			# pi, log_prob = self.actor(state, with_log_prob=True)
-			pi, log_prob = self.actor(state, deterministic = True)
+			pi, log_prob = self.actor(state, deterministic = False)
 			Q1_pi, Q2_pi = self.critic(state, pi)
 			Q_pi = torch.min(Q1_pi, Q2_pi)
 
@@ -875,8 +875,9 @@ class CQL:
 			# Any sample where advantage was <= 0 now multiplies by 0.0, completely erasing its gradient contribution!
 			# actor_loss_q = -(asymmetric_weights * Q_pi).mean()
 			num_active_samples = positive_mask.sum()
-			actor_loss_q = -(asymmetric_weights * Q_pi).sum()/ (num_active_samples + 1e-6) # normalize by the number of active samples to keep the scale consistent
-			
+			# actor_loss_q = -(asymmetric_weights * Q_pi).sum()/ (num_active_samples + 1e-6) # normalize by the number of active samples to keep the scale consistent
+			actor_loss_q = -(raw_advantage.detach() * log_prob).mean() 
+
 			scaled_advantage = -raw_advantage / beta
 			exp_weights = torch.exp(scaled_advantage / beta).detach()
 			exp_weights = torch.clamp(exp_weights, min=0.01, max=10.0)
@@ -887,14 +888,14 @@ class CQL:
 			losses.update(actor_dict) # add the actor_dict components to the losses dict for logging
 
 			# add a small entropy bonus
-			ent_alpha = 0.05
+			ent_alpha = 0.01
 			actor_loss_ent = ent_alpha * log_prob.mean() if log_prob is not None else 0.0
 					
 
-			actor_loss = actor_loss_bc + 20*actor_loss_q
+			# actor_loss = actor_loss_bc + 20*actor_loss_q
 			# actor_loss = actor_loss_bc 
 			# actor_loss = actor_loss_q 
-			# actor_loss = actor_loss_q + self.beta * actor_loss_bc + actor_loss_ent # i think CQL doesn't normally include a BC 
+			actor_loss = 1.5*actor_loss_q + self.beta * actor_loss_bc + actor_loss_ent # i think CQL doesn't normally include a BC 
 			# component, but gemini says keep if for medical, probably use a very small beta
 
 			if log_prob is not None:

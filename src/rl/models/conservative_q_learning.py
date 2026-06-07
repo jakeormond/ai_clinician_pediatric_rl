@@ -123,24 +123,7 @@ class Actor(nn.Module):
 
 
 	def forward(self, state: torch.Tensor, deterministic: bool = False, with_log_prob: bool = True):
-		# features = self.backbone(state)
-		# mu = self.mu_head(features)
-		# log_std = self.log_std_head(features)
 
-		# # Clip log_std for numerical stability
-		# log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
-		# std = torch.exp(log_std)
-
-		# dist = Normal(mu, std)
-
-		# if deterministic:
-		# 	x_t = mu
-		# else:
-		# 	x_t = dist.rsample() # Reparameterization trick (allows gradients)
-
-		# # Apply Tanh to bound [-1, 1], then scale to [0, 1] for your environment
-		# y_t = torch.tanh(x_t)
-		# action = (y_t + 1.0) / 2.0 # Transformation to [0, 1]
 
 		mus = []
 		log_stds = []
@@ -174,23 +157,19 @@ class Actor(nn.Module):
 		# Direct Sigmoid output eliminates the need for the (y + 1) / 2 shift!
 		action = torch.sigmoid(raw_action)
 
-		# if with_log_prob:
-		# 	# We must adjust log_prob because of the Tanh and Scaling transformations
-		# 	# 1. Standard log_prob from the Normal dist
-		# 	log_prob = dist.log_prob(x_t)
-		# 	# 2. Correction for Tanh: log(1 - tanh(x)^2)
-		# 	log_prob -= torch.log(1 - y_t.pow(2) + 1e-6)
-		# 	# 3. Correction for [0, 1] scaling (multiplying by 0.5 means adding log(2) to log_prob)
-		# 	log_prob -= torch.log(torch.tensor(0.5, device=state.device))
-		# 	log_prob = log_prob.sum(dim=-1, keepdim=True)
-		# else:
-		# 	log_prob = None
+
 		if with_log_prob and not deterministic:
 			# Pass the raw, un-squashed sample x_t into the base distribution
 			log_prob = dist.log_prob(raw_action)
+
+			# 2. NUMERICALLY STABLE SIGMOID CORRECTION
+            # Replaces: log_prob -= torch.log(action * (1.0 - action) + 1e-6)
+			# This handles large positive/negative raw actions without collapsing to zero
+			sigmoid_correction = raw_action + 2.0 * F.softplus(-raw_action)
+			log_prob -= sigmoid_correction
 			
-			# Correct the density using the final squashed action
-			log_prob -= torch.log(action * (1.0 - action) + 1e-6)
+			# # Correct the density using the final squashed action
+			# log_prob -= torch.log(action * (1.0 - action) + 1e-6)
 			log_prob = log_prob.sum(dim=-1, keepdim=True)
 		else:
 			log_prob = None
@@ -224,56 +203,53 @@ class Critic(nn.Module):
 		dropout=0.1, 
 		hidden_dim=512, 
 		negative_slope=0.1,
-	):
-		
+	):		
 		super(Critic, self).__init__()
 
-		# standardize the incoming embeddings
-		self.state_norm = nn.LayerNorm(state_dim + action_dim) # if cql loss stays close to zero, we may
-		# want to remove action_dim from this normalization, but for now we can keep it since actions are also log-min-maxed and should be on a similar scale to states	
 		self.hidden_dim = hidden_dim
-
 		self.hidden_dim2 = hidden_dim // 2  # Example of a second hidden layer with half the units of the first
 		self.hidden_dim3 = self.hidden_dim2 // 2  # Example of a third hidden layer with half the units of the second
 
 		self.negative_slope = negative_slope
 
-		# Q1 architecture
-		self.q1_net = nn.Sequential(
-			nn.Linear(state_dim + action_dim, self.hidden_dim),
-			nn.LayerNorm(self.hidden_dim), # Normalize internal activations
-			nn.LeakyReLU(negative_slope=self.negative_slope),
-			nn.Dropout(p=dropout),
-			
-			nn.Linear(self.hidden_dim, self.hidden_dim2),
-			nn.LeakyReLU(negative_slope=self.negative_slope),
-			nn.Dropout(p=dropout),
-			
-			nn.Linear(self.hidden_dim2, self.hidden_dim3),
-			nn.LeakyReLU(negative_slope=self.negative_slope),
-			# nn.Dropout(p=dropout),    
-			
-			nn.Linear(self.hidden_dim3, 1)
+		# standardize the incoming embeddings
+		self.state_norm = nn.LayerNorm(state_dim) # if cql loss stays close to zero, we may
+		
+		# 2. Action Processing Pathway (Shared across both critics)
+		self.action_projector = nn.Sequential(
+			nn.Linear(action_dim, 32),
+			nn.LeakyReLU(negative_slope=self.negative_slope)
 		)
 
-		# Q2 architecture
-		self.q2_net = nn.Sequential(
-			nn.Linear(state_dim + action_dim, self.hidden_dim),
-			nn.LayerNorm(self.hidden_dim), # Normalize internal activations 
-			nn.LeakyReLU(negative_slope=self.negative_slope),
-			nn.Dropout(p=dropout),
-			
-			nn.Linear(self.hidden_dim, self.hidden_dim2),
-			nn.LeakyReLU(negative_slope=self.negative_slope),
-			nn.Dropout(p=dropout),
-			
-			nn.Linear(self.hidden_dim2, self.hidden_dim3),
-			nn.LeakyReLU(negative_slope=self.negative_slope),
-			# nn.Dropout(p=dropout),            
-			
-			nn.Linear(self.hidden_dim3, 1)
-		)
 
+		# 3. State Compression Pathway (Shared or individual, individual is safer for twin critics)
+		# Reduces 768 down to 64 dimensions safely away from the action
+		self.state_projectors = nn.ModuleList([
+				nn.Sequential(
+				nn.Linear(state_dim, self.hidden_dim),
+				nn.LayerNorm(self.hidden_dim),
+				nn.LeakyReLU(negative_slope=self.negative_slope),
+				nn.Dropout(p=dropout),
+				nn.Linear(self.hidden_dim, 64),
+				nn.LeakyReLU(negative_slope=self.negative_slope)
+			)
+			for _ in range(2) # Two separate state projectors for Q1 and Q2
+		])
+		
+		# 4. Q-Value Heads (Separate for Q1 and Q2)
+		self.q_heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(64 + 32, self.hidden_dim2),
+                nn.LeakyReLU(negative_slope=self.negative_slope),
+                nn.Dropout(p=dropout),
+                
+                nn.Linear(self.hidden_dim2, self.hidden_dim3),
+                nn.LeakyReLU(negative_slope=self.negative_slope),
+                
+                nn.Linear(self.hidden_dim3, 1)
+            ) for _ in range(2)
+        ])
+		
 		self.apply(self._init_weights)
 		
 
@@ -310,22 +286,23 @@ class Critic(nn.Module):
 			nn.init.constant_(m.weight, 1.0)
 
 	def forward(self, state, action):
+		# 1. Normalize the massive state latents cleanly
+		norm_state = self.state_norm(state)
 
-		sa = torch.cat([state, action], 1)
+		# 2. Process the action features once
+		h_action = self.action_projector(action)
 
-		# normalize states after concatenation
-		sa = self.state_norm(sa)
+		# 3. Pass through the twin pathways dynamically
+		# Twin 1
+		h_state1 = self.state_projectors[0](norm_state)
+		q1 = self.q_heads[0](torch.cat([h_state1, h_action], dim=-1))
 		
-		q1 = self.q1_net(sa)
-		q2 = self.q2_net(sa)
+		# Twin 2
+		h_state2 = self.state_projectors[1](norm_state)
+		q2 = self.q_heads[1](torch.cat([h_state2, h_action], dim=-1))
 
 		return q1, q2
 	
-	def Q1(self, state, action):
-		sa = torch.cat([state, action], 1)
-		sa = self.state_norm(sa)
-		q1 = self.q1_net(sa)
-		return q1	
     
 
 	@torch.no_grad()
@@ -333,39 +310,42 @@ class Critic(nn.Module):
 		# Ensure we are in eval mode to avoid Dropout interference
 		self.eval()
 		
-		# Concatenate input
-		x_init = torch.cat([state, action], dim=-1)
-		
 		stats = {}
-		# We only need to check q1_net to get a representative sample of activity
-		x = x_init
 		leaky_idx = 0
-		for layer in self.q1_net:
-			x = layer(x)
-			if isinstance(layer, nn.LeakyReLU):
-				# 1. Percent of inputs utilizing the negative slope in this batch
-				pct_negative = (x < 0).float().mean().item() * 100
-				stats[f"negative_regime_L{leaky_idx}_pct"] = pct_negative
-				
-				# 2. True Inactive/Dead Neurons: Variance across the batch is essentially 0
-				# (dim=0 calculates variance across the batch for each individual neuron)
-				neuron_vars = torch.var(x, dim=0)
-				pct_dead = (neuron_vars < 1e-6).float().mean().item() * 100
-				stats[f"dead_neurons_L{leaky_idx}_pct"] = pct_dead 
+		
+		# Helper function to trace activations layer-by-layer through an nn.Sequential block
+		def trace_sequential_block(sequential_block, current_input, block_name):
+			nonlocal leaky_idx
+			x = current_input
+			for layer in sequential_block:
+				x = layer(x)
+				if isinstance(layer, nn.LeakyReLU):
+					# 1. Percent of inputs utilizing the negative slope in this batch
+					pct_negative = (x < 0).float().mean().item() * 100
+					stats[f"{block_name}_neg_regime_L{leaky_idx}_pct"] = pct_negative
+					
+					# 2. True Inactive/Dead Neurons: Variance across the batch is essentially 0
+					neuron_vars = torch.var(x, dim=0)
+					pct_dead = (neuron_vars < 1e-6).float().mean().item() * 100
+					stats[f"{block_name}_dead_neurons_L{leaky_idx}_pct"] = pct_dead 
 
-				leaky_idx += 1            
+					leaky_idx += 1            
+			return x
+
+		# Wrap in no_grad to save memory since we're just extracting diagnostics
+		with torch.no_grad():
+			# 1. Trace the State Normalization + State Projector 1 (Representative of Twin 1)
+			norm_state = self.state_norm(state)
+			h_state1 = trace_sequential_block(self.state_projectors[0], norm_state, "state_proj")
+			
+			# 2. Trace the Action Projector
+			h_action = trace_sequential_block(self.action_projector, action, "action_proj")
+			
+			# 3. Concatenate and trace through the Q1 Head
+			x_joint = torch.cat([h_state1, h_action], dim=-1)
+			_ = trace_sequential_block(self.q_heads[0], x_joint, "q_head")
 				
 		return stats
-
-
-	# def get_grad_norm(self):
-	# 	total_norm = 0
-	# 	for p in self.parameters():
-	# 		if p.grad is not None:
-	# 			param_norm = p.grad.detach().norm(2)
-	# 			total_norm += param_norm.item() ** 2
-	# 	total_norm = total_norm ** 0.5
-	# 	return total_norm
 	
 
 	def get_all_q_values(self, state, actions):
@@ -518,6 +498,7 @@ class CQL:
 		grad_clip: float = None,  # Add grad_clip argument
 		ema_alpha: float = 0.99,  # Add ema_alpha argument for moving
 		reward_scaling: float = 1.0,
+		use_monte_carlo_terminal_returns: bool = False
 	):
 		
 		self.actor = actor
@@ -554,6 +535,8 @@ class CQL:
 		self.ema_alpha = ema_alpha # Closer to 1.0 means more smoothing
 		
 		self.reward_scaling = reward_scaling
+
+		self.use_monte_carlo_terminal_returns = use_monte_carlo_terminal_returns
 
 		self.total_it = 0
 
@@ -603,31 +586,52 @@ class CQL:
 		# 	"pi_mean_val": pi.mean().item()
 		# }
 
+		############# MACRO LOSS #############
+		fluid_volume_loss = (pi[:, 0].mean() - action[:, 0].mean()) ** 2
+		vaso_volume_loss  = (pi[:, 1].mean()  - action[:, 1].mean()) ** 2		
+		vaso_volume_loss_weight = 10.0
+		
+		########### MICRO LOSS ###########
 		# 1. Compute raw squared errors
 		squared_errors = (pi - action) ** 2 # [B, T, 2]
 		
 		# 2. Define your weights
 		fluid_loss_weight = 1.0
 		vaso_loss_weight = 5.0  # Scale up the entire vasopressor channel        
-		active_vaso_multiplier = 10.0 # Heavily punish missing a true active dose
+		active_multiplier = 1.0 # 10.0 # Heavily punish missing a true active dose
 		
 		# 3. Construct the weight matrix
 		weights = torch.ones_like(action)
 		weights[:, 0] = fluid_loss_weight
 		weights[:, 1] = vaso_loss_weight
 
+		# Apply the extra multiplier ONLY where the true fluid dose is > 0
+		true_fluid = action[:, 0]
+		weights[:, 0] = torch.where(true_fluid > 0, fluid_loss_weight * active_multiplier, fluid_loss_weight)
+
 		# Apply the extra multiplier ONLY where the true vasopressor dose is > 0
 		true_vaso = action[:, 1]
-		weights[:, 1] = torch.where(true_vaso > 0, vaso_loss_weight * active_vaso_multiplier, vaso_loss_weight)
+		weights[:, 1] = torch.where(true_vaso > 0, vaso_loss_weight * active_multiplier, vaso_loss_weight)
 		
 		# 4. Apply weights and mask out padding steps
-		fluid_loss = ((squared_errors[:, 0] * weights[:, 0])* exp_weights.squeeze()).mean()
-		vaso_loss = ((squared_errors[:, 1] * weights[:, 1])* exp_weights.squeeze()).mean()
+		micro_fluid_loss = ((squared_errors[:, 0] * weights[:, 0])* exp_weights.squeeze()).mean()
+		micro_vaso_loss = ((squared_errors[:, 1] * weights[:, 1])* exp_weights.squeeze()).mean()
+		
+		# macro and micro weight
+		lambda_macro = 10.0
+		lambda_micro = 0.
+
+		fluid_loss = lambda_macro * fluid_volume_loss + lambda_micro * micro_fluid_loss
+		vaso_volume_loss = vaso_volume_loss * vaso_volume_loss_weight # we can scale up the macro vaso loss separately if we want to encourage better matching of overall vaso usage, which is clinically important
+		vaso_loss = lambda_macro * vaso_volume_loss + lambda_micro * micro_vaso_loss		
+		
 		total_loss = fluid_loss + vaso_loss
 		actor_dict = {
 			"total_bc_loss": total_loss,
-			"mse_fluid_loss": fluid_loss,
-			"mse_vaso_loss": vaso_loss
+			"fluid_volume_loss": fluid_volume_loss,
+			"vaso_volume_loss": vaso_volume_loss,
+			"mse_fluid_loss": micro_fluid_loss,
+			"mse_vaso_loss": micro_vaso_loss
 		}
 		
 		return actor_dict
@@ -638,9 +642,13 @@ class CQL:
 			# Select action according to policy and add clipped noise
 			next_action, _ = self.actor_target(next_state, deterministic=True)
 		
-			noise = (
-				torch.randn_like(action) * self.policy_noise
-			).clamp(-self.noise_clip, self.noise_clip)
+			raw_noise = torch.randn_like(action) * self.policy_noise
+			noise = raw_noise * next_action
+			noise = noise.clamp(-self.noise_clip, self.noise_clip)
+			
+			# noise = (
+			# 	torch.randn_like(action) * self.policy_noise
+			# ).clamp(-self.noise_clip, self.noise_clip)
 
 			next_action = (next_action + noise).clamp(0, 1.0) # Using 1.0 since our actor outputs [0,1]
 
@@ -659,7 +667,20 @@ class CQL:
 
 		# Sample replay buffer 
 		state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
-		
+		with torch.no_grad():
+			# add noise to states
+			state_std = state.std(dim=0, keepdim=True)
+			noise_scale = state_std * 0.4 + 1e-6
+			state_noise = torch.randn_like(state) * noise_scale
+			smoothed_states = state + state_noise
+			
+			# add noise to actions
+			critic_action_noise = (torch.randn_like(action) * 0.04).clamp(-0.1, 0.1)
+			smoothed_actions = action + critic_action_noise
+			is_zero_dose = (action < 1e-4)
+			smoothed_actions = torch.where(is_zero_dose, torch.zeros_like(smoothed_actions), smoothed_actions)			
+			smoothed_actions = smoothed_actions.clamp(0, 1.0) # Ensure actions remain in valid range after smoothing
+
 		reward = reward * self.reward_scaling
 		
 		# compute the target Q value
@@ -673,10 +694,15 @@ class CQL:
 		self.critic.train()          # Dropout ACTIVE for the network we are updating
 		
 		with torch.no_grad(): # uses target actor for next action
-			target_Q = self.target_q(action, next_state, reward, not_done, noise=True)
+			if self.use_monte_carlo_terminal_returns:
+				# is 1 where mortality is 1, else 0. 
+				target_Q = -(mortality - 1).float()
+			else:
+				target_Q = self.target_q(action, next_state, reward, not_done, noise=True)
 
 		# Get current Q estimates>
-		current_Q1, current_Q2 = self.critic(state, action)
+		# current_Q1, current_Q2 = self.critic(state, action)
+		current_Q1, current_Q2 = self.critic(smoothed_states, smoothed_actions)
 
 		# 2. CQL CONSERVATIVE LOSS
         # We need to sample random actions to penalize them
@@ -724,18 +750,30 @@ class CQL:
 		cat_q1 = torch.cat([q1_rand, q1_curr, q1_next, current_Q1], dim=1)
 		cat_q2 = torch.cat([q2_rand, q2_curr, q2_next, current_Q2], dim=1)
 
-		cql_loss1 = torch.logsumexp(cat_q1 / self.temp, dim=1).mean() * self.temp - current_Q1.mean()
-		cql_loss2 = torch.logsumexp(cat_q2 / self.temp, dim=1).mean() * self.temp - current_Q2.mean()
+		num_samples = cat_q1.shape[1]
+
+		scaled_lse1 = torch.logsumexp(cat_q1 / self.temp, dim=1).mean() * self.temp
+		scaled_lse2 = torch.logsumexp(cat_q2 / self.temp, dim=1).mean() * self.temp
+
+		# 3. THE CRITICAL FIX: Subtract the temperature-scaled sample density offset
+		# This forces the baseline penalty of a perfectly flat Q-distribution to equal 0.0
+		cql_offset = self.temp * np.log(num_samples)
+
+		cql_loss1 = (scaled_lse1 - cql_offset) - current_Q1.mean()
+		cql_loss2 = (scaled_lse2 - cql_offset) - current_Q2.mean()
+
+		# cql_loss1 = torch.logsumexp(cat_q1 / self.temp, dim=1).mean() * self.temp - current_Q1.mean()
+		# cql_loss2 = torch.logsumexp(cat_q2 / self.temp, dim=1).mean() * self.temp - current_Q2.mean()
 
 		# 4. COMBINED CRITIC LOSS
 		bellman_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
 		cql_loss = cql_loss1 + cql_loss2
 		# dynamic warm up for cql_alpha
-		if self.total_it < 5000:
+		if self.total_it < 1000:
 			current_alpha = 0.0
-		elif 5000 <= self.total_it < 15000:
+		elif 1000 <= self.total_it < 2000:
 			# Linearly scale alpha from 0.0 to your target_alpha over 10,000 steps
-			progress = (self.total_it - 5000) / 10000
+			progress = (self.total_it - 1000) / 1000.0
 			current_alpha = progress * self.cql_alpha
 		else:
 			current_alpha = self.cql_alpha
@@ -802,7 +840,8 @@ class CQL:
 			self.actor.train() # Dropout ACTIVE for the network we are updating
 			
 			# Sample actions from the stochastic actor
-			pi, log_prob = self.actor(state, with_log_prob=True)
+			# pi, log_prob = self.actor(state, with_log_prob=True)
+			pi, log_prob = self.actor(state, deterministic = True)
 			Q1_pi, Q2_pi = self.critic(state, pi)
 			Q_pi = torch.min(Q1_pi, Q2_pi)
 
@@ -813,13 +852,31 @@ class CQL:
 			# but the lmbda logic is usually replaced by pure Q maximization in CQL
 			with torch.no_grad():
 				current_Q = torch.min(current_Q1, current_Q2)
-			raw_advantage = Q_pi - current_Q			
-			actor_loss_q = -(raw_advantage).mean()
+			
+			# 1. Calculate raw advantage
+			raw_advantage = Q_pi - current_Q
 
-			# Apply an exponential filter (beta controls how aggressively we chase positive advantage)
-			# This acts like a soft-maximum that amplifies positive gains 
-			# beta = 1
-			beta = raw_advantage.std()*2.5 + 1e-6
+			# 2. Calculate exponential weights using only the positive advantage landscape
+			# We filter the std calculation so the denominator isn't warped by huge negative outliers
+			positive_mask = raw_advantage > 0
+			if positive_mask.any():
+				beta = raw_advantage[positive_mask].std() * 2.0 + 1e-6
+			else:
+				beta = 1e-6
+
+			# 3. Calculate the exponential curve
+			raw_exp = torch.exp(raw_advantage / beta)
+			clipped_exp = torch.clamp(raw_exp, max=10.0)
+
+			# 4. THE CORRECTED MASK: If advantage > 0, keep the exp weight. Otherwise, force to 0.0
+			asymmetric_weights = torch.where(positive_mask, clipped_exp, torch.zeros_like(clipped_exp)).detach()
+
+			# 5. Compute final loss
+			# Any sample where advantage was <= 0 now multiplies by 0.0, completely erasing its gradient contribution!
+			# actor_loss_q = -(asymmetric_weights * Q_pi).mean()
+			num_active_samples = positive_mask.sum()
+			actor_loss_q = -(asymmetric_weights * Q_pi).sum()/ (num_active_samples + 1e-6) # normalize by the number of active samples to keep the scale consistent
+			
 			scaled_advantage = -raw_advantage / beta
 			exp_weights = torch.exp(scaled_advantage / beta).detach()
 			exp_weights = torch.clamp(exp_weights, min=0.01, max=10.0)
@@ -832,20 +889,32 @@ class CQL:
 			# add a small entropy bonus
 			ent_alpha = 0.05
 			actor_loss_ent = ent_alpha * log_prob.mean() if log_prob is not None else 0.0
+					
 
-			# every 500 iterations, logg actor_loss_q, actor_loss_bc, and actor_loss_ent separately to see how they are contributing to the total loss
-			if self.total_it % 500 == 0:
-				logging.info(f"Iteration {self.total_it}: actor_loss_q={actor_loss_q.item():.4f}, actor_loss_bc={actor_loss_bc.item():.4f}, actor_loss_ent={actor_loss_ent.item():.4f}")
-
-			actor_loss = actor_loss_bc + 200*actor_loss_q
+			actor_loss = actor_loss_bc + 20*actor_loss_q
 			# actor_loss = actor_loss_bc 
 			# actor_loss = actor_loss_q 
 			# actor_loss = actor_loss_q + self.beta * actor_loss_bc + actor_loss_ent # i think CQL doesn't normally include a BC 
 			# component, but gemini says keep if for medical, probably use a very small beta
+
+			if log_prob is not None:
+				actor_loss_ent = actor_loss_ent.item()
+			else: # make it null
+				actor_loss_ent = 0.0
+
+			# every 500 iterations, logg actor_loss_q, actor_loss_bc, and actor_loss_ent separately to see how they are contributing to the total loss
+			if self.total_it % 500 == 0:
+				logging.info(
+					f"Iteration {self.total_it}: actor_loss_q={actor_loss_q.item():.4f}, \
+					actor_loss_bc={actor_loss_bc.item():.4f}, \
+					actor_loss_ent={actor_loss_ent:.4f}, \
+					raw_advantage_mean={raw_advantage.mean().item():.4f}")		 
+
 			losses.update({
 				"actor_loss_total": actor_loss.item(),
 				"actor_loss_q": actor_loss_q.item(),
-				"actor_loss_ent": actor_loss_ent.item()
+				"actor_raw_advantage_mean": raw_advantage.mean().item(),
+				"actor_loss_ent": actor_loss_ent
 			})
 						
 			# Final combined update
@@ -958,7 +1027,11 @@ class CQL:
 
 		with torch.no_grad():
 			# compute the target Q value
-			target_Q = self.target_q(action, next_state, reward, not_done, noise=False)
+			if self.use_monte_carlo_terminal_returns:
+				# is 1 where mortality is 1, else 0. 
+				target_Q = -(mortality - 1).float()
+			else:
+				target_Q = self.target_q(action, next_state, reward, not_done, noise=False)
 
 			# Get current Q estimates
 			current_Q1, current_Q2 = self.critic(state, action) # critic value of action taken by doctor
@@ -1118,7 +1191,7 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		cql_alpha=hyperparams['cql_alpha'],
 		temp=hyperparams['temp'],
 		num_samples=hyperparams['num_samples'],
-		
+		use_monte_carlo_terminal_returns=hyperparams['monte_carlo_terminal_returns']
 	)
 
 	return trainer

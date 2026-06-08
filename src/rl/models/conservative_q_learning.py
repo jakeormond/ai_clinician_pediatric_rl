@@ -31,6 +31,8 @@ class Actor(nn.Module):
 		hidden_dim: int = 256,
 		log_std_min: float = -5,
 		log_std_max: float = 2,
+		action_dim: int = 2,
+		dropout: float = 0.1
 	):
 		super().__init__()
 		self.log_std_min = log_std_min
@@ -49,10 +51,15 @@ class Actor(nn.Module):
 		# Separate heads — each action has its own mean/log_std stream
 		# This prevents the high-gradient fluid head from swamping vasopressors
 		self.fluid_mean    = nn.Linear(hidden_dim, 1)
-		self.fluid_log_std = nn.Linear(hidden_dim, 1)
+		# self.fluid_log_std = nn.Linear(hidden_dim, 1)
 
 		self.vaso_mean    = nn.Linear(hidden_dim, 1)
-		self.vaso_log_std = nn.Linear(hidden_dim, 1)
+		# self.vaso_log_std = nn.Linear(hidden_dim, 1)
+
+		# log_std as learned scalar parameters — NOT network outputs
+		# Gradient from Q only reaches the mean heads, not these
+		self.fluid_log_std = nn.Parameter(torch.tensor([-1.0]))
+		self.vaso_log_std  = nn.Parameter(torch.tensor([-1.0]))
 
 		self._init_weights()
 
@@ -73,9 +80,9 @@ class Actor(nn.Module):
 		nn.init.zeros_(self.vaso_mean.weight)
 		self.vaso_mean.bias.data.fill_(-3.89)
 
-		for layer in [self.fluid_log_std, self.vaso_log_std]:
-			nn.init.zeros_(layer.weight)
-			layer.bias.data.fill_(-1.0)  # moderate initial std
+		# for layer in [self.fluid_log_std, self.vaso_log_std]:
+		# 	nn.init.zeros_(layer.weight)
+		# 	layer.bias.data.fill_(-1.0)  # moderate initial std
 
 
 	def forward(self, state: torch.Tensor, deterministic: bool = False, with_log_prob: bool = True):
@@ -83,15 +90,19 @@ class Actor(nn.Module):
 
 		# --- Fluid ---
 		f_mean = torch.sigmoid(self.fluid_mean(z))          # (0, 1)
-		f_log_std = torch.clamp(
-			self.fluid_log_std(z), self.log_std_min, self.log_std_max
-		)
+		# f_log_std = torch.clamp(
+		# 	self.fluid_log_std(z), self.log_std_min, self.log_std_max
+		# )
+		f_log_std = torch.clamp(self.fluid_log_std, self.log_std_min, self.log_std_max)
+
 
 		# --- Vasopressor ---
 		v_mean = torch.sigmoid(self.vaso_mean(z))            # (0, 1)
 		v_log_std = torch.clamp(
-			self.vaso_log_std(z), self.log_std_min, self.log_std_max
+			self.vaso_log_std, self.log_std_min, self.log_std_max
 		)
+		v_log_std  = torch.clamp(self.vaso_log_std,  self.log_std_min, self.log_std_max)
+
 
 		f_std = f_log_std.exp()
 		v_std = v_log_std.exp()
@@ -824,9 +835,13 @@ class CQL:
 			losses.update(actor_dict) # add the actor_dict components to the losses dict for logging
 
 			# add a small entropy bonus
-			ent_alpha = 0.0001
-			actor_loss_ent = ent_alpha * log_prob.mean() if log_prob is not None else 0.0
-					
+			# ent_alpha = 0.0001
+			# actor_loss_ent = ent_alpha * log_prob.mean() if log_prob is not None else 0.0
+
+			f_ent = self.actor.fluid_log_std.clamp(self.actor.log_std_min, self.actor.log_std_max)
+			v_ent = self.actor.vaso_log_std.clamp(self.actor.log_std_min, self.actor.log_std_max)
+			actor_loss_ent = -0.1 * (f_ent + v_ent)					
+
 
 			# actor_loss = actor_loss_bc + 20*actor_loss_q
 			# actor_loss = actor_loss_bc 

@@ -26,173 +26,109 @@ TensorBatch = List[torch.Tensor]
 
 class Actor(nn.Module):
 	def __init__(
-			self, 
-			state_dim: int, 
-			action_dim: int, 
-			# hidden_dim: List[int] = [512, 256, 128], 
-			hidden_dim: int = 256,
-			dropout: float = 0.1,
-			negative_slope: float = 0.1,
-			log_std_min: float = -20,
-            log_std_max: float = 2
-		):
-		
-		super(Actor, self).__init__()
-		self.state_dim = state_dim
-		self.action_dim = action_dim
+		self,
+		state_dim: int,
+		hidden_dim: int = 256,
+		log_std_min: float = -5,
+		log_std_max: float = 2,
+	):
+		super().__init__()
 		self.log_std_min = log_std_min
 		self.log_std_max = log_std_max
 
-		# layers = []
-		# input_dim = state_dim
+		# Shared trunk — learns a joint patient representation
+		self.trunk = nn.Sequential(
+			nn.Linear(state_dim, hidden_dim),
+			nn.LayerNorm(hidden_dim),
+			nn.ReLU(),
+			nn.Linear(hidden_dim, hidden_dim),
+			nn.LayerNorm(hidden_dim),
+			nn.ReLU(),
+		)
 
-		# for h_dim in hidden_dim:
-		# 	layers.append(nn.Linear(input_dim, h_dim))
-		# 	# Critical: Always keep the activation, then apply dropout
-		# 	layers.append(nn.LeakyReLU(negative_slope)) 
-		# 	if dropout > 0:
-		# 		layers.append(nn.Dropout(dropout))
-		# 	input_dim = h_dim
+		# Separate heads — each action has its own mean/log_std stream
+		# This prevents the high-gradient fluid head from swamping vasopressors
+		self.fluid_mean    = nn.Linear(hidden_dim, 1)
+		self.fluid_log_std = nn.Linear(hidden_dim, 1)
 
-		# self.backbone = nn.Sequential(*layers)
+		self.vaso_mean    = nn.Linear(hidden_dim, 1)
+		self.vaso_log_std = nn.Linear(hidden_dim, 1)
 
-		# # Two heads: one for the Mean, one for the Log Standard Deviation
-		# self.mu_head = nn.Linear(input_dim, action_dim)
-		# self.log_std_head = nn.Linear(input_dim, action_dim)
+		self._init_weights()
 
-		# Create completely independent networks for each continuous action dimension
-        # Just like your successful BC policy heads!
-		self.action_pipelines = nn.ModuleList([
-			nn.Sequential(
-				nn.Linear(self.state_dim, hidden_dim),
-				nn.LayerNorm(hidden_dim), # Crucial: Stops the 1024 latent scale from causing runaway activations
-				nn.LeakyReLU(negative_slope),
-				nn.Dropout(dropout),
-				nn.Linear(hidden_dim, hidden_dim),
-				nn.LayerNorm(hidden_dim),
-				nn.LeakyReLU(negative_slope)
-			) for _ in range(action_dim)
-		])
 
-		# Separate output heads for mean and log_std per action dimension
-		self.mu_heads = nn.ModuleList([nn.Linear(hidden_dim, 1) for _ in range(action_dim)])
-		self.log_std_heads = nn.ModuleList([nn.Linear(hidden_dim, 1) for _ in range(action_dim)])
+	def _init_weights(self):
+		for m in self.trunk:
+			if isinstance(m, nn.Linear):
+				nn.init.orthogonal_(m.weight, gain=1.0)
+				nn.init.zeros_(m.bias)
 
-		# # Initialize weights
-		# # Initialize backbone for LeakyReLU signal flow
-		# for m in self.action_pipelines:
-		# 	if isinstance(m, nn.Linear):
-		# 		nn.init.kaiming_normal_(
-		# 			m.weight, 
-		# 			a=negative_slope, 
-		# 			mode='fan_in',
-		# 			nonlinearity='leaky_relu'
-		# 		)
-		
-		# # We use a very small range so the Sigmoid starts around 0.5 
-		# # (the middle of your log-min-maxed range).
-		# nn.init.uniform_(self.mu_heads.weight, -3e-3, 3e-3)
-		# nn.init.constant_(self.mu_head.bias, 0.0)
+		# Fluid head — initialise near 0.4 (your observed mean)
+		# sigmoid(0.4) ≈ 0.6, so bias = logit(0.4) ≈ -0.405
+		nn.init.zeros_(self.fluid_mean.weight)
+		self.fluid_mean.bias.data.fill_(-0.405)
 
-		# nn.init.uniform_(self.log_std_head.weight, -3e-3, 3e-3)
-		# nn.init.constant_(self.log_std_head.bias, 0.0)
+		# Vasopressor head — initialise near 0.02 (sparse baseline)
+		# logit(0.02) ≈ -3.89; pull mean toward near-zero actions
+		nn.init.zeros_(self.vaso_mean.weight)
+		self.vaso_mean.bias.data.fill_(-3.89)
 
-		# 1. Initialize all independent backbones for LeakyReLU signal flow
-		for pipeline in self.action_pipelines:
-			for m in pipeline:
-				if isinstance(m, nn.Linear):
-					nn.init.kaiming_normal_(
-						m.weight, 
-						a=negative_slope, # 0.1
-						mode='fan_in',
-						nonlinearity='leaky_relu'
-					)
-					if m.bias is not None:
-						nn.init.constant_(m.bias, 0.0)
-		
-		# 2. Initialize all independent mu and log_std heads for Sigmoid stability
-		for i in range(self.action_dim):
-			# Mu head: forces initial output to 0.0 (sigmoid(0) = 0.5)
-			nn.init.uniform_(self.mu_heads[i].weight, -3e-3, 3e-3)
-			nn.init.constant_(self.mu_heads[i].bias, 0.0)
-
-			# Log_std head: forces initial log_std close to 0.0 (std = e^0 = 1.0)
-			# This gives your actor healthy, balanced initial exploration
-			nn.init.uniform_(self.log_std_heads[i].weight, -3e-3, 3e-3)
-			nn.init.constant_(self.log_std_heads[i].bias, -2.)
+		for layer in [self.fluid_log_std, self.vaso_log_std]:
+			nn.init.zeros_(layer.weight)
+			layer.bias.data.fill_(-1.0)  # moderate initial std
 
 
 	def forward(self, state: torch.Tensor, deterministic: bool = False, with_log_prob: bool = True):
+		z = self.trunk(state)
 
+		# --- Fluid ---
+		f_mean = torch.sigmoid(self.fluid_mean(z))          # (0, 1)
+		f_log_std = torch.clamp(
+			self.fluid_log_std(z), self.log_std_min, self.log_std_max
+		)
 
-		mus = []
-		log_stds = []
-		
-		# Process each action dimension through its own dedicated architecture
-		for i in range(self.action_dim):
-			features = self.action_pipelines[i](state)
-			
-			mu = self.mu_heads[i](features)
-			# Hard clip log_std to prevent variance from exploding/collapsing
-			log_std = torch.clamp(
-				self.log_std_heads[i](features), 
-				min=self.log_std_min, 
-				max=self.log_std_max
+		# --- Vasopressor ---
+		v_mean = torch.sigmoid(self.vaso_mean(z))            # (0, 1)
+		v_log_std = torch.clamp(
+			self.vaso_log_std(z), self.log_std_min, self.log_std_max
+		)
+
+		f_std = f_log_std.exp()
+		v_std = v_log_std.exp()
+	
+		if not deterministic or with_log_prob:
+			# Sample in unconstrained space, then squash with sigmoid
+			f_dist = torch.distributions.Normal(
+			torch.logit(f_mean.clamp(1e-6, 1 - 1e-6)), f_std
 			)
-			
-			mus.append(mu)
-			log_stds.append(log_std)
-			
-		total_mu = torch.cat(mus, dim=-1)
-		total_log_std = torch.cat(log_stds, dim=-1)
+			v_dist = torch.distributions.Normal(
+			torch.logit(v_mean.clamp(1e-6, 1 - 1e-6)), v_std
+			)
 
-		if deterministic:
-			raw_action = total_mu
+			f_raw = f_dist.rsample()
+			v_raw = v_dist.rsample()
+
+			f_action = torch.sigmoid(f_raw)
+			v_action = torch.sigmoid(v_raw)
+
+			# Log-prob with sigmoid change-of-variables correction
+			# log p(a) = log p(u) - sum log sigmoid'(u)
+			f_log_prob = f_dist.log_prob(f_raw) - torch.log(
+			f_action * (1 - f_action) + 1e-6
+			)
+			v_log_prob = v_dist.log_prob(v_raw) - torch.log(
+			v_action * (1 - v_action) + 1e-6
+			)
+
+			log_prob    = (f_log_prob + v_log_prob).squeeze(-1)
+			actions     = torch.cat([f_action, v_action], dim=-1)
+			# mean_actions = torch.cat([f_mean, v_mean], dim=-1)
 		else:
-			std = torch.exp(total_log_std)
-			dist = Normal(total_mu, std)
-			raw_action = dist.rsample() # Reparameterization trick (allows gradients)
-
-		# truncated_raw = torch.clamp(raw_action, min=-5.0, max=5.0)
-		# Direct Sigmoid output eliminates the need for the (y + 1) / 2 shift!
-		action = torch.sigmoid(raw_action)
-
-
-		if with_log_prob and not deterministic:
-			# Pass the raw, un-squashed sample x_t into the base distribution
-			log_prob = dist.log_prob(raw_action)
-
-			# 2. NUMERICALLY STABLE SIGMOID CORRECTION
-            # Replaces: log_prob -= torch.log(action * (1.0 - action) + 1e-6)
-			# This handles large positive/negative raw actions without collapsing to zero
-			sigmoid_correction = raw_action + 2.0 * F.softplus(-raw_action)
-			log_prob -= sigmoid_correction
-			
-			# # Correct the density using the final squashed action
-			# log_prob -= torch.log(action * (1.0 - action) + 1e-6)
-			log_prob = log_prob.sum(dim=-1, keepdim=True)
-		else:
+			actions = torch.cat([f_mean, v_mean], dim=-1)
 			log_prob = None
 
-		return action, log_prob
-	
+		return actions, log_prob
 
-	@torch.no_grad()
-	def act(self, state: np.ndarray, device: str = "cpu") -> np.ndarray:
-		self.eval() 
-		state = torch.as_tensor(state, device=device, dtype=torch.float32)
-		if state.ndim == 1:
-			state = state.unsqueeze(0)
-		
-		# 1. We call forward with deterministic=True to get the 'mean' action
-		# 2. We set with_log_prob=False because we don't need it for inference
-		action, _ = self.forward(state, deterministic=True, with_log_prob=False)
-		
-		action = action.cpu().numpy()
-		
-		# Keep your clinical thresholding
-		action[action < 1e-3] = 0.0
-		return action
 
 
 class Critic(nn.Module):
@@ -888,14 +824,14 @@ class CQL:
 			losses.update(actor_dict) # add the actor_dict components to the losses dict for logging
 
 			# add a small entropy bonus
-			ent_alpha = 0.01
+			ent_alpha = 0.0001
 			actor_loss_ent = ent_alpha * log_prob.mean() if log_prob is not None else 0.0
 					
 
 			# actor_loss = actor_loss_bc + 20*actor_loss_q
 			# actor_loss = actor_loss_bc 
 			# actor_loss = actor_loss_q 
-			actor_loss = 1.5*actor_loss_q + self.beta * actor_loss_bc + actor_loss_ent # i think CQL doesn't normally include a BC 
+			actor_loss = 10*actor_loss_q + self.beta * actor_loss_bc + actor_loss_ent # i think CQL doesn't normally include a BC 
 			# component, but gemini says keep if for medical, probably use a very small beta
 
 			if log_prob is not None:

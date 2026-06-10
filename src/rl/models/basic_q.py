@@ -25,7 +25,7 @@ class Critic(nn.Module):
         state_dim, 
         action_dim, 
         dropout=0.1, 
-        hidden_dim=512, 
+        hidden_dim=64, 
         negative_slope=0.1
     ):
         
@@ -33,72 +33,47 @@ class Critic(nn.Module):
 
         # standardize the incoming embeddings
         self.hidden_dim = hidden_dim
-        # self.hidden_dim2 = hidden_dim // 2  # Example of a second hidden layer with half the units of the first
-        # self.hidden_dim3 = self.hidden_dim2 // 2  # Example of a third hidden layer with half the units of the second
 
         self.negative_slope = negative_slope
 
-        # Q1 architecture
+        self.state_norm = nn.LayerNorm(state_dim) #
+
         # self.q1_net = nn.Sequential(
-        #     nn.LayerNorm(state_dim + action_dim), # Normalize input features
+        #     nn.LayerNorm(state_dim + action_dim),
         #     nn.Linear(state_dim + action_dim, self.hidden_dim),
-        #     nn.LayerNorm(self.hidden_dim), # Normalize internal activations
+        #     nn.LayerNorm(self.hidden_dim),
         #     nn.LeakyReLU(negative_slope=self.negative_slope),
         #     nn.Dropout(p=dropout),
-            
-        #     nn.Linear(self.hidden_dim, self.hidden_dim2),
-        #     nn.LayerNorm(self.hidden_dim2), # Normalize internal activations
-        #     nn.LeakyReLU(negative_slope=self.negative_slope),
-        #     nn.Dropout(p=dropout),
-            
-        #     nn.Linear(self.hidden_dim2, self.hidden_dim3),
-        #     nn.LayerNorm(self.hidden_dim3), # Normalize internal activations
-        #     nn.LeakyReLU(negative_slope=self.negative_slope),
-        #     # nn.Dropout(p=dropout),    
-            
-        #     nn.Linear(self.hidden_dim3, 1)
+        #     nn.Linear(self.hidden_dim, 1) # Directly to output
         # )
 
-        self.q1_net = nn.Sequential(
-            nn.LayerNorm(state_dim + action_dim),
-            nn.Linear(state_dim + action_dim, self.hidden_dim),
-            nn.LayerNorm(self.hidden_dim),
-            nn.LeakyReLU(negative_slope=self.negative_slope),
-            nn.Dropout(p=dropout),
-            nn.Linear(self.hidden_dim, 1) # Directly to output
-        )
 
-        # # Q2 architecture
+
         # self.q2_net = nn.Sequential(
-        #     nn.LayerNorm(state_dim + action_dim), # Normalize input features
+        #     nn.LayerNorm(state_dim + action_dim),
         #     nn.Linear(state_dim + action_dim, self.hidden_dim),
-        #     nn.LayerNorm(self.hidden_dim), # Normalize internal activations 
+        #     nn.LayerNorm(self.hidden_dim),
         #     nn.LeakyReLU(negative_slope=self.negative_slope),
         #     nn.Dropout(p=dropout),
-            
-        #     nn.Linear(self.hidden_dim, self.hidden_dim2),
-        #     nn.LayerNorm(self.hidden_dim2),
-        #     nn.LeakyReLU(negative_slope=self.negative_slope),
-        #     nn.Dropout(p=dropout),
-            
-        #     nn.Linear(self.hidden_dim2, self.hidden_dim3),
-        #     nn.LayerNorm(self.hidden_dim3),
-        #     nn.LeakyReLU(negative_slope=self.negative_slope),
-        #     # nn.Dropout(p=dropout),            
-            
-        #     nn.Linear(self.hidden_dim3, 1)
+        #     nn.Linear(self.hidden_dim, 1) # Directly to output
         # )
 
-        self.q2_net = nn.Sequential(
-            nn.LayerNorm(state_dim + action_dim),
-            nn.Linear(state_dim + action_dim, self.hidden_dim),
-            nn.LayerNorm(self.hidden_dim),
-            nn.LeakyReLU(negative_slope=self.negative_slope),
-            nn.Dropout(p=dropout),
-            nn.Linear(self.hidden_dim, 1) # Directly to output
-        )
+        self.q_heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(state_dim + action_dim, hidden_dim),
+                nn.LayerNorm(hidden_dim),
+                nn.LeakyReLU(negative_slope=negative_slope),
+                nn.Dropout(p=dropout),
 
+                nn.Linear(hidden_dim, hidden_dim//2),
+                nn.LeakyReLU(negative_slope=negative_slope),
+
+                nn.Linear(hidden_dim//2, 1)
+            ) for _ in range(2)
+        ])
+        
         self.apply(self._init_weights)
+
         
     
     def _init_weights(self, m):
@@ -109,7 +84,8 @@ class Critic(nn.Module):
                 # Let's use a slightly wider window to give the gradient a "handle."
                 nn.init.uniform_(m.weight, -1e-2, 1e-2) 
                 if m.bias is not None:
-                    nn.init.constant_(m.bias, -0.2)
+                    nn.init.constant_(m.bias, -0.2) # this starts model in pessimistic state
+                                                    # but if Q values collapse, we may need to make this 0.0
             
             # 2. THE HIDDEN LAYERS
             else:
@@ -125,19 +101,51 @@ class Critic(nn.Module):
                 if m.bias is not None:
                     # Keep this at 0. With LayerNorm, non-zero biases can 
                     # actually introduce unnecessary shift.
-                    nn.init.constant_(m.bias, 0.0)      
+                    nn.init.constant_(m.bias, 0.05)      
         
         elif isinstance(m, nn.LayerNorm):
             # Standard identity transform - keep as is
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
+
+
+        # if isinstance(m, nn.Linear):
+        #     # 1. THE FINAL HEAD (Output = 1)
+        #     if m.out_features == 1:
+        #         # Squeezing to near-zero is good, but 3e-3 is VERY tight for a 3-layer net.
+        #         # Let's use a slightly wider window to give the gradient a "handle."
+        #         nn.init.uniform_(m.weight, -1e-2, 1e-2) 
+        #         if m.bias is not None:
+        #             nn.init.constant_(m.bias, -0.2)
+            
+        #     # 2. THE HIDDEN LAYERS
+        #     else:
+        #         # CRITICAL: Match 'a' to your negative_slope (0.1)
+        #         # 'fan_in' is correct for preserving signal in the forward pass
+        #         nn.init.kaiming_normal_(
+        #             m.weight, 
+        #             a=self.negative_slope,  # <--- Change this from 0.01 to 0.1
+        #             mode='fan_in', 
+        #             nonlinearity='leaky_relu'
+        #         )
+                
+        #         if m.bias is not None:
+        #             # Keep this at 0. With LayerNorm, non-zero biases can 
+        #             # actually introduce unnecessary shift.
+        #             nn.init.constant_(m.bias, 0.0)      
+        
+        # elif isinstance(m, nn.LayerNorm):
+        #     # Standard identity transform - keep as is
+        #     nn.init.constant_(m.bias, 0)
+        #     nn.init.constant_(m.weight, 1.0)
     
     def forward(self, state, action):
 
-        sa = torch.cat([state, action], 1)
-        
-        q1 = self.q1_net(sa)
-        q2 = self.q2_net(sa)
+        norm_state = self.state_norm(state)
+        sa = torch.cat([norm_state, action], dim=-1)  # (B, 40+2=42)
+
+        q1 = self.q_heads[0](sa)
+        q2 = self.q_heads[1](sa)
 
         return q1, q2
     
@@ -146,29 +154,46 @@ class Critic(nn.Module):
     def get_neuron_stats(self, state, action):
         # Ensure we are in eval mode to avoid Dropout interference
         self.eval()
-        
-        # Concatenate input
-        x_init = torch.cat([state, action], dim=-1)
-        
-        stats = {}
-        # We only need to check q1_net to get a representative sample of activity
-        x = x_init
-        leaky_idx = 0
-        for layer in self.q1_net:
-            x = layer(x)
-            if isinstance(layer, nn.LeakyReLU):
-                # 1. Percent of inputs utilizing the negative slope in this batch
-                pct_negative = (x < 0).float().mean().item() * 100
-                stats[f"negative_regime_L{leaky_idx}_pct"] = pct_negative
-                
-                # 2. True Inactive/Dead Neurons: Variance across the batch is essentially 0
-                # (dim=0 calculates variance across the batch for each individual neuron)
-                neuron_vars = torch.var(x, dim=0)
-                pct_dead = (neuron_vars < 1e-6).float().mean().item() * 100
-                stats[f"dead_neurons_L{leaky_idx}_pct"] = pct_dead 
 
-                leaky_idx += 1               
-                
+        stats = {}
+        leaky_idx = 0
+
+        # Helper function to trace activations layer-by-layer through an nn.Sequential block
+        def trace_sequential_block(sequential_block, current_input, block_name):
+            nonlocal leaky_idx
+            x = current_input
+            for layer in sequential_block:
+                x = layer(x)
+                if isinstance(layer, nn.LeakyReLU):
+                    # 1. Percent of inputs utilizing the negative slope in this batch
+                    pct_negative = (x < 0).float().mean().item() * 100
+                    stats[f"{block_name}_neg_regime_L{leaky_idx}_pct"] = pct_negative
+                    
+                    # 2. True Inactive/Dead Neurons: Variance across the batch is essentially 0
+                    neuron_vars = torch.var(x, dim=0)
+                    pct_dead = (neuron_vars < 1e-6).float().mean().item() * 100
+                    stats[f"{block_name}_dead_neurons_L{leaky_idx}_pct"] = pct_dead 
+
+                    leaky_idx += 1            
+            return x
+
+		# Wrap in no_grad to save memory since we're just extracting diagnostics
+		# with torch.no_grad():
+		# 	# 1. Trace the State Normalization + State Projector 1 (Representative of Twin 1)
+		# 	norm_state = self.state_norm(state)
+		# 	h_state1 = trace_sequential_block(self.state_projectors[0], norm_state, "state_proj")
+			
+		# 	# 2. Trace the Action Projector
+		# 	h_action = trace_sequential_block(self.action_projector, action, "action_proj")
+			
+		# 	# 3. Concatenate and trace through the Q1 Head
+		# 	x_joint = torch.cat([h_state1, h_action], dim=-1)
+		# 	_ = trace_sequential_block(self.q_heads[0], x_joint, "q_head")
+
+        norm_state = self.state_norm(state)
+        sa = torch.cat([norm_state, action], dim=-1)
+        _ = trace_sequential_block(self.q_heads[0], sa, "q_head")       
+            
         return stats
 
 

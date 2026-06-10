@@ -28,9 +28,9 @@ class Actor(nn.Module):
 	def __init__(
 		self,
 		state_dim: int,
-		hidden_dim: int = 256,
-		log_std_min: float = -5,
-		log_std_max: float = 2,
+		hidden_dim: int = 64,
+		log_std_min: float = -3,
+		log_std_max: float = 0.,
 		action_dim: int = 2,
 		dropout: float = 0.1
 	):
@@ -43,9 +43,9 @@ class Actor(nn.Module):
 			nn.Linear(state_dim, hidden_dim),
 			nn.LayerNorm(hidden_dim),
 			nn.ReLU(),
-			nn.Linear(hidden_dim, hidden_dim),
-			nn.LayerNorm(hidden_dim),
-			nn.ReLU(),
+			# nn.Linear(hidden_dim, hidden_dim),
+			# nn.LayerNorm(hidden_dim),
+			# nn.ReLU(),
 		)
 
 		# Separate heads — each action has its own mean/log_std stream
@@ -59,7 +59,7 @@ class Actor(nn.Module):
 		# log_std as learned scalar parameters — NOT network outputs
 		# Gradient from Q only reaches the mean heads, not these
 		self.fluid_log_std = nn.Parameter(torch.tensor([-1.0]))
-		self.vaso_log_std  = nn.Parameter(torch.tensor([-1.0]))
+		self.vaso_log_std  = nn.Parameter(torch.tensor([-2.0]))
 
 		self._init_weights()
 
@@ -85,7 +85,7 @@ class Actor(nn.Module):
 		# 	layer.bias.data.fill_(-1.0)  # moderate initial std
 
 
-	def forward(self, state: torch.Tensor, deterministic: bool = False, with_log_prob: bool = True):
+	def forward(self, state: torch.Tensor, deterministic: bool = False):
 		z = self.trunk(state)
 
 		# --- Fluid ---
@@ -101,19 +101,18 @@ class Actor(nn.Module):
 		v_log_std = torch.clamp(
 			self.vaso_log_std, self.log_std_min, self.log_std_max
 		)
-		v_log_std  = torch.clamp(self.vaso_log_std,  self.log_std_min, self.log_std_max)
 
 
 		f_std = f_log_std.exp()
 		v_std = v_log_std.exp()
 	
-		if not deterministic or with_log_prob:
+		if not deterministic:
 			# Sample in unconstrained space, then squash with sigmoid
 			f_dist = torch.distributions.Normal(
-			torch.logit(f_mean.clamp(1e-6, 1 - 1e-6)), f_std
+				torch.logit(f_mean.clamp(1e-6, 1 - 1e-6)), f_std
 			)
 			v_dist = torch.distributions.Normal(
-			torch.logit(v_mean.clamp(1e-6, 1 - 1e-6)), v_std
+				torch.logit(v_mean.clamp(1e-6, 1 - 1e-6)), v_std
 			)
 
 			f_raw = f_dist.rsample()
@@ -124,11 +123,11 @@ class Actor(nn.Module):
 
 			# Log-prob with sigmoid change-of-variables correction
 			# log p(a) = log p(u) - sum log sigmoid'(u)
-			f_log_prob = f_dist.log_prob(f_raw) - torch.log(
-			f_action * (1 - f_action) + 1e-6
+			f_log_prob = f_dist.log_prob(f_raw) + torch.log(
+				f_action * (1 - f_action) + 1e-6
 			)
-			v_log_prob = v_dist.log_prob(v_raw) - torch.log(
-			v_action * (1 - v_action) + 1e-6
+			v_log_prob = v_dist.log_prob(v_raw) + torch.log(
+				v_action * (1 - v_action) + 1e-6
 			)
 
 			log_prob    = (f_log_prob + v_log_prob).squeeze(-1)
@@ -148,14 +147,14 @@ class Critic(nn.Module):
 		state_dim, 
 		action_dim, 
 		dropout=0.1, 
-		hidden_dim=512, 
+		hidden_dim=64, # 512 
 		negative_slope=0.1,
 	):		
 		super(Critic, self).__init__()
 
 		self.hidden_dim = hidden_dim
-		self.hidden_dim2 = hidden_dim // 2  # Example of a second hidden layer with half the units of the first
-		self.hidden_dim3 = self.hidden_dim2 // 2  # Example of a third hidden layer with half the units of the second
+		# self.hidden_dim2 = hidden_dim // 2  # Example of a second hidden layer with half the units of the first
+		# self.hidden_dim3 = self.hidden_dim2 // 2  # Example of a third hidden layer with half the units of the second
 
 		self.negative_slope = negative_slope
 
@@ -163,39 +162,55 @@ class Critic(nn.Module):
 		self.state_norm = nn.LayerNorm(state_dim) # if cql loss stays close to zero, we may
 		
 		# 2. Action Processing Pathway (Shared across both critics)
-		self.action_projector = nn.Sequential(
-			nn.Linear(action_dim, 32),
-			nn.LeakyReLU(negative_slope=self.negative_slope)
-		)
+		# self.action_projector = nn.Sequential(
+		# 	nn.Linear(action_dim, 8), # 32
+		# 	nn.LeakyReLU(negative_slope=self.negative_slope)
+		# )
 
 
-		# 3. State Compression Pathway (Shared or individual, individual is safer for twin critics)
-		# Reduces 768 down to 64 dimensions safely away from the action
-		self.state_projectors = nn.ModuleList([
-				nn.Sequential(
-				nn.Linear(state_dim, self.hidden_dim),
-				nn.LayerNorm(self.hidden_dim),
-				nn.LeakyReLU(negative_slope=self.negative_slope),
-				nn.Dropout(p=dropout),
-				nn.Linear(self.hidden_dim, 64),
-				nn.LeakyReLU(negative_slope=self.negative_slope)
-			)
-			for _ in range(2) # Two separate state projectors for Q1 and Q2
-		])
+		# # 3. State Compression Pathway (Shared or individual, individual is safer for twin critics)
+		# # Reduces 768 down to 64 dimensions safely away from the action
+		# self.state_projectors = nn.ModuleList([
+		# 		nn.Sequential(
+		# 		nn.Linear(state_dim, self.hidden_dim),
+		# 		nn.LayerNorm(self.hidden_dim),
+		# 		nn.LeakyReLU(negative_slope=self.negative_slope),
+		# 		nn.Dropout(p=dropout),
+		# 		nn.Linear(self.hidden_dim, 64),
+		# 		nn.LeakyReLU(negative_slope=self.negative_slope)
+		# 	)
+		# 	for _ in range(2) # Two separate state projectors for Q1 and Q2
+		# ])
 		
 		# 4. Q-Value Heads (Separate for Q1 and Q2)
+		# self.q_heads = nn.ModuleList([
+        #     nn.Sequential(
+        #         nn.Linear(64 + 32, self.hidden_dim2),
+        #         nn.LeakyReLU(negative_slope=self.negative_slope),
+        #         nn.Dropout(p=dropout),
+                
+        #         nn.Linear(self.hidden_dim2, self.hidden_dim3),
+        #         nn.LeakyReLU(negative_slope=self.negative_slope),
+                
+        #         nn.Linear(self.hidden_dim3, 1)
+        #     ) for _ in range(2)
+        # ])
+
+		# State + action fusion — no need to compress first,
+        # just fuse directly into a small hidden space
 		self.q_heads = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(64 + 32, self.hidden_dim2),
-                nn.LeakyReLU(negative_slope=self.negative_slope),
-                nn.Dropout(p=dropout),
-                
-                nn.Linear(self.hidden_dim2, self.hidden_dim3),
-                nn.LeakyReLU(negative_slope=self.negative_slope),
-                
-                nn.Linear(self.hidden_dim3, 1)
-            ) for _ in range(2)
-        ])
+			nn.Sequential(
+				nn.Linear(state_dim + action_dim, hidden_dim),
+				nn.LayerNorm(hidden_dim),
+				nn.LeakyReLU(negative_slope=negative_slope),
+				nn.Dropout(p=dropout),
+
+				nn.Linear(hidden_dim, hidden_dim//2),
+				nn.LeakyReLU(negative_slope=negative_slope),
+
+				nn.Linear(hidden_dim//2, 1)
+			) for _ in range(2)
+		])
 		
 		self.apply(self._init_weights)
 		
@@ -233,23 +248,30 @@ class Critic(nn.Module):
 			nn.init.constant_(m.weight, 1.0)
 
 	def forward(self, state, action):
-		# 1. Normalize the massive state latents cleanly
-		norm_state = self.state_norm(state)
+		# # 1. Normalize the massive state latents cleanly
+		# norm_state = self.state_norm(state)
 
-		# 2. Process the action features once
-		h_action = self.action_projector(action)
+		# # 2. Process the action features once
+		# h_action = self.action_projector(action)
 
-		# 3. Pass through the twin pathways dynamically
-		# Twin 1
-		h_state1 = self.state_projectors[0](norm_state)
-		q1 = self.q_heads[0](torch.cat([h_state1, h_action], dim=-1))
+		# # 3. Pass through the twin pathways dynamically
+		# # Twin 1
+		# h_state1 = self.state_projectors[0](norm_state)
+		# q1 = self.q_heads[0](torch.cat([h_state1, h_action], dim=-1))
 		
-		# Twin 2
-		h_state2 = self.state_projectors[1](norm_state)
-		q2 = self.q_heads[1](torch.cat([h_state2, h_action], dim=-1))
+		# # Twin 2
+		# h_state2 = self.state_projectors[1](norm_state)
+		# q2 = self.q_heads[1](torch.cat([h_state2, h_action], dim=-1))
+
+		# return q1, q2
+	
+		norm_state = self.state_norm(state)
+		sa = torch.cat([norm_state, action], dim=-1)  # (B, 40+2=42)
+
+		q1 = self.q_heads[0](sa)
+		q2 = self.q_heads[1](sa)
 
 		return q1, q2
-	
     
 
 	@torch.no_grad()
@@ -280,17 +302,21 @@ class Critic(nn.Module):
 			return x
 
 		# Wrap in no_grad to save memory since we're just extracting diagnostics
-		with torch.no_grad():
-			# 1. Trace the State Normalization + State Projector 1 (Representative of Twin 1)
-			norm_state = self.state_norm(state)
-			h_state1 = trace_sequential_block(self.state_projectors[0], norm_state, "state_proj")
+		# with torch.no_grad():
+		# 	# 1. Trace the State Normalization + State Projector 1 (Representative of Twin 1)
+		# 	norm_state = self.state_norm(state)
+		# 	h_state1 = trace_sequential_block(self.state_projectors[0], norm_state, "state_proj")
 			
-			# 2. Trace the Action Projector
-			h_action = trace_sequential_block(self.action_projector, action, "action_proj")
+		# 	# 2. Trace the Action Projector
+		# 	h_action = trace_sequential_block(self.action_projector, action, "action_proj")
 			
-			# 3. Concatenate and trace through the Q1 Head
-			x_joint = torch.cat([h_state1, h_action], dim=-1)
-			_ = trace_sequential_block(self.q_heads[0], x_joint, "q_head")
+		# 	# 3. Concatenate and trace through the Q1 Head
+		# 	x_joint = torch.cat([h_state1, h_action], dim=-1)
+		# 	_ = trace_sequential_block(self.q_heads[0], x_joint, "q_head")
+
+		norm_state = self.state_norm(state)
+		sa = torch.cat([norm_state, action], dim=-1)
+		_ = trace_sequential_block(self.q_heads[0], sa, "q_head")
 				
 		return stats
 	
@@ -775,7 +801,7 @@ class CQL:
 		# Delayed policy updates
 		if self.total_it % self.policy_freq != 0:
 			with torch.no_grad():
-				pi, log_prob = self.actor(state, with_log_prob=True)
+				pi, log_prob = self.actor(state)
 				Q1_pi, Q2_pi = self.critic(state, pi)
 			Q_pi = torch.min(Q1_pi, Q2_pi)
 			q_stats = get_q_stats(current_Q1, current_Q2, Q_pi, mortality)
@@ -787,8 +813,7 @@ class CQL:
 			self.actor.train() # Dropout ACTIVE for the network we are updating
 			
 			# Sample actions from the stochastic actor
-			# pi, log_prob = self.actor(state, with_log_prob=True)
-			pi, log_prob = self.actor(state, deterministic = False)
+			pi, log_prob = self.actor(state)
 			Q1_pi, Q2_pi = self.critic(state, pi)
 			Q_pi = torch.min(Q1_pi, Q2_pi)
 
@@ -823,7 +848,7 @@ class CQL:
 			# actor_loss_q = -(asymmetric_weights * Q_pi).mean()
 			num_active_samples = positive_mask.sum()
 			# actor_loss_q = -(asymmetric_weights * Q_pi).sum()/ (num_active_samples + 1e-6) # normalize by the number of active samples to keep the scale consistent
-			actor_loss_q = -(raw_advantage.detach() * log_prob).mean() 
+			actor_loss_q = -Q_pi.mean() # we can also try just maximizing Q_pi directly without the weights, since the weights are mostly for interpretability and analysis of the advantage landscape
 
 			scaled_advantage = -raw_advantage / beta
 			exp_weights = torch.exp(scaled_advantage / beta).detach()
@@ -843,10 +868,10 @@ class CQL:
 			actor_loss_ent = -0.1 * (f_ent + v_ent)					
 
 
-			# actor_loss = actor_loss_bc + 20*actor_loss_q
+			actor_loss = actor_loss_bc + 100*actor_loss_q
 			# actor_loss = actor_loss_bc 
 			# actor_loss = actor_loss_q 
-			actor_loss = 10*actor_loss_q + self.beta * actor_loss_bc + actor_loss_ent # i think CQL doesn't normally include a BC 
+			# ctor_loss = 100*actor_loss_q + self.beta * actor_loss_bc + actor_loss_ent # i think CQL doesn't normally include a BC 
 			# component, but gemini says keep if for medical, probably use a very small beta
 
 			if log_prob is not None:
@@ -950,7 +975,7 @@ class CQL:
 		q_values = []
 		for i in range(0, len(start_states), batch_size):
 			batch_states = start_states[i:i+batch_size]
-			actions, _ = self.actor(batch_states, deterministic=True, with_log_prob=False)
+			actions, _ = self.actor(batch_states, deterministic=True)
 			q1, q2 = self.critic(batch_states, actions)
 			q_batch = torch.min(q1, q2)
 			q_values.append(q_batch.detach().cpu().numpy())

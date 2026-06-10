@@ -100,8 +100,11 @@ class ShardProcessor:
                     bc_model_file_dir = config_manager.data_config['bc_latents_path']
                     bc_prediction_file_path = os.path.join(bc_model_file_dir, f"{pred_split}_set_predictions.h5")
 
+                    # self.bc_latents = self.load_dynamic_deephit_predictions_from_h5(bc_prediction_file_path, 
+                    #                                                     keys_to_load=['model_outputs', 'index_ptr', 'stay_ids'])
+
                     self.bc_latents = self.load_dynamic_deephit_predictions_from_h5(bc_prediction_file_path, 
-                                                                        keys_to_load=['model_outputs', 'index_ptr', 'stay_ids'])
+                                                                        keys_to_load=['model_outputs', 'compressed_latents', 'index_ptr', 'stay_ids'])
                     
 
                 if self.split == 'tuning': # we need to filter the predictions to only include the stays in the tuning set, which are a subset of the training set
@@ -357,7 +360,7 @@ class ShardProcessor:
         else: 
             raise ValueError(f"Invalid reward type: {reward_type}. Supported reward types are: 'health_score' and 'time_to_event'.")
     
-    def create_rl_dataset(self, states="model_outputs", scaler=None, action_names=None):
+    def create_rl_dataset(self, states="model_outputs", scaler=None, action_names=None, use_compressed_latents=False):
         self.rl_dataset = {}
         
         # action_ind = self.dynamic_deephit_dataset['response_zero_ind'] + self.dynamic_deephit_dataset['carry_forward_ind']
@@ -395,7 +398,10 @@ class ShardProcessor:
         if states == "model_outputs":
             
             # combine the self.dynamic_deephit_predictions["model_outputs"] and self.bc_latents["model_outputs"] by concatenating along the feature dimension, to create a larger state representation that includes both the dynamic deephit predictions and the behavioral cloning latents. We will then scale this combined state representation before feeding it into the RL model.
-            model_outputs = np.concatenate([self.dynamic_deephit_predictions["model_outputs"], self.bc_latents["model_outputs"]], axis=1)
+            if not use_compressed_latents:
+                model_outputs = np.concatenate([self.dynamic_deephit_predictions["model_outputs"], self.bc_latents["model_outputs"]], axis=1)
+            else:
+                model_outputs = np.concatenate([self.dynamic_deephit_predictions["compressed_latents"], self.bc_latents["compressed_latents"]], axis=1)
                         
             # need to scale the outputs
             if scaler == None:
@@ -488,6 +494,8 @@ class ShardProcessor:
                 f.create_dataset('health_score', data=self.dynamic_deephit_dataset['health_score'], dtype=np.float32)
             if 'model_outputs' in self.dynamic_deephit_dataset:
                 f.create_dataset('model_outputs', data=self.dynamic_deephit_dataset['model_outputs'], dtype=np.float32)
+            if 'compressed_latents' in self.dynamic_deephit_dataset:
+                f.create_dataset('compressed_latents', data=self.dynamic_deephit_dataset['compressed_latents'], dtype=np.float32)
 
 
         logger.info(f"Saved dynamic deephit dataset to {file_path}")
@@ -527,6 +535,8 @@ class ShardProcessor:
             # Build trajectory mask
             if 'trajectories' in dataset:
                 traj_mask = np.zeros(dataset['trajectories'].shape[0], dtype=bool)
+            elif 'compressed_latents' in dataset:
+                traj_mask = np.zeros(dataset['compressed_latents'].shape[0], dtype=bool)
             elif 'model_outputs' in dataset:
                 traj_mask = np.zeros(dataset['model_outputs'].shape[0], dtype=bool)
             logger.info(f"Original number of timesteps in {dataset_type}: {traj_mask.shape[0]}")
@@ -548,6 +558,8 @@ class ShardProcessor:
                 dataset['time_to_event'] = dataset['time_to_event'][traj_mask]
             if 'model_outputs' in dataset:
                 dataset['model_outputs'] = dataset['model_outputs'][traj_mask]
+            if 'compressed_latents' in dataset:
+                dataset['compressed_latents'] = dataset['compressed_latents'][traj_mask]
             if 'health_score' in dataset:
                 dataset['health_score'] = dataset['health_score'][traj_mask]
             
@@ -564,6 +576,8 @@ class ShardProcessor:
                 logger.info(f"Number of timesteps after filtering by stay ids: {dataset['trajectories'].shape[0]}")
             elif 'model_outputs' in dataset:
                 logger.info(f"Number of timesteps after filtering by stay ids: {dataset['model_outputs'].shape[0]}")
+            elif 'compressed_latents' in dataset:
+                logger.info(f"Number of timesteps after filtering by stay ids: {dataset['compressed_latents'].shape[0]}")
 
             # Explicitly update the instance attribute
             if dataset_type == 'dynamic_deephit_dataset':
@@ -886,7 +900,7 @@ class ShardProcessor:
         dynamic_deephit_predictions = {}
 
         if keys_to_load is None:
-            keys_to_load = ['predictions', 'stay_ids', 'index_ptr', 'model_outputs', 'health_score', 'entropy', 'carry_forward_ind', 'response_zero_ind']
+            keys_to_load = ['predictions', 'stay_ids', 'index_ptr', 'model_outputs', 'health_score', 'entropy', 'carry_forward_ind', 'response_zero_ind', "compressed_latents"]
         if keys_to_exclude is not None:
             keys_to_load = [key for key in keys_to_load if key not in keys_to_exclude]
 
@@ -903,6 +917,8 @@ class ShardProcessor:
                 dynamic_deephit_predictions['index_ptr'] = f['index_ptr'][:]
             if 'model_outputs' in keys_to_load:
                 dynamic_deephit_predictions['model_outputs'] = f['model_outputs'][:].astype(np.float32)
+            if 'compressed_latents' in keys_to_load:
+                dynamic_deephit_predictions['compressed_latents'] = f['compressed_latents'][:].astype(np.float32)
             if 'health_score' in keys_to_load:    
                 dynamic_deephit_predictions['health_score'] = f['health_score'][:].astype(np.float32)
             if 'entropy' in keys_to_load:  

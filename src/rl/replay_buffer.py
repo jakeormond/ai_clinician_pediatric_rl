@@ -20,15 +20,24 @@ ai_clinician_dir = "/home/jake/Documents/AI_Clinician/"
 
 
 class RLDataset(Dataset):
-    def __init__(self, processor: Dict[str, np.ndarray]):
+    def __init__(self, processor: Dict[str, np.ndarray], use_n_step: bool = False):
 
         self.states = processor.rl_dataset["states"]  # (num_samples, num_features)
         self.actions = processor.rl_dataset["actions"]  # (num_samples, num_actions)
-        self.rewards = processor.rl_dataset["rewards"]  # (num_samples,)      
-        self.next_states = processor.rl_dataset["next_states"]  # (num_samples, num_features)
-        self.next_actions = processor.rl_dataset["next_actions"]  # (num_samples, num_actions)        
-        self.dones = processor.rl_dataset["dones"]  # 
+        
         self.mortality = processor.rl_dataset["mortality"]
+
+        if not use_n_step:        
+            self.rewards = processor.rl_dataset["rewards"]  # (num_samples,)      
+            self.next_states = processor.rl_dataset["next_states"]  # (num_samples, num_features)
+            self.next_actions = processor.rl_dataset["next_actions"]  # (num_samples, num_actions)        
+            self.dones = processor.rl_dataset["dones"]  # 
+        else:
+            self.nstep_rewards = processor.rl_dataset["nstep_rewards"] # (num_samples,)
+            self.next_states = processor.rl_dataset["nstep_next_states"]  # (num_samples, num_features)
+            self.next_actions = processor.rl_dataset["nstep_next_actions"]  # (num_samples, num_actions)        
+            self.dones = processor.rl_dataset["nstep_dones"]  # (num_samples,)              
+            self.gamma_n = processor.rl_dataset["gamma_n"]  # scalar        
 
     def __len__(self) -> int:
         return len(self.states)

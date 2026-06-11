@@ -247,7 +247,7 @@ class ShardProcessor:
             self.filter_cohort(config_manager)
 
     
-    def process_reward(self, config_manager, hyperparams):
+    def process_reward(self, config_manager, hyperparams, health_score_median=None):
         reward_type = config_manager.data_config['reward_type']
         if reward_type == 'health_score':
             """ 
@@ -300,6 +300,13 @@ class ShardProcessor:
                 hourly_health_change = ((hourly_health_change - hourly_min) / \
                     (hourly_max - hourly_min)) * 2 - 1            
             
+            # if health_score_median is None, calculate it
+            if health_score_median is None:
+                health_score_median = np.median(health_score)
+            
+            # subtract the median from the health score to center it around 0, which can help with training stability
+            health_score = health_score - health_score_median
+            
             # shift health score back one index, as we want the reward based on next health score
             health_score = health_score[1:]
             # make final timestep health score 0, since these have no next state
@@ -307,11 +314,11 @@ class ShardProcessor:
             # append on a final 0
             health_score = np.append(health_score, 0.0)
             
-            # min_max scale the health score to [-1, 1] !!!!! CHECK IF YOU SHOULD BE USING THE NEXT TIMESTEP !!!!!!!!!!!!!
-            max_health_score = 100.0
-            min_health_score = 0.0
-            health_score = (((health_score - min_health_score) / \
-                (max_health_score - min_health_score))) * 2 - 1
+            # # min_max scale the health score to [-1, 1] !!!!! CHECK IF YOU SHOULD BE USING THE NEXT TIMESTEP !!!!!!!!!!!!!
+            # max_health_score = 100.0
+            # min_health_score = 0.0
+            # health_score = (((health_score - min_health_score) / \
+            #     (max_health_score - min_health_score))) * 2 - 1
             
             # raise value error if health_score_scale and hourly_health_change_scale don't sum to 1
             health_score_scale = hyperparams['health_score_scale']
@@ -334,8 +341,9 @@ class ShardProcessor:
             
             else: 
                 # min max scaling (to [-1, 1])
-                health_score_total = (health_score_total - health_score_total.min()) / \
-                    (health_score_total.max() - health_score_total.min()) * 2 - 1            
+                # health_score_total = (health_score_total - health_score_total.min()) / \
+                #     (health_score_total.max() - health_score_total.min()) * 2 - 1         
+                pass   
 
             # finally apply a scaling factor to keep gradients in the sweet spot
             total_health_score_scale = hyperparams['total_health_score_scale']
@@ -354,22 +362,23 @@ class ShardProcessor:
 
             # make final timestep rewards 0, since these have no next state and don't get used
             health_score_total[index_ptr[1:] - 1] = 0.0
-              
+            health_score_total[-1] = 0.0
             self.dynamic_deephit_predictions['reward'] = health_score_total.astype(np.float32)                                         
+        
+            return health_score_median
         
         else: 
             raise ValueError(f"Invalid reward type: {reward_type}. Supported reward types are: 'health_score' and 'time_to_event'.")
     
-    def create_rl_dataset(self, states="model_outputs", scaler=None, action_names=None, use_compressed_latents=False):
+    def create_rl_dataset(
+            self, states="model_outputs", 
+            scaler=None, 
+            action_names=None, 
+            use_compressed_latents=False,
+            n_step=None,
+            gamma=None
+        ):
         self.rl_dataset = {}
-        
-        # action_ind = self.dynamic_deephit_dataset['response_zero_ind'] + self.dynamic_deephit_dataset['carry_forward_ind']
-        # action_ind.sort()  # these are the indices of the response features that are either zeroed out or carried forward at the final timestep, so they correspond to the action space
-
-        # action_names = np.array(self.dynamic_deephit_dataset['feature_names'])[action_ind]
-
-        # find all actions with 'delta' or 'mask' in the name and remove them from the action space (since these are not actual treatments but rather engineered features for the model)
-        # remove_mask = np.array([('delta' in name) or ('mask' in name) for name in action_names])
 
         if type(action_names) == list:
             action_ind = []
@@ -382,9 +391,6 @@ class ShardProcessor:
         else:
             action_ind = self.dynamic_deephit_dataset['feature_names'].index(action_names)
         
-        # action_ind = np.array(action_ind)[~remove_mask]
-        # self.action_names = action_names[~remove_mask]
-
         # get trajectory starts and ends
         all_ind = np.arange(len(self.dynamic_deephit_dataset['trajectories']))
         trajectory_start_inds = self.dynamic_deephit_dataset['index_ptr'][:-1]
@@ -440,6 +446,51 @@ class ShardProcessor:
         #  # set the mortality value at the start of each trajectory to the mortality value for that trajectory
         mortality_full = mortality_full[next_state_ind]  # only keep mortality for the next states, since the current states will never be terminal in our setting (since we exclude end of trajectory timesteps)
         self.rl_dataset['mortality'] = torch.tensor(mortality_full, dtype=torch.float32)
+
+        if n_step <= 1:
+            return scaler
+
+        # After computing states, actions, rewards, dones — add n-step computation
+        raw_rewards = self.dynamic_deephit_predictions["reward"]  # full array before indexing
+
+        # Precompute n-step returns per trajectory
+        nstep_rewards      = np.zeros_like(raw_rewards, dtype=np.float32)
+        nstep_bootstrap_ind = np.arange(len(raw_rewards), dtype=np.int64)  # default: bootstrap from t+1
+        nstep_dones        = np.zeros_like(raw_rewards, dtype=np.float32)
+    
+        for traj_idx, (start, end) in enumerate(zip(trajectory_start_inds, trajectory_end_inds)):
+            traj_rewards = raw_rewards[start:end+1]  # (T,)
+            T = len(traj_rewards)
+
+            for t in range(T):
+                G        = 0.0
+                discount = 1.0
+                terminated = False
+
+                for k in range(n_step):
+                    if t + k >= T:
+                        terminated = True
+                        break
+                    G        += discount * traj_rewards[t + k]
+                    discount *= gamma
+
+                nstep_rewards[start + t] = G
+
+                if not terminated and t + n_step < T:
+                    # Bootstrap from t+n_step (absolute index)
+                    nstep_bootstrap_ind[start + t] = start + t + n_step
+                    nstep_dones[start + t]         = 0
+                else:
+                    # Trajectory ended within window
+                    nstep_bootstrap_ind[start + t] = end  # doesn't matter, masked by done
+                    nstep_dones[start + t]         = 1
+
+        # Index into these using state_ind (same as everything else)
+        self.rl_dataset['nstep_rewards']       = torch.tensor(nstep_rewards[state_ind], dtype=torch.float32)
+        self.rl_dataset['nstep_next_states']   = torch.tensor(scaled_model_outputs[nstep_bootstrap_ind[state_ind]], dtype=torch.float32)
+        self.rl_dataset['nstep_next_actions']  = actions[nstep_bootstrap_ind[state_ind]]
+        self.rl_dataset['nstep_dones']         = torch.tensor(nstep_dones[state_ind], dtype=torch.float32)
+        self.rl_dataset['gamma_n']             = gamma ** n_step  # store γⁿ for target computation
 
         return scaler
 

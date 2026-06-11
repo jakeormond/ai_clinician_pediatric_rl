@@ -38,26 +38,6 @@ class Critic(nn.Module):
 
         self.state_norm = nn.LayerNorm(state_dim) #
 
-        # self.q1_net = nn.Sequential(
-        #     nn.LayerNorm(state_dim + action_dim),
-        #     nn.Linear(state_dim + action_dim, self.hidden_dim),
-        #     nn.LayerNorm(self.hidden_dim),
-        #     nn.LeakyReLU(negative_slope=self.negative_slope),
-        #     nn.Dropout(p=dropout),
-        #     nn.Linear(self.hidden_dim, 1) # Directly to output
-        # )
-
-
-
-        # self.q2_net = nn.Sequential(
-        #     nn.LayerNorm(state_dim + action_dim),
-        #     nn.Linear(state_dim + action_dim, self.hidden_dim),
-        #     nn.LayerNorm(self.hidden_dim),
-        #     nn.LeakyReLU(negative_slope=self.negative_slope),
-        #     nn.Dropout(p=dropout),
-        #     nn.Linear(self.hidden_dim, 1) # Directly to output
-        # )
-
         self.q_heads = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(state_dim + action_dim, hidden_dim),
@@ -108,36 +88,6 @@ class Critic(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-
-        # if isinstance(m, nn.Linear):
-        #     # 1. THE FINAL HEAD (Output = 1)
-        #     if m.out_features == 1:
-        #         # Squeezing to near-zero is good, but 3e-3 is VERY tight for a 3-layer net.
-        #         # Let's use a slightly wider window to give the gradient a "handle."
-        #         nn.init.uniform_(m.weight, -1e-2, 1e-2) 
-        #         if m.bias is not None:
-        #             nn.init.constant_(m.bias, -0.2)
-            
-        #     # 2. THE HIDDEN LAYERS
-        #     else:
-        #         # CRITICAL: Match 'a' to your negative_slope (0.1)
-        #         # 'fan_in' is correct for preserving signal in the forward pass
-        #         nn.init.kaiming_normal_(
-        #             m.weight, 
-        #             a=self.negative_slope,  # <--- Change this from 0.01 to 0.1
-        #             mode='fan_in', 
-        #             nonlinearity='leaky_relu'
-        #         )
-                
-        #         if m.bias is not None:
-        #             # Keep this at 0. With LayerNorm, non-zero biases can 
-        #             # actually introduce unnecessary shift.
-        #             nn.init.constant_(m.bias, 0.0)      
-        
-        # elif isinstance(m, nn.LayerNorm):
-        #     # Standard identity transform - keep as is
-        #     nn.init.constant_(m.bias, 0)
-        #     nn.init.constant_(m.weight, 1.0)
     
     def forward(self, state, action):
 
@@ -177,19 +127,6 @@ class Critic(nn.Module):
                     leaky_idx += 1            
             return x
 
-		# Wrap in no_grad to save memory since we're just extracting diagnostics
-		# with torch.no_grad():
-		# 	# 1. Trace the State Normalization + State Projector 1 (Representative of Twin 1)
-		# 	norm_state = self.state_norm(state)
-		# 	h_state1 = trace_sequential_block(self.state_projectors[0], norm_state, "state_proj")
-			
-		# 	# 2. Trace the Action Projector
-		# 	h_action = trace_sequential_block(self.action_projector, action, "action_proj")
-			
-		# 	# 3. Concatenate and trace through the Q1 Head
-		# 	x_joint = torch.cat([h_state1, h_action], dim=-1)
-		# 	_ = trace_sequential_block(self.q_heads[0], x_joint, "q_head")
-
         norm_state = self.state_norm(state)
         sa = torch.cat([norm_state, action], dim=-1)
         _ = trace_sequential_block(self.q_heads[0], sa, "q_head")       
@@ -209,7 +146,7 @@ class Critic(nn.Module):
 
 
 
-def get_q_stats(current_Q1, current_Q2, mortality) -> Dict[str, float]:
+def get_q_stats(current_Q1, current_Q2, mortality, random_action_sensitivity, zero_action_sensitivity) -> Dict[str, float]:
     
     # create current_Q as the mean of current_Q1 and current_Q2
     current_Q = (current_Q1 + current_Q2) / 2.0
@@ -217,6 +154,15 @@ def get_q_stats(current_Q1, current_Q2, mortality) -> Dict[str, float]:
     variance_Q = current_Q.var().item()
     batch_n = current_Q.shape[0]
     uncertainty_Q = F.mse_loss(current_Q1, current_Q2).item() # simple measure of uncertainty based on disagreement between the two critics
+
+    # random_sensitivity
+    mean_random_sensitivity = random_action_sensitivity.abs().mean().item()
+    variance_random_sensitivity = random_action_sensitivity.var().item()
+    max_random_sensitivity = random_action_sensitivity.max().item()
+
+    # zero_action_sensitivity
+    mean_fluid_zero_sensitivity = zero_action_sensitivity['non_zero_fluid_sensitivity'].abs().mean().item() if len(zero_action_sensitivity['non_zero_fluid_sensitivity'].shape) > 0 else float('nan') # focus on fluid sensitivity for now, since vaso sensitivity is often very low due to many zero vaso actions
+    mean_vaso_zero_sensitivity = zero_action_sensitivity['non_zero_vaso_sensitivity'].abs().mean().item() if len(zero_action_sensitivity['non_zero_vaso_sensitivity'].shape) > 0 else float('nan')
 
     # masks and counts
     survival_mask = (mortality == 0)
@@ -260,18 +206,23 @@ def get_q_stats(current_Q1, current_Q2, mortality) -> Dict[str, float]:
 
         
     q_stats = {
-        "batch_n": batch_n,
+        # "batch_n": batch_n,
         "mean_Q": mean_Q,
         "variance_Q": variance_Q,
         "uncertainty_Q": uncertainty_Q,                
-        "survival_n": survival_n,
+        # "survival_n": survival_n,
         "survival_Q": survival_Q,
         "survival_variance_Q": survival_variance_Q,
-        "non_survival_n": non_survival_n,
+        # "non_survival_n": non_survival_n,
         "non_survival_Q": non_survival_Q,
         "non_survival_variance_Q": non_survival_variance_Q,
         "signal_to_noise": signal_to_noise,
-        "auc_Q": auc_Q
+        "auc_Q": auc_Q,
+        "mean_random_sensitivity": mean_random_sensitivity,
+        "variance_random_sensitivity": variance_random_sensitivity,
+        "max_random_sensitivity": max_random_sensitivity,
+        "abs_mean_fluid_zero_sensitivity": mean_fluid_zero_sensitivity,
+        "abs_mean_vaso_zero_sensitivity": mean_vaso_zero_sensitivity,
     }
     return q_stats
 
@@ -382,6 +333,44 @@ class Q_Learner(object):
 
         return target_Q
     
+    @torch.no_grad()
+    def random_action_values(self, states, actions, clinician_q, K = 50):
+
+        random_actions = torch.rand_like(actions).to(self.device)  # (B, action_dim)
+        random_q1, random_q2 = self.critic(states, random_actions)
+        random_q = random_q1 + random_q2 / 2.0  # average of the two critics for stability
+
+        # Per-state action sensitivity — how much do random actions deviate from behavioural?
+        action_sensitivity = random_q - clinician_q # (B,) — varies across actions, not states
+
+        # print(f"Mean relative action sensitivity: {action_sensitivity.mean():.4f}")
+        # print(f"Median relative action sensitivity: {action_sensitivity.median():.4f}")
+
+
+        return action_sensitivity
+
+    @torch.no_grad()
+    def zero_action_values(self, states, actions, clinician_q):
+
+        zero_actions = torch.zeros_like(actions).to(self.device)  # (B, action_dim)
+        zero_q1, zero_q2 = self.critic(states, zero_actions)
+        zero_q = zero_q1 + zero_q2 / 2.0  # average of the two critics for stability
+
+        # Per-state action sensitivity — how much do zero actions deviate from behavioural?
+        action_sensitivity = zero_q - clinician_q  # (B,) — varies across actions, not states
+
+        # we want to specifically look at times when fluids or vaso are non-zero in the clinician action, 
+        # since that is when we should see some deviation in Q values for zero actions
+        non_zero_fluid_mask = (actions[:, 0] != 0)  # Assuming action[:, 0] corresponds to fluids
+        non_zero_vaso_mask = (actions[:, 1] != 0)   # Assuming action[:, 1] corresponds to vaso
+
+        action_sensitivity = {
+            'non_zero_fluid_sensitivity': action_sensitivity[non_zero_fluid_mask] if non_zero_fluid_mask.sum() > 0 else float('nan'),
+            'non_zero_vaso_sensitivity': action_sensitivity[non_zero_vaso_mask] if non_zero_vaso_mask.sum() > 0 else float('nan')
+        }
+
+        return action_sensitivity
+
 
     def train(self, batch: TensorBatch):
         self.total_it += 1
@@ -412,10 +401,7 @@ class Q_Learner(object):
         # use Huber loss instead
         critic_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
         
-        losses = {"critic_loss": critic_loss.item()}
-
-        # get Q statistics
-        q_stats = get_q_stats(current_Q1, current_Q2, mortality)
+        losses = {"critic_loss": critic_loss.item()}        
 
         # Optimize the critic
         self.critic_optimizer.zero_grad()
@@ -446,6 +432,13 @@ class Q_Learner(object):
         with torch.no_grad():
             for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+
+            # get Q statistics
+            self.critic.eval() 
+            current_Q = (current_Q1 - current_Q2) / 2.0  # TD3 style: take the minimum of the two critics to mitigate overestimation bias
+            random_action_sensitivity = self.random_action_values(state, action, current_Q)
+            zero_action_sensitivity = self.zero_action_values(state, action, current_Q)
+            q_stats = get_q_stats(current_Q1, current_Q2, mortality, random_action_sensitivity, zero_action_sensitivity)
 
         return losses, q_stats, grad_norm
         
@@ -482,7 +475,10 @@ class Q_Learner(object):
             neuron_stats = self.critic.get_neuron_stats(state, action)
 
             # get Q statistics
-            q_stats = get_q_stats(current_Q1, current_Q2, mortality)
+            current_Q = (current_Q1 - current_Q2) / 2.0  # TD3 style: take the minimum of the two critics to mitigate overestimation bias
+            random_action_sensitivity = self.random_action_values(state, action, current_Q)
+            zero_action_sensitivity = self.zero_action_values(state, action, current_Q)
+            q_stats = get_q_stats(current_Q1, current_Q2, mortality, random_action_sensitivity, zero_action_sensitivity)
         
         return losses, q_stats, neuron_stats
 	
@@ -517,13 +513,6 @@ class Q_Learner(object):
         return q_stats_sarsa
 
 
-    # def state_dict(self) -> Dict[str, torch.Tensor]:
-    #     return {
-    #         "critic": self.critic.state_dict(),
-    #         "critic_optimizer": self.critic_optimizer.state_dict(),
-    #         "critic_target": self.critic_target.state_dict(),
-    #     }
-    
 
 def get_adamw_optimizer(model, lr, weight_decay):
     """

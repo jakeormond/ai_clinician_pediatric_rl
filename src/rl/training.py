@@ -74,8 +74,31 @@ def create_processor_from_shards(config_manager, normalize=True, set_to_return='
         return test_processor
     
 
-def create_buffer(processor, batch_size, shuffle=True, scaler=None, action_names=None, use_compressed_latents=False):
-    scaler = processor.create_rl_dataset(states="model_outputs", scaler=scaler, action_names=action_names, use_compressed_latents=use_compressed_latents) # states argument is not currently used, but we can add options for different state representations in the future
+def create_buffer(
+        processor, 
+        batch_size, 
+        hyperparams,
+        shuffle=True, 
+        scaler=None, 
+        action_names=None
+    ):
+
+    use_compressed_latents = hyperparams['use_compressed_latents']
+    n_step = hyperparams['n_step']
+    gamma = hyperparams['discount']
+
+    scaler = processor.create_rl_dataset(
+        states="model_outputs", 
+        scaler=scaler, 
+        action_names=action_names, 
+        use_compressed_latents=use_compressed_latents,
+        n_step=n_step,
+        gamma=gamma
+    ) 
+    if n_step == None or n_step <= 1:
+        use_n_step = False
+    else:
+        use_n_step = True
     dataset = RLDataset(processor) # model_outputs refer to dynamic_deephit transformer outputs; other options not currently implemented
     buffer = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     return buffer, scaler
@@ -361,114 +384,7 @@ def evaluate_during_training(
     return val_losses, val_q_stats, val_neuron_stats, val_advantages
 
 
-# def evaluate_final_model(trainer, evaluator, val_buffer, val_processor, model_dir, config_manager):
-#     test_losses = defaultdict(list)
-#     all_targets = []
-#     all_predictions = []
 
-#      # load sarsa critic if we're not actually training it
-#     # if config_manager.model_type != "basic_q":
-#     #     sarsa_critic = load_sarsa_critic(config_manager)
-
-#     # Final evaluation on test set
-#     for batch_idx, batch in enumerate(val_buffer):       
-        
-#         batch_losses, targets, predictions = trainer.evaluate(batch)
-
-#         # Automatically append all validation metrics
-#         for key, value in batch_losses.items():
-#             test_losses[key].append(value)
-
-#         if targets is not None and predictions is not None:
-#             all_targets.append(targets.cpu())
-#             all_predictions.append(predictions.cpu())
-
-#         mortality = batch[6]  # assuming mortality is the 7th element in the batch tuple
-#         with torch.no_grad():
-#             if config_manager.model_type == "cvp":
-#                 rl_actions = trainer.actor_forward_for_sarsa(batch, rescale=True) 
-#             else:
-#                 rl_actions = trainer.actor_forward_for_sarsa(batch)
-
-#             advantage_log_dict = evaluator.evaluate_sarsa(batch, mortality, rl_actions)
-
-
-#         # check that advantage_log_dict['survival_n'] == batch_losses['survival_n'] and advantage_log_dict['non_survival_n'] == batch_losses['non_survival_n'], "Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict"
-#         if not (advantage_log_dict['survival_n'] == batch_losses['survival_n'] and advantage_log_dict['non_survival_n'] == batch_losses['non_survival_n']):
-#             logger.warning(f"Mismatch in survival/non-survival counts between batch_losses and advantage_log_dict for batch_idx {batch_idx}. batch_losses: {batch_losses}, advantage_log_dict: {advantage_log_dict}")
-#         else:
-#             # drop the batch_n, survival_n, and non_survival_n keys from advantage_log_dict since they are redundant with batch_losses
-#             advantage_log_dict.pop('batch_n', None)
-#             advantage_log_dict.pop('survival_n', None)
-#             advantage_log_dict.pop('non_survival_n', None)
-
-#         # append q values to losses 
-#         for key, value in advantage_log_dict.items():
-#             test_losses[key].append(value)
-        
-
-    # if config_manager.model_type != "basic_q" and sarsa_critic is not None:
-    #     # calculate advantage and add to test_losses
-    #     device = trainer.device
-        
-    #     val_dataset = RLDataset(val_processor)
-        
-    #     advantage, q_clinician, q_rl = calculate_advantage(
-    #         sarsa_critic, 
-    #         val_dataset.states, 
-    #         val_dataset.actions, 
-    #         all_predictions, 
-    #         device
-    #         )   
-        
-    #     # plot advantage
-    #     plot_advantage(advantage, model_folder, config_manager)
-    #     # calculate non-parametric t-test to see if advantage is significantly greater than 0       
-    #     t_stat, p_value = stats.ttest_1samp(advantage, 0, alternative='greater')
-    #     print(f"T-statistic: {t_stat:.4f}, P-value: {p_value:.4f}")
-    #     plot_advantage_against_clinician_q_values(advantage, q_clinician, model_folder, config_manager)
-    #     plot_binned_advantage(advantage, q_clinician, model_folder, config_manager)    
-
-
-        
-    # calculate q value stats if available
-    # if "mean_Q" in test_losses:
-    #     with torch.no_grad():
-    #         q_stats, test_losses = calculate_q_stats(test_losses)
-    
-    # Calculate average test losses across all batches
-    test_losses = {key: np.mean(values) for key, values in test_losses.items()}
-    
-    # add q stats if available
-    if 'q_stats' in locals():
-        test_losses.update(q_stats)
-       
-    ##### make a dataframe of targets and predictions ####
-    # columns are config_manager.data_config['action_cols']
-    if not all_targets or not all_predictions:
-        logger.info("No targets or predictions were collected during final evaluation.")
-        return test_losses, None
-
-    else:
-        # action_cols = test_processor.actions
-        action_cols = config_manager.data_config['actions']
-
-        pred_cols = [col + "_pred" for col in action_cols]
-
-        # create dataframe using all_targets and all_predictions
-        all_targets = np.vstack(all_targets)
-        all_predictions = np.vstack(all_predictions)
-
-        results_df = pd.DataFrame(
-            data=np.hstack([all_targets, all_predictions]),
-            columns=action_cols + pred_cols
-        )
-
-        results_path = Path(model_dir / "test_predictions.parquet")
-        results_df.to_parquet(results_path)
-        logger.info(f" Test predictions saved to {results_path}\n")       
-
-    return test_losses, results_df
 
 
 def check_improvement(best_val_loss, current_val_loss, early_stopping):
@@ -589,8 +505,8 @@ def train_with_hyperparameters(
     """Train model with specific hyperparameters and return validation score."""
     
     # process the reward
-    train_processor.process_reward(config_manager, hyperparams)
-    val_processor.process_reward(config_manager, hyperparams)
+    health_score_median = train_processor.process_reward(config_manager, hyperparams)
+    val_processor.process_reward(config_manager, hyperparams, health_score_median=health_score_median)
     
     n_epochs = config_manager.n_epochs
 
@@ -614,14 +530,15 @@ def train_with_hyperparameters(
     training_buffer, scaler = create_buffer(
         train_processor, 
         batch_size, 
+        hyperparams,
         action_names=config_manager.data_config['actions'],
-        use_compressed_latents=hyperparams['use_compressed_latents']
     )
     val_buffer, _ = create_buffer(
         val_processor,
-        batch_size, scaler=scaler, 
+        batch_size, 
+        hyperparams,
+        scaler=scaler, 
         action_names=config_manager.data_config['actions'],
-        use_compressed_latents=hyperparams['use_compressed_latents']
     )
     
     # get total number of steps for scheduler if needed

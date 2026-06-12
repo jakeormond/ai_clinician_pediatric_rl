@@ -45,7 +45,7 @@
     # gradient clipping
     grad_clip: 1.
 
-    use_compressed_latents: True  # Whether to use compressed latents as states instead of raw features or transformer output - specific to basic Q model, not used for TD3-BC or CQL
+    use_compressed_latents: False  # Whether to use compressed latents as states instead of raw features or transformer output - specific to basic Q model, not used for TD3-BC or CQL
 
     # reward scaling
     # reward_scaling: 1.5  # Scaling factor for rewards

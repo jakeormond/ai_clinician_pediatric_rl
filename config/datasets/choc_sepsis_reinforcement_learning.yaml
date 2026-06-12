@@ -28,7 +28,7 @@ proportion_w_data: 0.80
 use_reward: True
 reward_type: "health_score" # if no reward, set to "none"
 
-use_behavior_cloning_latents: True
+use_behavior_cloning_latents: False
 
 actions: ['intake', 'vis'] # for mimic sepsis
 # reward_col: "health_score" # this is the name of the column in the reward file that has the reward values

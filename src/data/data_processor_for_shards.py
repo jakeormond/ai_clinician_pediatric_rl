@@ -97,6 +97,7 @@ class ShardProcessor:
 
                 # load behavioural cloning latents if using
                 if config_manager.data_config['use_behavior_cloning_latents']:
+                    self.use_behavior_cloning_latents = True
                     bc_model_file_dir = config_manager.data_config['bc_latents_path']
                     bc_prediction_file_path = os.path.join(bc_model_file_dir, f"{pred_split}_set_predictions.h5")
 
@@ -105,7 +106,8 @@ class ShardProcessor:
 
                     self.bc_latents = self.load_dynamic_deephit_predictions_from_h5(bc_prediction_file_path, 
                                                                         keys_to_load=['model_outputs', 'compressed_latents', 'index_ptr', 'stay_ids'])
-                    
+                else:
+                    self.use_behavior_cloning_latents = False    
 
                 if self.split == 'tuning': # we need to filter the predictions to only include the stays in the tuning set, which are a subset of the training set
                     tuning_stay_ids = self.dynamic_deephit_dataset['stay_ids']
@@ -405,10 +407,16 @@ class ShardProcessor:
             
             # combine the self.dynamic_deephit_predictions["model_outputs"] and self.bc_latents["model_outputs"] by concatenating along the feature dimension, to create a larger state representation that includes both the dynamic deephit predictions and the behavioral cloning latents. We will then scale this combined state representation before feeding it into the RL model.
             if not use_compressed_latents:
-                model_outputs = np.concatenate([self.dynamic_deephit_predictions["model_outputs"], self.bc_latents["model_outputs"]], axis=1)
+                if self.use_behavior_cloning_latents:
+                    model_outputs = np.concatenate([self.dynamic_deephit_predictions["model_outputs"], self.bc_latents["model_outputs"]], axis=1)
+                else:
+                    model_outputs = self.dynamic_deephit_predictions["model_outputs"]
             else:
-                model_outputs = np.concatenate([self.dynamic_deephit_predictions["compressed_latents"], self.bc_latents["compressed_latents"]], axis=1)
-                        
+                if self.use_behavior_cloning_latents:
+                    model_outputs = np.concatenate([self.dynamic_deephit_predictions["compressed_latents"], self.bc_latents["compressed_latents"]], axis=1)
+                else:
+                    model_outputs = self.dynamic_deephit_predictions["compressed_latents"]
+
             # need to scale the outputs
             if scaler == None:
                 # use StandardScaler to scale the model outputs, fit on the states in the training set

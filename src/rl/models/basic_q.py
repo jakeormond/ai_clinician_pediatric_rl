@@ -332,18 +332,18 @@ class Q_Learner(object):
         with torch.no_grad():            
             # Compute the target Q value
             target_Q1, target_Q2 = self.critic_target(next_state, next_action)
-            # target_Q = (target_Q1 + target_Q2) / 2.0
-            target_Q = torch.min(target_Q1, target_Q2)  # TD3 style: take the minimum of the two critics to mitigate overestimation bias
+            target_Q = (target_Q1 + target_Q2) / 2.0
+            # target_Q = torch.min(target_Q1, target_Q2)  # TD3 style: take the minimum of the two critics to mitigate overestimation bias
             target_Q = reward + not_done * self.discount * target_Q			
 
         return target_Q
     
     @torch.no_grad()
-    def random_action_values(self, states, actions, clinician_q, K = 50):
+    def random_action_values(self, states, actions, clinician_q):
 
         random_actions = torch.rand_like(actions).to(self.device)  # (B, action_dim)
         random_q1, random_q2 = self.critic(states, random_actions)
-        random_q = random_q1 + random_q2 / 2.0  # average of the two critics for stability
+        random_q = (random_q1 + random_q2) / 2.0  # average of the two critics for stability
 
         # Per-state action sensitivity — how much do random actions deviate from behavioural?
         action_sensitivity = random_q - clinician_q # (B,) — varies across actions, not states
@@ -359,7 +359,7 @@ class Q_Learner(object):
 
         zero_actions = torch.zeros_like(actions).to(self.device)  # (B, action_dim)
         zero_q1, zero_q2 = self.critic(states, zero_actions)
-        zero_q = zero_q1 + zero_q2 / 2.0  # average of the two critics for stability
+        zero_q = (zero_q1 + zero_q2) / 2.0  # average of the two critics for stability
 
         # Per-state action sensitivity — how much do zero actions deviate from behavioural?
         action_sensitivity = zero_q - clinician_q  # (B,) — varies across actions, not states
@@ -440,7 +440,7 @@ class Q_Learner(object):
 
             # get Q statistics
             self.critic.eval() 
-            current_Q = (current_Q1 - current_Q2) / 2.0  # TD3 style: take the minimum of the two critics to mitigate overestimation bias
+            current_Q = (current_Q1 + current_Q2) / 2.0 
             random_action_sensitivity = self.random_action_values(state, action, current_Q)
             zero_action_sensitivity = self.zero_action_values(state, action, current_Q)
             q_stats = get_q_stats(current_Q1, current_Q2, mortality, random_action_sensitivity, zero_action_sensitivity)
@@ -480,7 +480,7 @@ class Q_Learner(object):
             neuron_stats = self.critic.get_neuron_stats(state, action)
 
             # get Q statistics
-            current_Q = (current_Q1 - current_Q2) / 2.0  # TD3 style: take the minimum of the two critics to mitigate overestimation bias
+            current_Q = (current_Q1 + current_Q2) / 2.0  
             random_action_sensitivity = self.random_action_values(state, action, current_Q)
             zero_action_sensitivity = self.zero_action_values(state, action, current_Q)
             q_stats = get_q_stats(current_Q1, current_Q2, mortality, random_action_sensitivity, zero_action_sensitivity)

@@ -22,13 +22,13 @@
     # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
     # max_traj_len: 72  # Max trajectory length - probably need to change this - in data config
     
-    learning_rate: 6.e-5 #"loguniform(1e-5, 1e-4)" # "loguniform(3e-5, 1e-4)"           #      [1e-6]  # Learning rates to try
+    learning_rate: "loguniform(1e-5, 1e-4)" # "loguniform(3e-5, 1e-4)"           #      [1e-6]  # Learning rates to try
     dropout:  0.1 # "uniform(0.1, 0.3)"   # "uniform(0.0, 0.3)"
     tau: [0.01, 0.005, 0.001] # [0.005, 0.01]   # [0.0005, 0.001, 0.005, 0.01] # Target network update rate
     weight_decay: 1.e-5 # "loguniform(1e-4, 1e-3)" # "loguniform(1e-5, 1e-2)" # L2 regularization strength
     # policy_noise: 0.2 # Noise added to target policy during critic updates
     batch_size: 1024  # Batch size for all networks
-    hidden_dim: [128, 256, 512, 1024] # [512, 1024]  # Hidden dimension for all networks [128, 256, 256]] 
+    hidden_dim: [64, 128] # [512, 1024]  # Hidden dimension for all networks [128, 256, 256]] 
 
 
     eval_freq: 1        # Evaluate every 20 epochs  
@@ -48,16 +48,17 @@
     # gradient clipping
     grad_clip: 1. # [0.5, 1.0]
     
-    # health score reward shaping parameters
-    health_score_hourly_change_clip: 10. # health score is 0 to 100, clip prevents large spikes in reward
-    health_score_scale: 0.1 # [0.05, 0.1, 0.2]  # Scaling factor for health score component of reward
-    health_score_hourly_change_scale: .9 # [0.5,
-    total_health_score_scale: 10.  # Scaling factor for total health score component of reward
-    potential_based_reward_shaping: False 
+    use_compressed_latents: False  # Whether to use compressed latents as states instead of raw features or transformer output - specific to basic Q model, not used for TD3-BC or CQL
+
+    # reward scaling
+    # reward_scaling: 1.5  # Scaling factor for rewards
+    health_score_hourly_change_clip: 100.
+    health_score_scale: 1.  # Scaling factor for health score component of reward
+    health_score_hourly_change_scale: 0.  # Scaling factor for hourly change component of reward
+    total_health_score_scale: .01  # Scaling factor for total health score component of reward
+    potential_based_reward_shaping: False  # Whether to use potential-based reward shaping
     terminal_health_score_reward: 2.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
 
-
-    # reward_scaling: 0.5  # Scaling factor for rewards
-    # health_score_scale: 0.1 # [0.05, 0.1, 0.2]  # Scaling factor for health score component of reward
-    # health_score_hourly_change_scale: 0.5 # [0.5, 1]  # Scaling factor for hourly change component of reward
-
+    # n-step returns
+    n_step: 0  # Number of steps to use for n-step returns (set to 1 or None to disable n-step returns)
+    

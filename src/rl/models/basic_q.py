@@ -156,6 +156,9 @@ def get_q_stats(current_Q1, current_Q2, mortality, random_action_sensitivity, ze
     uncertainty_Q = F.mse_loss(current_Q1, current_Q2).item() # simple measure of uncertainty based on disagreement between the two critics
 
     # random_sensitivity
+    positive_random_sensitivity = random_action_sensitivity[random_action_sensitivity > 0]
+    proportion_positive_sensitivity = positive_random_sensitivity.shape[0] / random_action_sensitivity.shape[0]
+    mean_positive_random_sensitivity = positive_random_sensitivity.abs().mean().item() if positive_random_sensitivity.shape[0] > 0 else 0.0
     mean_random_sensitivity = random_action_sensitivity.abs().mean().item()
     variance_random_sensitivity = random_action_sensitivity.var().item()
     max_random_sensitivity = random_action_sensitivity.max().item()
@@ -218,6 +221,8 @@ def get_q_stats(current_Q1, current_Q2, mortality, random_action_sensitivity, ze
         "non_survival_variance_Q": non_survival_variance_Q,
         "signal_to_noise": signal_to_noise,
         "auc_Q": auc_Q,
+        "proportion_positive_random_sensitivity": proportion_positive_sensitivity,
+        "mean_positive_random_sensitivity": mean_positive_random_sensitivity,
         "mean_random_sensitivity": mean_random_sensitivity,
         "variance_random_sensitivity": variance_random_sensitivity,
         "max_random_sensitivity": max_random_sensitivity,

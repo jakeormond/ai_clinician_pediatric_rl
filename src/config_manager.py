@@ -3,7 +3,7 @@ import yaml
 import time
 import shutil
 from pathlib import Path
-from setup_environment import load_paths
+from .setup_environment import load_paths
 
 class ConfigManager:
     def __init__(

@@ -6,6 +6,7 @@ local:
     rl_models_dir: "/home/jake/Documents/AI_Clinician/models/rl_models/choc/"
     data_dir: "/home/jake/Documents/AI_Clinician/choc_data"
     code_dir: "/home/jake/Documents/AI_Clinician/choc_code"
+    "config_dir": "/home/jake/Documents/AI_Clinician/ai_clinician_pediatric_rl/config"
   mimic_iv:
     experiments_dir: "/home/jake/Documents/AI_Clinician/experiments"
     supervised_final_model_dir: "/home/jake/Documents/AI_Clinician/dynamic_deephit_results/mimic_iv/"

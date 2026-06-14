@@ -419,6 +419,27 @@
             "envFile": "${workspaceFolder}/.env"
         },
 
+
+        {
+            "name": "evaluate_sarsa_models",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.rl.evaluate_sarsa_models",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "reinforcement_learning",
+                "--experiment_variant", "hyperparameter_search_evaluation",
+                "--model_type", "basic_q", 
+                "--mode", "single_split",
+                "--split_num", "0",
+                "--cohort", "sepsis",
+                "--actions", "intake-vis", 
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
         {
             "name": "evaluate_rl_model_on_sarsa_choc",
             "type": "debugpy",

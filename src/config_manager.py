@@ -3,7 +3,7 @@ import yaml
 import time
 import shutil
 from pathlib import Path
-from .setup_environment import load_paths
+from setup_environment import load_paths
 
 class ConfigManager:
     def __init__(
@@ -87,6 +87,23 @@ class ConfigManager:
                         else:
                             self.experiment_dir = Path(results_dir)
 
+            elif self.experiment_type == "hyperparameter_search_evaluation":
+                results_dir = os.path.join(
+                        self.paths["rl_models_dir"], self.rl_type,
+                        f"split_{self.split_num}", self.cohort, self.actions
+                    )
+                    # find the directory within result_dir
+                model_folders_final = []
+                model_folders = [f for f in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, f))]
+                for f in model_folders:
+                    model_folders_2 = [f2 for f2 in os.listdir(os.path.join(results_dir, f)) if os.path.isdir(os.path.join(results_dir, f, f2))]    
+                    for f2 in model_folders_2:
+                        model_folders_final.append(os.path.join(f, f2))
+                if len(model_folders_final) == 0:
+                    raise ValueError("No model folders found in fmodel_dir, please specify one")
+                
+                self.model_folders = model_folders_final
+
             elif self.experiment_type == "model_evaluation":               
                 results_dir = os.path.join(
                         self.paths["rl_models_dir"], self.rl_type,
@@ -98,6 +115,9 @@ class ConfigManager:
                     raise ValueError("Multiple model folders found in final_model_dir, please specify one")
                 model_folder = model_folders[0]
                 self.results_dir = Path(results_dir) / model_folder
+
+            elif self.experiment_variant == "hyperparameter_search_evaluation":
+                pass
 
             else:
                 self.create_single_split_dir()
@@ -428,7 +448,7 @@ class ConfigManager:
             self.experiment_name = \
                 f"{self.hospital}_{self.model_type}_{self.prediction_type}_{self.experiment_variant}_{self.start_time}"
         
-        elif self.experiment_type == "model_evaluation":
+        elif self.experiment_type == "model_evaluation" or self.experiment_variant == "hyperparameter_search_evaluation":
             return
         
         else:

@@ -137,13 +137,13 @@ def get_trajectory_data(processor, traj_start_inds, stay_id, as_tensor=True):
         return states, actions, rewards, next_states, next_actions, dones, mortalities
 
     # convert to torch tensors
-    states = torch.tensor(states, dtype=torch.float32).to('cuda')
-    actions = torch.tensor(actions, dtype=torch.float32).to('cuda')
-    rewards = torch.tensor(rewards, dtype=torch.float32).to('cuda')
-    next_states = torch.tensor(next_states, dtype=torch.float32).to('cuda')
-    next_actions = torch.tensor(next_actions, dtype=torch.float32).to('cuda')
-    dones = torch.tensor(dones, dtype=torch.float32).to('cuda')
-    mortalities = torch.tensor(mortalities, dtype=torch.float32).to('cuda')
+    states = torch.as_tensor(states, dtype=torch.float32).to('cuda')
+    actions = torch.as_tensor(actions, dtype=torch.float32).to('cuda')
+    rewards = torch.as_tensor(rewards, dtype=torch.float32).to('cuda')
+    next_states = torch.as_tensor(next_states, dtype=torch.float32).to('cuda')
+    next_actions = torch.as_tensor(next_actions, dtype=torch.float32).to('cuda')
+    dones = torch.as_tensor(dones, dtype=torch.float32).to('cuda')
+    mortalities = torch.as_tensor(mortalities, dtype=torch.float32).to('cuda')
 
     return states, actions, rewards, next_states, next_actions, dones, mortalities
 
@@ -317,7 +317,7 @@ def evaluate_final_model(args=None):
     actions = test_processor.rl_dataset["actions"]
     action_dim = actions.shape[1]
     
-    action_std = torch.tensor(actions.std(axis=0), dtype=torch.float32, device=device)
+    action_std = torch.as_tensor(actions.std(axis=0), dtype=torch.float32).to(device)
     print(f"Action std: {action_std}")
     
     # loop through trajectories in test_processor.rl_dataset and evaluate the model

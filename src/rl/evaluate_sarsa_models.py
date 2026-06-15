@@ -7,6 +7,8 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+
 from ..config_manager import ConfigManager   
 from .models.basic_q import Critic
 from .training import create_processor_from_shards
@@ -19,6 +21,7 @@ import pickle
 from .training import create_buffer
 from .models.shared_components import TrainerUtils
 from ..setup_environment import load_paths
+
 
 
 RL_MODELS_PATH = "/home/jake/Documents/AI_Clinician/models/rl_models/choc" 
@@ -291,6 +294,20 @@ def evaluate_final_model(args=None):
     elif len(inner_folders) > 1:
         print(f"Multiple models found in folder: {model_dir}, evaluating the first one: {inner_folders[0]}")
         return
+    
+    # check if model output files already exist, if so, skip evaluation
+    save_dir = os.path.join(model_dir, inner_folders[0], "sarsa_analysis")
+    if os.path.exists(os.path.join(save_dir, "action_analysis.npz")):
+        print(f"Model output files already exist in: {save_dir}, loading...")
+        
+        # load the action_analysis.npz file and print the keys
+        action_analysis = np.load(os.path.join(save_dir, "action_analysis.npz"))
+        print(f"Loaded action_analysis.npz, keys: {action_analysis.files}")
+        return action_analysis, save_dir
+
+    
+    
+    
     model_path = os.path.join(model_dir, inner_folders[0], "final_model.pt")
     print(f"Evaluating final model: {model_path}")
 
@@ -444,7 +461,206 @@ def evaluate_final_model(args=None):
     print(f"Final model AUPRC: {auprc:.4f}")
 
 
-    
+    os.makedirs(save_dir, exist_ok=True)
+
+    np.savez_compressed(
+        os.path.join(save_dir, "action_analysis.npz"),
+        traj_start_inds=traj_start_inds,
+        stay_ids=stay_ids,
+        q_values=q_values,
+        mortality_values=mortality_values,
+        headroom_joint=headroom_joint,
+        sensitivity_joint=sensitivity_joint,
+        disagreement=disagreement,
+        headroom_per_dim=headroom_per_dim,        # (N, action_dim)
+        direction_per_dim=direction_per_dim,      # (N, action_dim)
+        temporal_index=temporal_index,
+    )
+
+    action_analysis = np.load(os.path.join(save_dir, "action_analysis.npz"))
+    print(f"Saved action_analysis.npz, keys: {action_analysis.files}")
+
+    return action_analysis, save_dir
+
+
+def plot_calibration(q_values, mortality_values, survivor, nonsurvivor, save_dir=None):
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+    # 1a. Q distribution by outcome
+    axes[0].hist(q_values[survivor],    bins=60, alpha=0.6, label='Survivors', density=True)
+    axes[0].hist(q_values[nonsurvivor], bins=60, alpha=0.6, label='Non-survivors', density=True)
+    axes[0].set_xlabel('Clinician Q-value')
+    axes[0].set_ylabel('Density')
+    axes[0].set_title('Q separates outcomes')
+    axes[0].legend()
+
+    # 1b. Calibration curve: binned Q vs realised survival
+    n_bins = 10
+    bin_edges = np.quantile(q_values, np.linspace(0, 1, n_bins + 1))
+    bin_idx = np.clip(np.digitize(q_values, bin_edges[1:-1]), 0, n_bins - 1)
+    bin_centres, surv_rate = [], []
+    for b in range(n_bins):
+        m = bin_idx == b
+        if m.sum() > 0:
+            bin_centres.append(q_values[m].mean())
+            surv_rate.append((mortality_values[m] == 0).mean())
+    axes[1].plot(bin_centres, surv_rate, 'o-')
+    axes[1].set_xlabel('Mean Q-value in bin')
+    axes[1].set_ylabel('Realised survival rate')
+    axes[1].set_title('Higher Q → better realised survival')
+    axes[1].set_ylim(0, 1)
+    plt.tight_layout()
+    # save to save_dir if provided
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, "calibration_plot.png"))
+    return fig, axes
+
+
+
+def plot_headroom(headroom_joint, trust_mask, survivor, nonsurvivor, save_dir=None):
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+    # 2a. Headroom distribution, trusted states only
+    hr = headroom_joint[trust_mask]
+    axes[0].hist(hr, bins=80)
+    axes[0].axvline(0, color='k', ls='--', lw=1)
+    axes[0].set_xlabel('Headroom (best plausible alt Q − clinician Q)')
+    axes[0].set_ylabel('Count')
+    axes[0].set_title(f'{(hr > 0).mean()*100:.1f}% of states improvable')
+
+    # 2b. Headroom by outcome
+    axes[1].hist(headroom_joint[survivor & trust_mask],    bins=60, alpha=0.6,
+                density=True, label='Survivors')
+    axes[1].hist(headroom_joint[nonsurvivor & trust_mask], bins=60, alpha=0.6,
+                density=True, label='Non-survivors')
+    axes[1].axvline(0, color='k', ls='--', lw=1)
+    axes[1].set_xlabel('Headroom')
+    axes[1].set_ylabel('Density')
+    axes[1].set_title('Headroom concentrated in non-survivors?')
+    axes[1].legend()
+    plt.tight_layout()
+
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, "headroom_plot.png"))
+    return fig, axes
+
+
+def plot_temporal_structure(sensitivity_joint, temporal_index, trust_mask, save_dir=None):
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    max_t = 72   # first 72 hours
+    mean_sens, sem_sens, hours = [], [], []
+    for t in range(max_t):
+        m = (temporal_index == t) & trust_mask
+        if m.sum() > 20:
+            hours.append(t)
+            mean_sens.append(sensitivity_joint[m].mean())
+            sem_sens.append(sensitivity_joint[m].std() / np.sqrt(m.sum()))
+    hours, mean_sens, sem_sens = map(np.array, (hours, mean_sens, sem_sens))
+    ax.plot(hours, mean_sens, '-')
+    ax.fill_between(hours, mean_sens - sem_sens, mean_sens + sem_sens, alpha=0.3)
+    ax.set_xlabel('Hours since ICU admission')
+    ax.set_ylabel('Action sensitivity (Q std across plausible actions)')
+    ax.set_title('When does the treatment decision carry most leverage?')
+    plt.tight_layout()
+
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, "temporal_structure_plot.png"))
+    return fig, ax
+
+
+def plot_direction_of_improvement(direction_per_dim, headroom_per_dim, trust_mask, save_dir=None):
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    dim_names = ['Fluid', 'Vasopressor']
+
+    for d, (ax, name) in enumerate(zip(axes, dim_names)):
+        # only where this dimension has genuine headroom AND model is trusted
+        hr_d = headroom_per_dim[:, d]
+        meaningful = (hr_d > np.quantile(hr_d[hr_d > 0], 0.5)) & trust_mask
+        dir_d = direction_per_dim[meaningful, d]
+        ax.hist(dir_d, bins=60)
+        ax.axvline(0, color='k', ls='--', lw=1)
+        ax.set_xlabel(f'Suggested Δ{name} (alt − clinician)')
+        ax.set_ylabel('Count')
+        pct_more = (dir_d > 0).mean() * 100
+        ax.set_title(f'{name}: {pct_more:.0f}% suggest more, {100-pct_more:.0f}% less')
+    plt.tight_layout()
+
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, "direction_of_improvement_plot.png"))
+    return fig, axes
+
+
+def headroom_by_disagreement(headroom_joint, disagreement, disagree_thresh, save_dir=None):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    # 2D: does headroom coincide with high disagreement? (would undermine the claim)
+    ax.scatter(disagreement[::20], headroom_joint[::20], s=4, alpha=0.2)
+    ax.axhline(0, color='k', ls='--', lw=1)
+    ax.axvline(disagree_thresh, color='r', ls=':', lw=1, label='Trust threshold')
+    ax.set_xlabel('Q1–Q2 disagreement (uncertainty)')
+    ax.set_ylabel('Headroom')
+    ax.set_title('Is headroom concentrated where the model is uncertain?')
+    ax.legend()
+    plt.tight_layout()
+
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, "headroom_by_disagreement_plot.png"))
+    return fig, ax
+
+
+def plot_figures(action_analysis, save_dir):
+    # ---- guards: only interpret headroom/direction where the model is trustworthy ----
+    disagree_thresh = np.quantile(action_analysis['disagreement'], 0.75)   # flag top-quartile uncertainty
+    trust_mask = action_analysis['disagreement'] < disagree_thresh
+
+    survivor   = action_analysis['mortality_values'] == 0
+    nonsurvivor = action_analysis['mortality_values'] == 1
+
+    # plot calibration
+    plot_calibration(
+        action_analysis['q_values'], 
+        action_analysis['mortality_values'], 
+        survivor,
+        nonsurvivor,
+        save_dir=save_dir
+    )
+
+    # plot headroom 
+    plot_headroom(
+        action_analysis['headroom_joint'], 
+        trust_mask, 
+        survivor, 
+        nonsurvivor, 
+        save_dir=save_dir
+    )
+
+    # plot temporal structure
+    plot_temporal_structure(
+        action_analysis['sensitivity_joint'], 
+        action_analysis['temporal_index'], 
+        trust_mask, 
+        save_dir=save_dir
+    )
+
+    # plot direction of improvement
+    plot_direction_of_improvement(
+        action_analysis['direction_per_dim'], 
+        action_analysis['headroom_per_dim'], 
+        trust_mask, 
+        save_dir=save_dir
+    )
+
+    # plot headroom by disagreement
+    headroom_by_disagreement(
+        action_analysis['headroom_joint'], 
+        action_analysis['disagreement'], 
+        disagree_thresh, 
+        save_dir=save_dir
+    )
+
+    return
+
+
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -455,7 +671,8 @@ def main():
         hyperparameter_search_evaluation(args)
     
     elif args.experiment_variant == "evaluate_final_model":
-        evaluate_final_model(args)
+        action_analysis, _ = evaluate_final_model(args)
+        plot_figures(action_analysis)
 
 
 if __name__ == "__main__":

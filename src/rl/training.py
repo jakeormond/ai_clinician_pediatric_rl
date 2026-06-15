@@ -82,6 +82,7 @@ def create_buffer(
         scaler=None, 
         action_names=None
     ):
+    # should correct output to include processor as it gets modified by the call to .create_rl_dataset
 
     use_compressed_latents = hyperparams['use_compressed_latents']
     n_step = hyperparams['n_step']
@@ -101,7 +102,7 @@ def create_buffer(
         use_n_step = True
     dataset = RLDataset(processor) # model_outputs refer to dynamic_deephit transformer outputs; other options not currently implemented
     buffer = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
-    return buffer, scaler
+    return buffer, scaler 
 
 
 def create_trainer(train_processor, hyperparams, config_manager, actor=None):

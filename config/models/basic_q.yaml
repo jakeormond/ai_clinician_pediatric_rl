@@ -55,7 +55,7 @@
     health_score_hourly_change_clip: 100.
     health_score_scale: 0.  # Scaling factor for health score component of reward
     health_score_hourly_change_scale: 1.  # Scaling factor for hourly change component of reward
-    total_health_score_scale: 0.2 # .01  # Scaling factor for total health score component of reward
+    total_health_score_scale: 1. # .01  # Scaling factor for total health score component of reward
     potential_based_reward_shaping: False  # Whether to use potential-based reward shaping
     terminal_health_score_reward: 2.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
 

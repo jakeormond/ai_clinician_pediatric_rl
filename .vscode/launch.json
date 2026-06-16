@@ -612,7 +612,7 @@
                 "--model_dir", "sepsis_models/intake_vis",
                 "--search_variant", "fixed_hyperparameters",
                 "--cohort", "sepsis",
-                "--n_epochs", "50",
+                "--n_epochs", "200",
                 "--action_mode", "continuous_only",            
             ],
             "console": "integratedTerminal",

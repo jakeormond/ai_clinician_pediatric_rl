@@ -491,9 +491,6 @@ class CQL:
 		self.temp = temp         # Add temp as an argument and assign it to the instance variable
 		self.num_samples = num_samples   # Add num_samples as an argument and assign it to the instance variable
 	
-		self.cql_alpha = cql_alpha  #
-
-		self.num_samples = 10   # How many random actions to sample for the penalty
 
 		self.device = device
 		self.action_mode = action_mode
@@ -526,39 +523,14 @@ class CQL:
 
 	def select_action(self, state):
 		state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
-		return self.actor(state).cpu().data.numpy().flatten()
+		actions, _ = self.actor(state, deterministic=True)
+		return actions.cpu().data.numpy().flatten()
 
 
 	def compute_actor_loss(self,pi: torch.Tensor, action: torch.Tensor, exp_weights: torch.Tensor) -> torch.Tensor:
 		"""
 		Refined BC Loss for sparse clinical actions (Fluids/Vasopressors).
 		"""
-		# # 1. Standard MSE for the base BC loss
-		# mse_loss = F.mse_loss(pi, action, reduction='none') # MSE loss penalizes large deviations, gemini thinks this is best for the actor
-		
-		# # 2. Create a 'Clinical Importance' weight
-		# # We weight time-steps where the doctor actually intervened (action > 0)
-		# # This prevents the model from just learning to 'do nothing'
-		# weights = torch.where(action > 0, 5.0, 1.0) # You can tune this weight (5.0) based on how much you want to encourage matching the doctor's interventions
-		# # we will probably want to implement different weights for fluids vs vasopressors in the mixed action setting, but for now we can just apply the same weight to all non-zero actions
-
-		# weighted_bc_loss = (mse_loss * weights).mean()
-
-		# # 3. Optional: Add a small L1 penalty to keep the policy sparse
-		# # (Only if you find the AI is 'micro-dosing' constantly)
-		# l1_sparse = pi.abs().mean() * 1e-3 # this should prevent many small non-zero actions, while still allowing for 
-		# 								# large actions when clinically indicated. Tune the 1e-3 coefficient as needed.
-		
-		# total_bc_loss = weighted_bc_loss + l1_sparse
-
-		# actor_dict = {
-		# 	"total_bc_loss": total_bc_loss.item(),
-		# 	"bc_mse_only": mse_loss.mean().item(),
-		# 	"weighted_bc_loss": weighted_bc_loss.item(),
-		# 	"l1_sparse": l1_sparse.item(),
-		# 	"pi_mean_val": pi.mean().item()
-		# }
-
 		############# MACRO LOSS #############
 		fluid_volume_loss = (pi[:, 0].mean() - action[:, 0].mean()) ** 2
 		vaso_volume_loss  = (pi[:, 1].mean()  - action[:, 1].mean()) ** 2		
@@ -615,15 +587,9 @@ class CQL:
 			# Select action according to policy and add clipped noise
 			next_action, _ = self.actor_target(next_state, deterministic=True)
 		
-			raw_noise = torch.randn_like(action) * self.policy_noise
-			noise = raw_noise * next_action
-			noise = noise.clamp(-self.noise_clip, self.noise_clip)
-			
-			# noise = (
-			# 	torch.randn_like(action) * self.policy_noise
-			# ).clamp(-self.noise_clip, self.noise_clip)
-
-			next_action = (next_action + noise).clamp(0, 1.0) # Using 1.0 since our actor outputs [0,1]
+			if noise:
+				noise = (torch.randn_like(next_action) * self.policy_noise).clamp(-self.noise_clip, self.noise_clip)
+				next_action = (next_action + noise).clamp(0, 1.0)
 
 			# Compute the target Q value
 			target_Q1, target_Q2 = self.critic_target(next_state, next_action)
@@ -691,13 +657,15 @@ class CQL:
 				state.repeat_interleave(self.num_samples, dim=0)
 			)
 			curr_actions = curr_actions.view(batch_size, self.num_samples, -1)
+			curr_log_probs = curr_log_probs.view(batch_size, self.num_samples).clamp(min=-10, max=0)
 
 			# sample next_actions from the actor for the next states
 			next_actions, next_log_probs = self.actor(
 				next_state.repeat_interleave(self.num_samples, dim=0)
 			)
 			next_actions = next_actions.view(batch_size, self.num_samples, -1)
-			
+			next_log_probs = next_log_probs.view(batch_size, self.num_samples).clamp(min=-10, max=0)
+
 		# Evaluate these actions in the Critic
 		# (Using a helper or flattening/unflattening)
 		def get_q_for_samples(s, a_samples, critic_net):
@@ -720,8 +688,16 @@ class CQL:
 			
 		# 3. CONSTRUCT THE CQL PENALTY (LogSumExp)
 		# We concatenate the Q-values of all sampled actions
-		cat_q1 = torch.cat([q1_rand, q1_curr, q1_next, current_Q1], dim=1)
-		cat_q2 = torch.cat([q2_rand, q2_curr, q2_next, current_Q2], dim=1)
+		cat_q1 = torch.cat([
+			q1_rand, 
+			q1_curr - curr_log_probs, 
+			q1_next - next_log_probs
+		], dim=1)
+		cat_q2 = torch.cat([
+			q2_rand, 
+			q2_curr - curr_log_probs, 
+			q2_next - next_log_probs
+		], dim=1)
 
 		num_samples = cat_q1.shape[1]
 
@@ -734,9 +710,6 @@ class CQL:
 
 		cql_loss1 = (scaled_lse1 - cql_offset) - current_Q1.mean()
 		cql_loss2 = (scaled_lse2 - cql_offset) - current_Q2.mean()
-
-		# cql_loss1 = torch.logsumexp(cat_q1 / self.temp, dim=1).mean() * self.temp - current_Q1.mean()
-		# cql_loss2 = torch.logsumexp(cat_q2 / self.temp, dim=1).mean() * self.temp - current_Q2.mean()
 
 		# 4. COMBINED CRITIC LOSS
 		bellman_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
@@ -760,15 +733,6 @@ class CQL:
 			"critic_loss": critic_loss.item(), 
 		}
 				
-		# log_dict = {
-		# 	"cql_q_gap": (q_gap1 + q_gap2).item() / 2.0,
-		# 	"cql_q_rand": (q1_rand.mean() + q2_rand.mean()).item() / 2.0,
-    	# 	"cql_q_data": (current_Q1.mean() + current_Q2.mean()).item() / 2.0,
-		# 	"cql_q_next": (q1_next.mean() + q2_next.mean()).item() / 2.0,
-		# 	"bellman_loss": bellman_loss.item(),
-		# 	"cql_loss": current_alpha * (cql_loss1 + cql_loss2).item(),
-		# 	"critic_loss": critic_loss.item()}
-
 		# Optimize the critic
 		self.critic_optimizer.zero_grad()
 		critic_loss.backward()
@@ -797,6 +761,11 @@ class CQL:
 		# log_dict.update(lr_critic=self.critic_optimizer.param_groups[0]['lr'])
 		losses.update(lr_critic=self.critic_optimizer.param_groups[0]['lr'])
 
+		# update networks
+		with torch.no_grad():
+			for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+				target_param.mul_(1.0 - self.tau)
+				target_param.add_(param.data * self.tau)
 
 		# Delayed policy updates
 		if self.total_it % self.policy_freq != 0:
@@ -804,9 +773,7 @@ class CQL:
 				pi, log_prob = self.actor(state)
 				Q1_pi, Q2_pi = self.critic(state, pi)
 			Q_pi = torch.min(Q1_pi, Q2_pi)
-			q_stats = get_q_stats(current_Q1, current_Q2, Q_pi, mortality)
-
-			
+			q_stats = get_q_stats(current_Q1, current_Q2, Q_pi, mortality)			
 		
 		else:
 			# Compute actor loss
@@ -836,22 +803,9 @@ class CQL:
 			else:
 				beta = 1e-6
 
-			# 3. Calculate the exponential curve
-			raw_exp = torch.exp(raw_advantage / beta)
-			clipped_exp = torch.clamp(raw_exp, max=10.0)
-
-			# 4. THE CORRECTED MASK: If advantage > 0, keep the exp weight. Otherwise, force to 0.0
-			asymmetric_weights = torch.where(positive_mask, clipped_exp, torch.zeros_like(clipped_exp)).detach()
-
-			# 5. Compute final loss
-			# Any sample where advantage was <= 0 now multiplies by 0.0, completely erasing its gradient contribution!
-			# actor_loss_q = -(asymmetric_weights * Q_pi).mean()
-			num_active_samples = positive_mask.sum()
-			# actor_loss_q = -(asymmetric_weights * Q_pi).sum()/ (num_active_samples + 1e-6) # normalize by the number of active samples to keep the scale consistent
 			actor_loss_q = -Q_pi.mean() # we can also try just maximizing Q_pi directly without the weights, since the weights are mostly for interpretability and analysis of the advantage landscape
 
-			scaled_advantage = -raw_advantage / beta
-			exp_weights = torch.exp(scaled_advantage / beta).detach()
+			exp_weights = torch.exp(-raw_advantage / beta).detach()
 			exp_weights = torch.clamp(exp_weights, min=0.01, max=10.0)
 			
 			# BC Loss - compute actor loss using TrainerUtils function - the "anchor"
@@ -868,30 +822,26 @@ class CQL:
 			actor_loss_ent = -0.1 * (f_ent + v_ent)					
 
 
-			actor_loss = actor_loss_bc + 100*actor_loss_q
+			actor_loss = actor_loss_bc + 100*actor_loss_q + actor_loss_ent  # combine the losses with a large weight on the Q loss to encourage improvement over the current policy
 			# actor_loss = actor_loss_bc 
 			# actor_loss = actor_loss_q 
 			# ctor_loss = 100*actor_loss_q + self.beta * actor_loss_bc + actor_loss_ent # i think CQL doesn't normally include a BC 
 			# component, but gemini says keep if for medical, probably use a very small beta
-
-			if log_prob is not None:
-				actor_loss_ent = actor_loss_ent.item()
-			else: # make it null
-				actor_loss_ent = 0.0
 
 			# every 500 iterations, logg actor_loss_q, actor_loss_bc, and actor_loss_ent separately to see how they are contributing to the total loss
 			if self.total_it % 500 == 0:
 				logging.info(
 					f"Iteration {self.total_it}: actor_loss_q={actor_loss_q.item():.4f}, \
 					actor_loss_bc={actor_loss_bc.item():.4f}, \
-					actor_loss_ent={actor_loss_ent:.4f}, \
+					actor_loss_ent={actor_loss_ent.item():.4f}, \
 					raw_advantage_mean={raw_advantage.mean().item():.4f}")		 
 
 			losses.update({
 				"actor_loss_total": actor_loss.item(),
 				"actor_loss_q": actor_loss_q.item(),
+				"actor_loss_bc": actor_loss_bc.item(),
 				"actor_raw_advantage_mean": raw_advantage.mean().item(),
-				"actor_loss_ent": actor_loss_ent
+				"actor_loss_ent": actor_loss_ent.item()
 			})
 						
 			# Final combined update
@@ -932,10 +882,6 @@ class CQL:
 			# log_dict.update(actor_dict)
 			
 			with torch.no_grad():
-				for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-					target_param.mul_(1.0 - self.tau)
-					target_param.add_(param.data * self.tau)
-
 				for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
 					target_param.mul_(1.0 - self.tau)
 					target_param.add_(param.data * self.tau)
@@ -1023,48 +969,40 @@ class CQL:
 			pi, _ = self.actor(state, deterministic=True)
 			Q_pi_1, Q_pi_2 = self.critic(state, pi)
 			Q_pi = torch.min(Q_pi_1, Q_pi_2)
-
-			eval_q_gap = (Q_pi - ((current_Q1 + current_Q2)/2.0)).mean().item()
-
 					
 			current_Q = torch.min(current_Q1, current_Q2)
-			raw_advantage = Q_pi - current_Q			
-			losses['actor_loss_q'] = -(raw_advantage).mean()
+			
+			raw_advantage = Q_pi - current_Q	
 
-			# Apply an exponential filter (beta controls how aggressively we chase positive advantage)
-			# This acts like a soft-maximum that amplifies positive gains 
-			beta = 0.1
-			scaled_advantage = -raw_advantage / beta
-			exp_weights = torch.exp(scaled_advantage).detach()
+			# 2. Calculate exponential weights using only the positive advantage landscape
+			# We filter the std calculation so the denominator isn't warped by huge negative outliers
+			positive_mask = raw_advantage > 0
+			if positive_mask.any():
+				beta = raw_advantage[positive_mask].std() * 2.0 + 1e-6
+			else:
+				beta = 1e-6
+
+			actor_loss_q = -Q_pi.mean() # we can also try just maximizing Q_pi directly without the weights, since the weights are mostly for interpretability and analysis of the advantage landscape
+
+			exp_weights = torch.exp(-raw_advantage / beta).detach()
+			exp_weights = torch.clamp(exp_weights, min=0.01, max=10.0)
 			
 			# BC Loss - compute actor loss using TrainerUtils function - the "anchor"
 			actor_dict = self.compute_actor_loss(pi, action, exp_weights)
-			# actor_loss_bc = actor_dict['total_bc_loss'] # this is the combined BC loss that includes both the weighted MSE and the sparsity penalty
+			actor_loss_bc = actor_dict['total_bc_loss'] # this is the combined BC loss that includes both the weighted MSE and the sparsity penalty
 			losses.update(actor_dict) # add the actor_dict components to the losses dict for logging
 
-			
-			# # 4. BC Loss (How much we deviate from the doctor)
-			# actor_dict = self.compute_actor_loss(pi, action, exp_weights)
-
-
+				
 			# ADD THIS LINE:
 			neuron_stats = self.critic.get_neuron_stats(state, action)
 	
-			losses.update(actor_dict)
-
 			# get Q statistics
 			q_stats = get_q_stats(current_Q1, current_Q2, Q_pi, mortality)
 
-			# log_dict = {
-			# 	"bellman_loss": bellman_loss.item(),
-			# 	"pi_Q_mean": Q_pi.mean().item(),
-			# 	"current_Q_mean": ((current_Q1 + current_Q2) / 2.0).mean().item(),
-			# 	"eval_q_gap": eval_q_gap,
-			# 	"actor_loss_bc": actor_loss_bc.item()
-			# }
-
-			# log_dict = self.get_q_stats(current_Q1, current_Q2, Q_pi, mortality, log_dict)
-			# log_dict.update(actor_dict)
+			losses.update({
+				"actor_loss_q": actor_loss_q.item(),
+				"actor_raw_advantage_mean": raw_advantage.mean().item(),
+				"actor_loss_bc": actor_loss_bc.item(),})
 			   
 		# return log_dict, action, pi
 		return losses, q_stats, neuron_stats
@@ -1168,41 +1106,41 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		cql_alpha=hyperparams['cql_alpha'],
 		temp=hyperparams['temp'],
 		num_samples=hyperparams['num_samples'],
-		use_monte_carlo_terminal_returns=hyperparams['monte_carlo_terminal_returns']
+		use_monte_carlo_terminal_returns=hyperparams['monte_carlo_terminal_returns'], 
 	)
 
 	return trainer
 
 
-def load_trained_actor(state_dim, action_dim, config_manager = None, model_path = None):
-	"""
-	used to load a trained actor for train of Fitted Q Evaluation (FQE) or for deployment. 
-	"""
-	if model_path is None and config_manager is not None:
-		model_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.model_type, 
-						f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions, "final_model")
+# def load_trained_actor(state_dim, action_dim, config_manager = None, model_path = None):
+# 	"""
+# 	used to load a trained actor for train of Fitted Q Evaluation (FQE) or for deployment. 
+# 	"""
+# 	if model_path is None and config_manager is not None:
+# 		model_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.model_type, 
+# 						f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions, "final_model")
 
-		# get folder inside model_path
-		model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
-		model_path = os.path.join(model_path, model_folder)
+# 		# get folder inside model_path
+# 		model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
+# 		model_path = os.path.join(model_path, model_folder)
 
-	final_model_path = os.path.join(model_path, "final_model.pt")
+# 	final_model_path = os.path.join(model_path, "final_model.pt")
 
-	# load results.json from model_folder, which has state_dim 
-	results_path = os.path.join(model_path, "results.json")
-	if os.path.exists(results_path):
-		with open(results_path, "r") as f:
-			results = json.load(f)
-			hidden_dim = results["hyperparameters"]["hidden_dim"]
-			dropout = results["hyperparameters"]["dropout"]
+# 	# load results.json from model_folder, which has state_dim 
+# 	results_path = os.path.join(model_path, "results.json")
+# 	if os.path.exists(results_path):
+# 		with open(results_path, "r") as f:
+# 			results = json.load(f)
+# 			hidden_dim = results["hyperparameters"]["hidden_dim"]
+# 			dropout = results["hyperparameters"]["dropout"]
 
-	actor = Actor(
-		state_dim = state_dim, 
-		action_dim = action_dim, 
-		hidden_dim = hidden_dim
-	).to(config_manager.training_config['device'])
+# 	actor = Actor(
+# 		state_dim = state_dim, 
+# 		action_dim = action_dim, 
+# 		hidden_dim = hidden_dim
+# 	).to(config_manager.training_config['device'])
 
-	actor.load_state_dict(torch.load(final_model_path, weights_only=True))
-	actor.eval()
+# 	actor.load_state_dict(torch.load(final_model_path, weights_only=True))
+# 	actor.eval()
 
-	return actor
+# 	return actor

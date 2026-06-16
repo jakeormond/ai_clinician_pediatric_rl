@@ -585,9 +585,10 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 
 
 def get_evaluator(state_dim, action_dim, config_manager):
+    discount = config_manager.training_config['discount']
     model_path = os.path.join(config_manager.paths['rl_models_dir'], 
         'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
-        config_manager.actions, 'final_model')
+        config_manager.actions, f'final_model_discount_{discount}')
     model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
     model_path = os.path.join(model_path, model_folder)
 

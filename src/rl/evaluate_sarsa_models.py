@@ -15,6 +15,7 @@ from .training import create_processor_from_shards
 from .replay_buffer import RLDataset
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
+from scipy import stats as scipy_stats
 from pathlib import Path
 import pickle
 from .training import create_buffer
@@ -163,8 +164,9 @@ def hyperparameter_search_evaluation(args=None):
         f"split_{args.split_num}", args.cohort, args.actions)
 
     # get the model directories
-    folder_paths = []
     search_folders = [f for f in os.listdir(models_dir) if os.path.isdir(os.path.join(models_dir, f))]
+    # exclude folder raw_health_score_only 
+    search_folders = [f for f in search_folders if f != "raw_health_score_only"]
     
     search_num = 0
     
@@ -790,12 +792,52 @@ def plot_direction_of_improvement(direction_per_dim, headroom_per_dim,
     return fig, axes
 
 
+
 def headroom_by_disagreement(headroom_joint, disagreement, disagree_thresh, save_dir=None):
     fig, ax = plt.subplots(figsize=(8, 5))
-    # 2D: does headroom coincide with high disagreement? (would undermine the claim)
+
+    # scatter — subsample for visibility
     ax.scatter(disagreement[::20], headroom_joint[::20], s=4, alpha=0.2)
     ax.axhline(0, color='k', ls='--', lw=1)
     ax.axvline(disagree_thresh, color='r', ls=':', lw=1, label='Trust threshold')
+
+    # binned mean headroom overlay
+    n_bins   = 20
+    bin_edges = np.quantile(disagreement, np.linspace(0, 1, n_bins + 1))
+    bin_idx   = np.clip(np.digitize(disagreement, bin_edges[1:-1]), 0, n_bins - 1)
+    bin_centres, mean_hr = [], []
+    for b in range(n_bins):
+        m = bin_idx == b
+        if m.sum() > 50:
+            bin_centres.append(disagreement[m].mean())
+            mean_hr.append(headroom_joint[m].mean())
+    ax.plot(bin_centres, mean_hr, 'r-', lw=2, label='Mean headroom per bin')
+
+    # correlation
+    r,   p_r   = scipy_stats.pearsonr(disagreement,  headroom_joint)
+    rho, p_rho = scipy_stats.spearmanr(disagreement, headroom_joint)
+
+    # improvable at low vs high disagreement
+    low_mask  = disagreement <  disagree_thresh
+    high_mask = disagreement >= disagree_thresh
+    pct_low  = (headroom_joint[low_mask]  > 0.03).mean() * 100
+    pct_high = (headroom_joint[high_mask] > 0.03).mean() * 100
+
+    # annotation block
+    textstr = (
+        f'Pearson r = {r:.3f} (p={p_r:.2e})\n'
+        f'Spearman ρ = {rho:.3f} (p={p_rho:.2e})\n'
+        f'% improvable (>0.03):\n'
+        f'  Low disagreement:  {pct_low:.2f}%\n'
+        f'  High disagreement: {pct_high:.2f}%'
+    )
+    ax.text(0.98, 0.97, textstr,
+            transform=ax.transAxes,
+            fontsize=8,
+            verticalalignment='top',
+            horizontalalignment='right',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
     ax.set_xlabel('Q1–Q2 disagreement (uncertainty)')
     ax.set_ylabel('Headroom')
     ax.set_title('Is headroom concentrated where the model is uncertain?')
@@ -803,8 +845,127 @@ def headroom_by_disagreement(headroom_joint, disagreement, disagree_thresh, save
     plt.tight_layout()
 
     if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, "headroom_by_disagreement_plot.png"))
+        plt.savefig(os.path.join(save_dir, "headroom_by_disagreement_plot.png"),
+                    dpi=150, bbox_inches='tight')
     return fig, ax
+
+
+def stratify_disagreement_by_mortality(disagreement, headroom_joint, 
+                                        mortality_values, temporal_index,
+                                        disagree_thresh, save_dir=None):
+    
+    survivor_mask    = mortality_values == 0
+    nonsurvivor_mask = mortality_values == 1
+    low_mask         = disagreement < disagree_thresh
+    high_mask        = disagreement >= disagree_thresh
+
+    # --- 1. Summary table ---
+    print("=== Disagreement stratified by mortality ===\n")
+    for label, mask in [('Survivors', survivor_mask), 
+                         ('Non-survivors', nonsurvivor_mask)]:
+        print(f"{label} (n={mask.sum():,})")
+        print(f"  Mean disagreement:        {disagreement[mask].mean():.4f}")
+        print(f"  Median disagreement:      {np.median(disagreement[mask]):.4f}")
+        print(f"  % above trust threshold:  "
+              f"{(disagreement[mask] >= disagree_thresh).mean()*100:.1f}%")
+        print(f"  % improvable (low disagree, >0.03):  "
+              f"{(headroom_joint[mask & low_mask] > 0.03).mean()*100:.2f}%")
+        print(f"  % improvable (high disagree, >0.03): "
+              f"{(headroom_joint[mask & high_mask] > 0.03).mean()*100:.2f}%")
+        print(f"  Mean temporal index:      {temporal_index[mask].mean():.1f}h")
+        print()
+
+    # --- 2. Figure: 3 panels ---
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+
+    # Panel 1: disagreement distribution by mortality
+    axes[0].hist(disagreement[survivor_mask],    bins=80, alpha=0.6,
+                 density=True, label='Survivors',     color='tab:blue')
+    axes[0].hist(disagreement[nonsurvivor_mask], bins=80, alpha=0.6,
+                 density=True, label='Non-survivors', color='tab:orange')
+    axes[0].axvline(disagree_thresh, color='r', ls=':', lw=1.5,
+                    label='Trust threshold')
+    axes[0].set_xlabel('Q1–Q2 disagreement')
+    axes[0].set_ylabel('Density')
+    axes[0].set_title('Disagreement distribution by outcome')
+    axes[0].legend()
+
+    # Panel 2: % above trust threshold and % improvable by mortality — bar chart
+    categories = ['Survivors', 'Non-survivors']
+    masks       = [survivor_mask, nonsurvivor_mask]
+
+    pct_high_disagree = [
+        (disagreement[m] >= disagree_thresh).mean() * 100 for m in masks
+    ]
+    pct_improvable_low = [
+        (headroom_joint[m & low_mask] > 0.03).mean() * 100 for m in masks
+    ]
+    pct_improvable_high = [
+        (headroom_joint[m & high_mask] > 0.03).mean() * 100 for m in masks
+    ]
+
+    x     = np.arange(len(categories))
+    width = 0.25
+
+    axes[1].bar(x - width,     pct_high_disagree,   width, label='% high disagreement',
+                color='tab:red',    alpha=0.7)
+    axes[1].bar(x,             pct_improvable_low,  width, label='% improvable (low disagree)',
+                color='tab:blue',   alpha=0.7)
+    axes[1].bar(x + width,     pct_improvable_high, width, label='% improvable (high disagree)',
+                color='tab:orange', alpha=0.7)
+
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(categories)
+    axes[1].set_ylabel('%')
+    axes[1].set_title('Uncertainty and improvability by outcome')
+    axes[1].legend(fontsize=8)
+
+    # annotate values on bars
+    for offset, vals in zip([-width, 0, width],
+                             [pct_high_disagree, pct_improvable_low, pct_improvable_high]):
+        for xi, val in enumerate(vals):
+            axes[1].annotate(f'{val:.1f}%',
+                            xy=(xi + offset, val),
+                            xytext=(0, 3), textcoords='offset points',
+                            ha='center', fontsize=7)
+
+    # Panel 3: disagreement vs temporal index by mortality
+    # show how disagreement evolves over the trajectory for each group
+    max_hours = min(int(temporal_index.max()) + 1, 250)
+    min_n     = 20
+
+    for mask, label, color in [(survivor_mask,    'Survivors',     'tab:blue'),
+                                (nonsurvivor_mask, 'Non-survivors', 'tab:orange')]:
+        hours_plot, mean_d, sem_d = [], [], []
+        for t in range(max_hours):
+            m = (temporal_index == t) & mask
+            n = m.sum()
+            if n >= min_n:
+                hours_plot.append(t)
+                mean_d.append(disagreement[m].mean())
+                sem_d.append(disagreement[m].std() / np.sqrt(n))
+        hours_plot = np.array(hours_plot)
+        mean_d     = np.array(mean_d)
+        sem_d      = np.array(sem_d)
+        axes[2].plot(hours_plot, mean_d, lw=2, label=label, color=color)
+        axes[2].fill_between(hours_plot, mean_d - sem_d, mean_d + sem_d,
+                             alpha=0.2, color=color)
+
+    axes[2].axhline(disagree_thresh, color='r', ls=':', lw=1.5,
+                    label='Trust threshold')
+    axes[2].set_xlabel('Hours since ICU admission')
+    axes[2].set_ylabel('Mean Q1–Q2 disagreement')
+    axes[2].set_title('How does model uncertainty evolve over time?')
+    axes[2].legend(fontsize=8)
+
+    plt.suptitle('Critic uncertainty stratified by patient outcome', 
+                 fontsize=13, y=1.01)
+    plt.tight_layout()
+
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, "disagreement_by_mortality.png"),
+                    dpi=150, bbox_inches='tight')
+    return fig, axes
 
 
 def plot_figures(action_analysis, save_dir=None):
@@ -858,6 +1019,18 @@ def plot_figures(action_analysis, save_dir=None):
         disagree_thresh, 
         save_dir=save_dir
     )
+
+    stratify_disagreement_by_mortality(
+        action_analysis['disagreement'], 
+        action_analysis['headroom_joint'], 
+        action_analysis['mortality_values'], 
+        action_analysis['temporal_index'],
+        disagree_thresh, 
+        save_dir=save_dir
+    )
+
+
+
 
     return
 

@@ -421,7 +421,7 @@
 
 
         {
-            "name": "evaluate_sarsa_models",
+            "name": "sarsa_hyperparameter_search_evaluation",
             "type": "debugpy",
             "request": "launch",
             "module": "src.rl.evaluate_sarsa_models",
@@ -434,6 +434,7 @@
                 "--split_num", "0",
                 "--cohort", "sepsis",
                 "--actions", "intake-vis", 
+                "--discount", "0.975"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
@@ -454,6 +455,7 @@
                 "--split_num", "0",
                 "--cohort", "sepsis",
                 "--actions", "intake-vis", 
+                "--discount", "0.975"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

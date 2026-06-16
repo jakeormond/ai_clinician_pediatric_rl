@@ -14,8 +14,7 @@ from .models.basic_q import Critic
 from .training import create_processor_from_shards
 from .replay_buffer import RLDataset
 from torch.utils.data import DataLoader, TensorDataset
-from scipy import stats
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
 from pathlib import Path
 import pickle
 from .training import create_buffer
@@ -61,6 +60,7 @@ def parse_args():
     parser.add_argument("--split_num", type=int, default=0)
     parser.add_argument("--cohort", type=str, default="sepsis")
     parser.add_argument("--actions", type=str, default="vis-intake")
+    parser.add_argument("--discount", type=float, default=None)
     
     # The Flag (Action: store_true means if it's in the args, it becomes True)
     parser.add_argument("--testing", action="store_true", help="Run in test mode")
@@ -154,6 +154,8 @@ def get_trajectory_data(processor, traj_start_inds, stay_id, as_tensor=True):
 
 @torch.no_grad()
 def hyperparameter_search_evaluation(args=None):
+
+    discount = args.discount
     
     search_results = []
     
@@ -188,6 +190,10 @@ def hyperparameter_search_evaluation(args=None):
             # load hyperprameters from results.json
             results_path = os.path.join(models_dir, f, inner_f, "results.json")
             hyperparams = load_hyperparameters(results_path)
+
+            if hyperparams['discount'] != discount:
+                print(f"Skipping model {model_path} due to discount mismatch: {hyperparams['discount']} != {discount}")
+                continue
                                  
             # process the reward
             health_score_median = train_processor.process_reward(config_manager, hyperparams)
@@ -277,14 +283,18 @@ def hyperparameter_search_evaluation(args=None):
         
     # concatenate search_results into a dataframe and save to csv
     df = pd.DataFrame(search_results)
-    df.to_csv(os.path.join(models_dir, "hyperparameter_search_evaluation_results.csv"), index=False)    
+    # reorder rows by normalized_bellman_residual ascending
+    df = df.sort_values(by="normalized_bellman_residual", ascending=True)
+    df.to_csv(os.path.join(models_dir, f"hyperparameter_search_evaluation_results_{discount}.csv"), index=False)    
 
 
 def evaluate_final_model(args=None):
+    discount = args.discount
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     model_dir = os.path.join(RL_MODELS_PATH, 'basic_q', 
-        f"split_{args.split_num}", args.cohort, args.actions, "final_model")
+        f"split_{args.split_num}", args.cohort, args.actions, f"final_model_discount_{discount}")
     # get the model dir inside the final_model folder
     inner_folders = [inner_f for inner_f in os.listdir(model_dir) 
                      if os.path.isdir(os.path.join(model_dir, inner_f))]
@@ -305,9 +315,7 @@ def evaluate_final_model(args=None):
         print(f"Loaded action_analysis.npz, keys: {action_analysis.files}")
         return action_analysis, save_dir
 
-    
-    
-    
+       
     model_path = os.path.join(model_dir, inner_folders[0], "final_model.pt")
     print(f"Evaluating final model: {model_path}")
 
@@ -448,16 +456,17 @@ def evaluate_final_model(args=None):
     headroom_per_dim  = np.concatenate(headroom_per_dim)    # (N, action_dim)
     direction_per_dim = np.concatenate(direction_per_dim)   # (N, action_dim)
     temporal_index    = np.concatenate(temporal_index).ravel()
+    clinician_actions  = test_processor.rl_dataset["actions"].cpu().numpy()
 
     # calculate auc for q_values and mortality_values
     y_true = 1 - mortality_values  # Assuming mortality=1 means death, we want to predict survival
     y_score = q_values.ravel()
-    auc = roc_auc_score(y_true, y_score)
-    print(f"Final model AUC: {auc:.4f}")
+    roc_auc = roc_auc_score(y_true, y_score)
+    print(f"Final model AUC: {roc_auc:.4f}")
 
     # calculate auprc for q_values and mortality_values
-    precision, recall, _ = stats.precision_recall_curve(y_true, y_score)
-    auprc = stats.auc(recall, precision)
+    precision, recall, _ = precision_recall_curve(y_true, y_score)
+    auprc = auc(recall, precision)
     print(f"Final model AUPRC: {auprc:.4f}")
 
 
@@ -475,6 +484,7 @@ def evaluate_final_model(args=None):
         headroom_per_dim=headroom_per_dim,        # (N, action_dim)
         direction_per_dim=direction_per_dim,      # (N, action_dim)
         temporal_index=temporal_index,
+        clinician_actions=clinician_actions
     )
 
     action_analysis = np.load(os.path.join(save_dir, "action_analysis.npz"))
@@ -483,36 +493,84 @@ def evaluate_final_model(args=None):
     return action_analysis, save_dir
 
 
-def plot_calibration(q_values, mortality_values, survivor, nonsurvivor, save_dir=None):
+def plot_calibration(q_values, mortality_values, survivor, nonsurvivor, 
+                     n_bins=20, min_bin_size=50, save_dir=None):
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
     # 1a. Q distribution by outcome
-    axes[0].hist(q_values[survivor],    bins=60, alpha=0.6, label='Survivors', density=True)
-    axes[0].hist(q_values[nonsurvivor], bins=60, alpha=0.6, label='Non-survivors', density=True)
+    axes[0].hist(q_values[survivor],    bins=60, alpha=0.6, 
+                 label='Survivors',     density=True)
+    axes[0].hist(q_values[nonsurvivor], bins=60, alpha=0.6, 
+                 label='Non-survivors', density=True)
     axes[0].set_xlabel('Clinician Q-value')
     axes[0].set_ylabel('Density')
     axes[0].set_title('Q separates outcomes')
     axes[0].legend()
 
-    # 1b. Calibration curve: binned Q vs realised survival
-    n_bins = 10
+    # 1b. Calibration curve with confidence intervals
     bin_edges = np.quantile(q_values, np.linspace(0, 1, n_bins + 1))
-    bin_idx = np.clip(np.digitize(q_values, bin_edges[1:-1]), 0, n_bins - 1)
-    bin_centres, surv_rate = [], []
+    bin_idx   = np.clip(np.digitize(q_values, bin_edges[1:-1]), 0, n_bins - 1)
+
+    bin_centres, surv_rate, ci_low, ci_high, bin_ns = [], [], [], [], []
+
     for b in range(n_bins):
         m = bin_idx == b
-        if m.sum() > 0:
-            bin_centres.append(q_values[m].mean())
-            surv_rate.append((mortality_values[m] == 0).mean())
-    axes[1].plot(bin_centres, surv_rate, 'o-')
+        n = m.sum()
+        if n < min_bin_size:
+            continue
+        
+        p = (mortality_values[m] == 0).mean()   # survival rate
+        
+        # Wilson confidence interval — handles proportions near 0 or 1 better than normal approx
+        z    = 1.96
+        denom = 1 + z**2 / n
+        centre = (p + z**2 / (2*n)) / denom
+        half   = z * np.sqrt(p*(1-p)/n + z**2/(4*n**2)) / denom
+        
+        bin_centres.append(q_values[m].mean())
+        surv_rate.append(p)
+        ci_low.append(max(0, centre - half))
+        ci_high.append(min(1, centre + half))
+        bin_ns.append(n)
+
+    bin_centres = np.array(bin_centres)
+    surv_rate   = np.array(surv_rate)
+    ci_low      = np.array(ci_low)
+    ci_high     = np.array(ci_high)
+
+    axes[1].plot(bin_centres, surv_rate, 'o-', lw=2, zorder=3)
+    axes[1].fill_between(bin_centres, ci_low, ci_high, alpha=0.2, label='95% CI')
+    
+    # annotate bin sizes so you can see where estimates are reliable
+    for x, y, n in zip(bin_centres, surv_rate, bin_ns):
+        axes[1].annotate(f'n={n}', (x, y), textcoords='offset points',
+                         xytext=(0, 6), ha='center', fontsize=7, color='gray')
+
+    overall_surv = (mortality_values == 0).mean()
+    axes[1].axhline(0.5, color='gray', ls=':', lw=1, label='50% survival')
+    axes[1].axhline(overall_surv, color='green', ls='--', lw=1, 
+                    label=f'Population average ({overall_surv:.2f})')
+    
+    # plateau_threshold = bin_centres[4]  # approximately the 7th bin centre
+
+    # axes[1].axvspan(bin_centres[0], plateau_threshold, 
+    #                 alpha=0.08, color='red', 
+    #                 label='Discriminative region')
+    # axes[1].axvspan(plateau_threshold, bin_centres[-1], 
+    #                 alpha=0.08, color='green', 
+    #                 label='Plateau region')
+
+
     axes[1].set_xlabel('Mean Q-value in bin')
     axes[1].set_ylabel('Realised survival rate')
-    axes[1].set_title('Higher Q → better realised survival')
-    axes[1].set_ylim(0, 1)
+    axes[1].set_title(f'Higher Q → better realised survival ({n_bins} bins)')
+    axes[1].set_ylim(0, 1.05)
+    axes[1].legend()
+
     plt.tight_layout()
-    # save to save_dir if provided
     if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, "calibration_plot.png"))
+        plt.savefig(os.path.join(save_dir, "calibration_plot.png"), 
+                    dpi=150, bbox_inches='tight')
     return fig, axes
 
 
@@ -520,74 +578,215 @@ def plot_calibration(q_values, mortality_values, survivor, nonsurvivor, save_dir
 def plot_headroom(headroom_joint, trust_mask, survivor, nonsurvivor, save_dir=None):
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
-    # 2a. Headroom distribution, trusted states only
     hr = headroom_joint[trust_mask]
-    axes[0].hist(hr, bins=80)
-    axes[0].axvline(0, color='k', ls='--', lw=1)
-    axes[0].set_xlabel('Headroom (best plausible alt Q − clinician Q)')
-    axes[0].set_ylabel('Count')
-    axes[0].set_title(f'{(hr > 0).mean()*100:.1f}% of states improvable')
 
-    # 2b. Headroom by outcome
-    axes[1].hist(headroom_joint[survivor & trust_mask],    bins=60, alpha=0.6,
-                density=True, label='Survivors')
-    axes[1].hist(headroom_joint[nonsurvivor & trust_mask], bins=60, alpha=0.6,
-                density=True, label='Non-survivors')
-    axes[1].axvline(0, color='k', ls='--', lw=1)
-    axes[1].set_xlabel('Headroom')
-    axes[1].set_ylabel('Density')
-    axes[1].set_title('Headroom concentrated in non-survivors?')
+    # --- Left: CCDF — fraction of states with headroom > x ---
+    # Sort headroom; CCDF at value x = fraction of points exceeding x
+    hr_sorted = np.sort(hr)
+    ccdf = 1.0 - np.arange(len(hr_sorted)) / len(hr_sorted)
+    axes[0].plot(hr_sorted, ccdf, lw=2)
+    axes[0].set_yscale('log')
+    axes[0].set_xlabel('Headroom threshold (best plausible alt Q − clinician Q)')
+    axes[0].set_ylabel('Fraction of states with headroom > threshold')
+    pct_improvable = (hr > 0).mean() * 100
+    axes[0].set_title(f'{pct_improvable:.1f}% of states have any headroom')
+    axes[0].grid(True, which='both', alpha=0.3)
+
+    # --- Right: CCDF by outcome, so the tails are directly comparable ---
+    for label, mask, color in [('Survivors',     survivor & trust_mask,    'tab:blue'),
+                               ('Non-survivors', nonsurvivor & trust_mask, 'tab:orange')]:
+        h = np.sort(headroom_joint[mask])
+        c = 1.0 - np.arange(len(h)) / len(h)
+        axes[1].plot(h, c, lw=2, label=label, color=color)
+    axes[1].set_yscale('log')
+    axes[1].set_xlabel('Headroom threshold')
+    axes[1].set_ylabel('Fraction of states with headroom > threshold')
+    axes[1].set_title('Headroom tail: survivors vs non-survivors')
     axes[1].legend()
-    plt.tight_layout()
+    axes[1].grid(True, which='both', alpha=0.3)
 
+    plt.tight_layout()
     if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, "headroom_plot.png"))
+        plt.savefig(os.path.join(save_dir, "headroom_plot.png"), dpi=150, bbox_inches='tight')
     return fig, axes
 
+def plot_temporal_structure(sensitivity_joint, temporal_index, trust_mask, 
+                  max_hours=None, min_n=20, save_dir=None):
+    
+    # determine max hours from data if not specified
+    if max_hours is None:
+        max_hours = int(temporal_index.max()) + 1
 
-def plot_temporal_structure(sensitivity_joint, temporal_index, trust_mask, save_dir=None):
-    fig, ax = plt.subplots(figsize=(9, 5))
-
-    max_t = 72   # first 72 hours
-    mean_sens, sem_sens, hours = [], [], []
-    for t in range(max_t):
+    hours, mean_sens, sem_sens, n_patients = [], [], [], []
+    
+    for t in range(max_hours):
         m = (temporal_index == t) & trust_mask
-        if m.sum() > 20:
+        n = m.sum()
+        if n >= min_n:
             hours.append(t)
             mean_sens.append(sensitivity_joint[m].mean())
-            sem_sens.append(sensitivity_joint[m].std() / np.sqrt(m.sum()))
-    hours, mean_sens, sem_sens = map(np.array, (hours, mean_sens, sem_sens))
-    ax.plot(hours, mean_sens, '-')
-    ax.fill_between(hours, mean_sens - sem_sens, mean_sens + sem_sens, alpha=0.3)
-    ax.set_xlabel('Hours since ICU admission')
-    ax.set_ylabel('Action sensitivity (Q std across plausible actions)')
-    ax.set_title('When does the treatment decision carry most leverage?')
+            sem_sens.append(sensitivity_joint[m].std() / np.sqrt(n))
+            n_patients.append(n)
+
+    hours     = np.array(hours)
+    mean_sens = np.array(mean_sens)
+    sem_sens  = np.array(sem_sens)
+    n_patients = np.array(n_patients)
+
+    fig, ax1 = plt.subplots(figsize=(12, 5))
+
+    # primary: sensitivity curve with SEM ribbon
+    ax1.plot(hours, mean_sens, lw=2, color='tab:blue', 
+             label='Action sensitivity')
+    ax1.fill_between(hours, mean_sens - sem_sens, mean_sens + sem_sens, 
+                     alpha=0.3, color='tab:blue')
+    ax1.set_xlabel('Hours since ICU admission')
+    ax1.set_ylabel('Action sensitivity (Q std across plausible actions)', 
+                   color='tab:blue')
+    ax1.tick_params(axis='y', labelcolor='tab:blue')
+
+    # secondary: patient count — fades as n drops
+    ax2 = ax1.twinx()
+    ax2.fill_between(hours, n_patients, alpha=0.15, color='gray')
+    ax2.set_ylabel('N patients at this hour', color='gray')
+    ax2.tick_params(axis='y', labelcolor='gray')
+    ax2.set_ylim(0, n_patients.max() * 4)  # compress so it doesn't dominate
+
+    # mark where n drops below a meaningful threshold
+    sparse_threshold = 200
+    sparse_start = hours[n_patients < sparse_threshold]
+    if len(sparse_start) > 0:
+        ax1.axvline(sparse_start[0], color='gray', ls=':', lw=1.5,
+                    label=f'N < {sparse_threshold} patients')
+
+    # Add phase annotations
+    ax1.axvspan(0, 250, alpha=0.05, color='blue', label='Phase 1: declining leverage')
+    ax1.axvspan(330, 750, alpha=0.05, color='orange', label='Phase 2: rising leverage')
+    ax1.axvspan(750, hours.max(), alpha=0.1, color='gray', label='Unreliable (low N)')
+
+    ax1.annotate('Early\nresuscitation', xy=(5, mean_sens[0]), 
+                fontsize=9, color='blue')
+    ax1.annotate('Late ICU\nphase?', xy=(400, mean_sens[hours >= 330][0]),
+                fontsize=9, color='orange')
+
+    ax1.set_title('When does the treatment decision carry most leverage?')
+    ax1.legend(loc='upper right')
     plt.tight_layout()
 
     if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, "temporal_structure_plot.png"))
-    return fig, ax
+        plt.savefig(os.path.join(save_dir, "temporal_plot.png"), 
+                    dpi=150, bbox_inches='tight')
+    return fig, ax1
 
-
-def plot_direction_of_improvement(direction_per_dim, headroom_per_dim, trust_mask, save_dir=None):
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+def plot_direction_of_improvement(direction_per_dim, headroom_per_dim, 
+                                   trust_mask, temporal_index, actions,
+                                   early_cutoff=6, save_dir=None):
+    """
+    direction_per_dim: (N, action_dim) signed direction of best alternative
+    headroom_per_dim:  (N, action_dim) per-dim headroom
+    trust_mask:        (N,) bool — low disagreement states
+    temporal_index:    (N,) hour within trajectory
+    actions:           (N, action_dim) clinician actions
+    early_cutoff:      hours threshold for early vs late phase
+    """
     dim_names = ['Fluid', 'Vasopressor']
+    early = temporal_index < early_cutoff
+    late  = temporal_index >= early_cutoff
 
-    for d, (ax, name) in enumerate(zip(axes, dim_names)):
-        # only where this dimension has genuine headroom AND model is trusted
-        hr_d = headroom_per_dim[:, d]
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    for d, name in enumerate(dim_names):
+        hr_d  = headroom_per_dim[:, d]
+        dir_d = direction_per_dim[:, d]
+        clin_d = actions[:, d]
+
+        # meaningful = genuine headroom + trusted
         meaningful = (hr_d > np.quantile(hr_d[hr_d > 0], 0.5)) & trust_mask
-        dir_d = direction_per_dim[meaningful, d]
-        ax.hist(dir_d, bins=60)
+
+        # --- Row 0: overall direction histogram with early/late overlay ---
+        ax = axes[0, d]
+        # overall in gray
+        ax.hist(dir_d[meaningful], bins=60, color='gray', alpha=0.4,
+                label='All hours', density=True)
+        # early phase
+        m_early = meaningful & early
+        m_late  = meaningful & late
+        if m_early.sum() > 20:
+            ax.hist(dir_d[m_early], bins=60, alpha=0.5, density=True,
+                    label=f'Early (0–{early_cutoff}h)', color='tab:blue')
+        if m_late.sum() > 20:
+            ax.hist(dir_d[m_late], bins=60, alpha=0.5, density=True,
+                    label=f'Late (>{early_cutoff}h)', color='tab:orange')
         ax.axvline(0, color='k', ls='--', lw=1)
         ax.set_xlabel(f'Suggested Δ{name} (alt − clinician)')
-        ax.set_ylabel('Count')
-        pct_more = (dir_d > 0).mean() * 100
-        ax.set_title(f'{name}: {pct_more:.0f}% suggest more, {100-pct_more:.0f}% less')
+        ax.set_ylabel('Density')
+        pct_more_all   = (dir_d[meaningful] > 0).mean() * 100
+        pct_more_early = (dir_d[m_early] > 0).mean() * 100 if m_early.sum() > 0 else float('nan')
+        pct_more_late  = (dir_d[m_late]  > 0).mean() * 100 if m_late.sum()  > 0 else float('nan')
+        ax.set_title(
+            f'{name}: overall {pct_more_all:.0f}% more / {100-pct_more_all:.0f}% less\n'
+            f'Early: {pct_more_early:.0f}% more  |  Late: {pct_more_late:.0f}% more'
+        )
+        ax.legend(fontsize=8)
+
+        # --- Row 1: headroom and clinician action split by direction ---
+        ax2 = axes[1, d]
+        more_mask = meaningful & (dir_d > 0)
+        less_mask = meaningful & (dir_d < 0)
+
+        categories = ['Suggest more', 'Suggest less']
+        hr_means   = [hr_d[more_mask].mean()   if more_mask.sum() > 0 else 0,
+                      hr_d[less_mask].mean()   if less_mask.sum() > 0 else 0]
+        hr_sems    = [hr_d[more_mask].std() / np.sqrt(more_mask.sum()) if more_mask.sum() > 0 else 0,
+                      hr_d[less_mask].std() / np.sqrt(less_mask.sum()) if less_mask.sum() > 0 else 0]
+        clin_means = [clin_d[more_mask].mean() if more_mask.sum() > 0 else 0,
+                      clin_d[less_mask].mean() if less_mask.sum() > 0 else 0]
+        clin_sems  = [clin_d[more_mask].std() / np.sqrt(more_mask.sum()) if more_mask.sum() > 0 else 0,
+                      clin_d[less_mask].std() / np.sqrt(less_mask.sum()) if less_mask.sum() > 0 else 0]
+
+        x = np.arange(len(categories))
+        width = 0.35
+
+        # headroom bars
+        bars1 = ax2.bar(x - width/2, hr_means, width, yerr=hr_sems,
+                        capsize=4, label='Mean headroom', color='tab:blue', alpha=0.7)
+        ax2.set_ylabel('Mean headroom', color='tab:blue')
+        ax2.tick_params(axis='y', labelcolor='tab:blue')
+
+        # clinician action on secondary axis
+        ax2b = ax2.twinx()
+        bars2 = ax2b.bar(x + width/2, clin_means, width, yerr=clin_sems,
+                         capsize=4, label=f'Mean clinician {name}',
+                         color='tab:orange', alpha=0.7)
+        ax2b.set_ylabel(f'Mean clinician {name}', color='tab:orange')
+        ax2b.tick_params(axis='y', labelcolor='tab:orange')
+
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(categories)
+        ax2.set_title(f'{name}: headroom and clinician dose by direction')
+
+        # combined legend
+        lines = [bars1, bars2]
+        labels = [b.get_label() for b in lines]
+        ax2.legend(lines, labels, loc='upper right', fontsize=8)
+
+        # annotate n per group
+        for xi, (mm, lm) in enumerate([(more_mask, less_mask)]):
+            pass
+        ax2.annotate(f'n={more_mask.sum():,}', xy=(x[0] - width/2, hr_means[0]),
+                     xytext=(0, 5), textcoords='offset points',
+                     ha='center', fontsize=8, color='tab:blue')
+        ax2.annotate(f'n={less_mask.sum():,}', xy=(x[1] - width/2, hr_means[1]),
+                     xytext=(0, 5), textcoords='offset points',
+                     ha='center', fontsize=8, color='tab:blue')
+
+    plt.suptitle('Direction of improvement: when and how much?', 
+                 fontsize=13, y=1.01)
     plt.tight_layout()
 
     if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, "direction_of_improvement_plot.png"))
+        plt.savefig(os.path.join(save_dir, "direction_of_improvement_plot.png"),
+                    dpi=150, bbox_inches='tight')
     return fig, axes
 
 
@@ -608,7 +807,7 @@ def headroom_by_disagreement(headroom_joint, disagreement, disagree_thresh, save
     return fig, ax
 
 
-def plot_figures(action_analysis, save_dir):
+def plot_figures(action_analysis, save_dir=None):
     # ---- guards: only interpret headroom/direction where the model is trustworthy ----
     disagree_thresh = np.quantile(action_analysis['disagreement'], 0.75)   # flag top-quartile uncertainty
     trust_mask = action_analysis['disagreement'] < disagree_thresh
@@ -647,6 +846,8 @@ def plot_figures(action_analysis, save_dir):
         action_analysis['direction_per_dim'], 
         action_analysis['headroom_per_dim'], 
         trust_mask, 
+        action_analysis['temporal_index'],
+        actions=action_analysis['clinician_actions'],
         save_dir=save_dir
     )
 
@@ -671,8 +872,8 @@ def main():
         hyperparameter_search_evaluation(args)
     
     elif args.experiment_variant == "evaluate_final_model":
-        action_analysis, _ = evaluate_final_model(args)
-        plot_figures(action_analysis)
+        action_analysis, save_dir = evaluate_final_model(args)
+        plot_figures(action_analysis, save_dir=save_dir)
 
 
 if __name__ == "__main__":

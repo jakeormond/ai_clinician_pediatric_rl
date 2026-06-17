@@ -298,9 +298,9 @@ class ShardProcessor:
                 hourly_min = -hyperparams['health_score_hourly_change_clip']
                 hourly_health_change = np.clip(hourly_health_change, hourly_min, hourly_max)
                             
-                # min_max the hourly_health_change to [-1, 1]
-                hourly_health_change = ((hourly_health_change - hourly_min) / \
-                    (hourly_max - hourly_min)) * 2 - 1            
+                # # min_max the hourly_health_change to [-1, 1]
+                # hourly_health_change = ((hourly_health_change - hourly_min) / \
+                #     (hourly_max - hourly_min)) * 2 - 1            
             
             # if health_score_median is None, calculate it
             if health_score_median is None:

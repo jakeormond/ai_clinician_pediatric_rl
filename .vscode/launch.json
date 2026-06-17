@@ -494,7 +494,7 @@
                 "--mode", "single_split", 
                 "--split_num", "0",
                 "--search_variant", "fixed_hyperparameters",
-                "--n_epochs", "200",
+                "--n_epochs", "400",
                 "--cohort", "sepsis",
                 "--action_mode", "continuous_only",
             ],

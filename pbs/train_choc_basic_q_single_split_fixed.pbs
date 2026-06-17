@@ -72,11 +72,10 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --mode single_split \
     --split_num 0 \
     --search_variant fixed_hyperparameters \
-    --n_epochs 200 \
+    --n_epochs 400 \
     --action_mode continuous_only \
     --cohort sepsis \
     --start_time $START_TIME \
-    --seed 1 \
 
 exit_code=$?
 

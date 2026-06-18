@@ -534,6 +534,11 @@ def train_with_hyperparameters(
         hyperparams,
         action_names=config_manager.data_config['actions'],
     )
+    # add ratio_of_fluid_to_vaso to config_manager for actor loss
+    actions = train_processor.rl_dataset["actions"]
+    ratio_of_fluid_to_vaso = (torch.sum(actions[:, 0]) / (torch.sum(actions[:, 1]) + 1e-8)).item()  # avoid division by zero
+    config_manager.training_config['ratio_of_fluid_to_vaso'] = ratio_of_fluid_to_vaso
+
     val_buffer, _ = create_buffer(
         val_processor,
         batch_size, 

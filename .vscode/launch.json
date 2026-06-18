@@ -456,7 +456,7 @@
                 "--cohort", "sepsis",
                 "--actions", "intake-vis", 
                 "--health_score_type", "health_score_change_only",
-                "--discount", "0.99"
+                "--discount", "0.975"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

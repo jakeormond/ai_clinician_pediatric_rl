@@ -27,6 +27,16 @@ from ..setup_environment import load_paths
 RL_MODELS_PATH = "/home/jake/Documents/AI_Clinician/models/rl_models/choc" 
 
 
+def _load_npz_scalar(npz_data, key):
+    """Safely extract a scalar from an NPZ entry, normalizing NaN to None."""
+    value = npz_data[key]
+    if isinstance(value, np.ndarray) and value.shape == ():
+        value = value.item()
+    if isinstance(value, (float, np.floating)) and np.isnan(value):
+        return None
+    return value
+
+
 def load_sarsa_critic(processor, hyperparams, model_path = None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -290,7 +300,7 @@ def hyperparameter_search_evaluation(args=None):
     df = df.sort_values(by="normalized_bellman_residual", ascending=True)
     df.to_csv(os.path.join(models_dir, f"hyperparameter_search_evaluation_results_{discount}.csv"), index=False)    
 
-
+@torch.no_grad()
 def evaluate_final_model(args=None):
     discount = args.discount
     
@@ -315,7 +325,7 @@ def evaluate_final_model(args=None):
         print(f"Model output files already exist in: {save_dir}, loading...")
         
         # load the action_analysis.npz file and print the keys
-        action_analysis = np.load(os.path.join(save_dir, "action_analysis.npz"))
+        action_analysis = np.load(os.path.join(save_dir, "action_analysis.npz"), allow_pickle=True)
         print(f"Loaded action_analysis.npz, keys: {action_analysis.files}")
         return action_analysis, save_dir
 
@@ -363,6 +373,7 @@ def evaluate_final_model(args=None):
     mortality_values = []
     headroom_joint  = []      # best plausible alt (both dims perturbed) - clinician
     sensitivity_joint = []    # std of Q across K joint perturbations
+    noise_headroom = []
     disagreement    = []      # |Q1 - Q2| at clinician action
     headroom_per_dim = []     # (N, action_dim): best single-dim alt - clinician
     direction_per_dim = []    # (N, action_dim): signed (best_alt_action - clinician_action) per dim
@@ -381,6 +392,7 @@ def evaluate_final_model(args=None):
         mort_for_stay     = mortalities
         hr_joint_stay     = []
         sens_joint_stay   = []
+        noise_headroom_stay = []
         disagree_stay     = []
         hr_dim_stay       = []
         dir_dim_stay      = []     # position within trajectory
@@ -390,7 +402,7 @@ def evaluate_final_model(args=None):
             end_idx = min((i + 1) * batch_size, states.shape[0])
             states_batch = states[start_idx:end_idx]
             actions_batch = actions[start_idx:end_idx]
-            shuffled_actions_batch = shuffled_actions_stay[start_idx:end_idx]
+            shuffled_actions_batch = (shuffled_actions_stay[start_idx:end_idx]).to(device)
 
             # evaluate the model on the batch
             with torch.no_grad():
@@ -398,9 +410,14 @@ def evaluate_final_model(args=None):
                 q_clin = (q1_clin + q2_clin) / 2.0
                 disagree = (q1_clin - q2_clin).abs()
 
+                q1_shuffle, q2_shuffle = sarsa_model(states_batch, shuffled_actions_batch)
+                q_shuffle = (q1_shuffle + q2_shuffle) / 2.0
+
                 # --- joint perturbation: both dims at once ---
                 best_joint = torch.full_like(q_clin, float('-inf'))
+                best_shuffled = torch.full_like(q_clin, float('-inf'))
                 joint_q_samples = []
+
                 for _ in range(K):
                     noise = torch.randn_like(actions_batch) * action_std
                     alt   = (actions_batch + noise).clamp(0.0, 1.0)
@@ -410,12 +427,17 @@ def evaluate_final_model(args=None):
                     joint_q_samples.append(q_a)
 
                     alt_shuffled = (shuffled_actions_batch + noise).clamp(0.0, 1.0)  # use the shuffled actions for the alternative
-
+                    q1_a_shuffled, q2_a_shuffled = sarsa_model(states_batch, alt_shuffled)
+                    q_a_shuffled = (q1_a_shuffled + q2_a_shuffled) / 2.0
+                    best_shuffled = torch.maximum(best_shuffled, q_a_shuffled)
                 
                 joint_q_samples = torch.cat(joint_q_samples, dim=1)   # (B, K)
                 hr_joint   = best_joint - q_clin
                 sens_joint = joint_q_samples.std(dim=1, keepdim=True)  # (B,1)
 
+                noise_headroom_batch = best_shuffled - q_shuffle
+                
+                
                 # --- per-dimension perturbation: vary one dim, hold others at clinician value ---
                 best_dim_q   = torch.full((states_batch.shape[0], action_dim),
                                         float('-inf'), device=device)
@@ -442,6 +464,7 @@ def evaluate_final_model(args=None):
             q_for_stay.append(q_clin)
             hr_joint_stay.append(hr_joint)
             sens_joint_stay.append(sens_joint)
+            noise_headroom_stay.append(noise_headroom_batch)
             disagree_stay.append(disagree)
             hr_dim_stay.append(hr_dim)
             dir_dim_stay.append(dir_dim)
@@ -453,6 +476,7 @@ def evaluate_final_model(args=None):
         headroom_joint.append(torch.cat(hr_joint_stay).cpu().numpy())
         sensitivity_joint.append(torch.cat(sens_joint_stay).cpu().numpy())
         disagreement.append(torch.cat(disagree_stay).cpu().numpy())
+        noise_headroom.append(torch.cat(noise_headroom_stay).cpu().numpy())
         headroom_per_dim.append(torch.cat(hr_dim_stay).cpu().numpy())
         direction_per_dim.append(torch.cat(dir_dim_stay).cpu().numpy())
         temporal_index.append(np.arange(n_t))
@@ -463,10 +487,13 @@ def evaluate_final_model(args=None):
     headroom_joint    = np.concatenate(headroom_joint).ravel()
     sensitivity_joint = np.concatenate(sensitivity_joint).ravel()
     disagreement      = np.concatenate(disagreement).ravel()
+    noise_headroom    = np.concatenate(noise_headroom).ravel()
     headroom_per_dim  = np.concatenate(headroom_per_dim)    # (N, action_dim)
     direction_per_dim = np.concatenate(direction_per_dim)   # (N, action_dim)
     temporal_index    = np.concatenate(temporal_index).ravel()
     clinician_actions  = test_processor.rl_dataset["actions"].cpu().numpy()
+
+    threshold, thresholds, real_ccdf, noise_ccdf, gap = find_calibrated_threshold(headroom_joint, noise_headroom, min_relative_gap=0.2, n_thresholds=500, stable_window=40)
 
     # calculate auc for q_values and mortality_values
     y_true = 1 - mortality_values  # Assuming mortality=1 means death, we want to predict survival
@@ -490,17 +517,70 @@ def evaluate_final_model(args=None):
         mortality_values=mortality_values,
         headroom_joint=headroom_joint,
         sensitivity_joint=sensitivity_joint,
+        noise_headroom=noise_headroom,
         disagreement=disagreement,
         headroom_per_dim=headroom_per_dim,        # (N, action_dim)
         direction_per_dim=direction_per_dim,      # (N, action_dim)
         temporal_index=temporal_index,
-        clinician_actions=clinician_actions
+        clinician_actions=clinician_actions,
+        threshold=np.nan if threshold is None else float(threshold),
+        thresholds=thresholds,
+        real_ccdf=real_ccdf,
+        noise_ccdf=noise_ccdf,
+        gap=gap,
+        roc_auc=roc_auc,
+        auprc=auprc
     )
 
-    action_analysis = np.load(os.path.join(save_dir, "action_analysis.npz"))
+    action_analysis = np.load(os.path.join(save_dir, "action_analysis.npz"), allow_pickle=True)
     print(f"Saved action_analysis.npz, keys: {action_analysis.files}")
 
     return action_analysis, save_dir
+
+
+
+def find_calibrated_threshold(real_headroom, noise_headroom,
+                                         min_relative_gap=0.5, n_thresholds=500,
+                                         stable_window=20):
+    """
+    Find the threshold where the real headroom CCDF exceeds the noise-floor
+    CCDF by at least `min_relative_gap` as a RELATIVE (not absolute) amount.
+    This is robust on a log-scale CCDF, where absolute gaps shrink as you
+    move into the tail even when the relative separation is large and real.
+
+    min_relative_gap: e.g. 0.5 means "real curve is at least 50% higher
+                       than noise curve at this threshold"
+    require the gap to hold for `stable_window` consecutive threshold
+    steps, so a single noisy crossing isn't mistaken for real divergence
+    """
+    max_val = max(real_headroom.max(), noise_headroom.max())
+    thresholds = np.linspace(0, max_val, n_thresholds)
+
+    real_ccdf  = np.array([(real_headroom  > t).mean() for t in thresholds])
+    noise_ccdf = np.array([(noise_headroom > t).mean() for t in thresholds])
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        relative_excess = np.where(
+            noise_ccdf > 0,
+            (real_ccdf - noise_ccdf) / noise_ccdf,
+            np.where(real_ccdf > 0, np.inf, 0.0)
+        )
+
+    candidate_idx = np.where(relative_excess >= min_relative_gap)[0]
+
+    if len(candidate_idx) == 0:
+        return None, thresholds, real_ccdf, noise_ccdf, relative_excess
+
+    for idx in candidate_idx:
+        window_end = min(idx + stable_window, len(relative_excess))
+        if window_end - idx == stable_window and \
+           (relative_excess[idx:window_end] >= min_relative_gap).all():
+            return thresholds[idx], thresholds, real_ccdf, noise_ccdf, relative_excess
+
+    # fall back to first crossing if no fully stable window found
+    threshold = thresholds[candidate_idx[0]]
+    return threshold, thresholds, real_ccdf, noise_ccdf, relative_excess
+
 
 
 def plot_calibration(q_values, mortality_values, survivor, nonsurvivor, 
@@ -585,40 +665,42 @@ def plot_calibration(q_values, mortality_values, survivor, nonsurvivor,
 
 
 
-def plot_headroom(headroom_joint, trust_mask, survivor, nonsurvivor, save_dir=None):
+def plot_headroom(headroom_joint, trust_mask, survivor, nonsurvivor,
+                   calibrated_threshold, save_dir=None):
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
     hr = headroom_joint[trust_mask]
-
-    # --- Left: CCDF — fraction of states with headroom > x ---
-    # Sort headroom; CCDF at value x = fraction of points exceeding x
     hr_sorted = np.sort(hr)
     ccdf = 1.0 - np.arange(len(hr_sorted)) / len(hr_sorted)
     axes[0].plot(hr_sorted, ccdf, lw=2)
+    axes[0].axvline(calibrated_threshold, color='k', ls=':', lw=1.5,
+                    label=f'Calibrated threshold = {calibrated_threshold:.4f}')
     axes[0].set_yscale('log')
-    axes[0].set_xlabel('Headroom threshold (best plausible alt Q − clinician Q)')
+    axes[0].set_xlabel('Headroom threshold')
     axes[0].set_ylabel('Fraction of states with headroom > threshold')
-    pct_improvable = (hr > 0).mean() * 100
-    axes[0].set_title(f'{pct_improvable:.1f}% of states have any headroom')
+    pct_improvable = (hr > calibrated_threshold).mean() * 100
+    axes[0].set_title(f'{pct_improvable:.2f}% of states genuinely improvable')
+    axes[0].legend(fontsize=8)
     axes[0].grid(True, which='both', alpha=0.3)
 
-    # --- Right: CCDF by outcome, so the tails are directly comparable ---
     for label, mask, color in [('Survivors',     survivor & trust_mask,    'tab:blue'),
                                ('Non-survivors', nonsurvivor & trust_mask, 'tab:orange')]:
         h = np.sort(headroom_joint[mask])
         c = 1.0 - np.arange(len(h)) / len(h)
         axes[1].plot(h, c, lw=2, label=label, color=color)
+    axes[1].axvline(calibrated_threshold, color='k', ls=':', lw=1.5)
     axes[1].set_yscale('log')
     axes[1].set_xlabel('Headroom threshold')
     axes[1].set_ylabel('Fraction of states with headroom > threshold')
     axes[1].set_title('Headroom tail: survivors vs non-survivors')
-    axes[1].legend()
+    axes[1].legend(fontsize=8)
     axes[1].grid(True, which='both', alpha=0.3)
 
     plt.tight_layout()
     if save_dir is not None:
         plt.savefig(os.path.join(save_dir, "headroom_plot.png"), dpi=150, bbox_inches='tight')
     return fig, axes
+
 
 def plot_temporal_structure(sensitivity_joint, temporal_index, trust_mask, 
                   max_hours=None, min_n=20, save_dir=None):
@@ -690,6 +772,7 @@ def plot_temporal_structure(sensitivity_joint, temporal_index, trust_mask,
 
 def plot_direction_of_improvement(direction_per_dim, headroom_per_dim, 
                                    trust_mask, temporal_index, actions,
+                                   calibrated_threshold,
                                    early_cutoff=6, save_dir=None):
     """
     direction_per_dim: (N, action_dim) signed direction of best alternative
@@ -711,7 +794,8 @@ def plot_direction_of_improvement(direction_per_dim, headroom_per_dim,
         clin_d = actions[:, d]
 
         # meaningful = genuine headroom + trusted
-        meaningful = (hr_d > np.quantile(hr_d[hr_d > 0], 0.5)) & trust_mask
+        # meaningful = (hr_d > np.quantile(hr_d[hr_d > 0], 0.5)) & trust_mask
+        meaningful = (hr_d  > calibrated_threshold) & trust_mask
 
         # --- Row 0: overall direction histogram with early/late overlay ---
         ax = axes[0, d]
@@ -801,7 +885,8 @@ def plot_direction_of_improvement(direction_per_dim, headroom_per_dim,
 
 
 
-def headroom_by_disagreement(headroom_joint, disagreement, disagree_thresh, save_dir=None):
+def headroom_by_disagreement(headroom_joint, disagreement, disagree_thresh, 
+                             calibrated_threshold, save_dir=None):
     fig, ax = plt.subplots(figsize=(8, 5))
 
     # scatter — subsample for visibility
@@ -828,14 +913,14 @@ def headroom_by_disagreement(headroom_joint, disagreement, disagree_thresh, save
     # improvable at low vs high disagreement
     low_mask  = disagreement <  disagree_thresh
     high_mask = disagreement >= disagree_thresh
-    pct_low  = (headroom_joint[low_mask]  > 0.03).mean() * 100
-    pct_high = (headroom_joint[high_mask] > 0.03).mean() * 100
+    pct_low  = (headroom_joint[low_mask]  > calibrated_threshold).mean() * 100
+    pct_high = (headroom_joint[high_mask] > calibrated_threshold).mean() * 100
 
     # annotation block
     textstr = (
         f'Pearson r = {r:.3f} (p={p_r:.2e})\n'
         f'Spearman ρ = {rho:.3f} (p={p_rho:.2e})\n'
-        f'% improvable (>0.03):\n'
+        f'% improvable (>{calibrated_threshold:.4f}):\n'
         f'  Low disagreement:  {pct_low:.2f}%\n'
         f'  High disagreement: {pct_high:.2f}%'
     )
@@ -860,7 +945,8 @@ def headroom_by_disagreement(headroom_joint, disagreement, disagree_thresh, save
 
 def stratify_disagreement_by_mortality(disagreement, headroom_joint, 
                                         mortality_values, temporal_index,
-                                        disagree_thresh, save_dir=None):
+                                        disagree_thresh, calibrated_threshold,
+                                        save_dir=None):
     
     survivor_mask    = mortality_values == 0
     nonsurvivor_mask = mortality_values == 1
@@ -876,10 +962,10 @@ def stratify_disagreement_by_mortality(disagreement, headroom_joint,
         print(f"  Median disagreement:      {np.median(disagreement[mask]):.4f}")
         print(f"  % above trust threshold:  "
               f"{(disagreement[mask] >= disagree_thresh).mean()*100:.1f}%")
-        print(f"  % improvable (low disagree, >0.03):  "
-              f"{(headroom_joint[mask & low_mask] > 0.03).mean()*100:.2f}%")
-        print(f"  % improvable (high disagree, >0.03): "
-              f"{(headroom_joint[mask & high_mask] > 0.03).mean()*100:.2f}%")
+        print(f"  % improvable (low disagree, >{calibrated_threshold:.4f}):  "
+              f"{(headroom_joint[mask & low_mask] > calibrated_threshold).mean()*100:.2f}%")
+        print(f"  % improvable (high disagree, >{calibrated_threshold:.4f}): "
+              f"{(headroom_joint[mask & high_mask] > calibrated_threshold).mean()*100:.2f}%")
         print(f"  Mean temporal index:      {temporal_index[mask].mean():.1f}h")
         print()
 
@@ -906,10 +992,10 @@ def stratify_disagreement_by_mortality(disagreement, headroom_joint,
         (disagreement[m] >= disagree_thresh).mean() * 100 for m in masks
     ]
     pct_improvable_low = [
-        (headroom_joint[m & low_mask] > 0.03).mean() * 100 for m in masks
+        (headroom_joint[m & low_mask] > calibrated_threshold).mean() * 100 for m in masks
     ]
     pct_improvable_high = [
-        (headroom_joint[m & high_mask] > 0.03).mean() * 100 for m in masks
+        (headroom_joint[m & high_mask] > calibrated_threshold).mean() * 100 for m in masks
     ]
 
     x     = np.arange(len(categories))
@@ -976,7 +1062,65 @@ def stratify_disagreement_by_mortality(disagreement, headroom_joint,
     return fig, axes
 
 
+
+def plot_noise_floor_comparison(real_headroom, noise_headroom, reward_name="headroom",
+                                  min_gap=0.01, stable_window=20, 
+                                  threshold=None, thresholds=None, 
+                                  gap=None, save_dir=None):
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # --- Left: CCDF comparison with calibrated threshold marked ---
+    ax = axes[0]
+    for d, label, color in [
+        (real_headroom,  'Clinician-centred headroom', 'tab:blue'),
+        (noise_headroom, 'Noise floor (random baseline)', 'tab:red'),
+    ]:
+        d_sorted = np.sort(d)
+        ccdf = 1.0 - np.arange(len(d_sorted)) / len(d_sorted)
+        ax.plot(d_sorted, ccdf, lw=2, label=label, color=color)
+
+    ax.set_yscale('log')
+    ax.set_xlabel('Headroom threshold')
+    ax.set_ylabel('Fraction of states with headroom > threshold')
+    ax.set_title(f'Noise floor calibration — {reward_name}')
+
+    if threshold is not None:
+        ax.axvline(threshold, color='k', ls=':', lw=1.5,
+                   label=f'Calibrated threshold = {threshold:.4f}')
+        pct_above = (real_headroom > threshold).mean() * 100
+        ax.annotate(f'{pct_above:.2f}% of states\nabove threshold',
+                    xy=(threshold, (real_headroom > threshold).mean()),
+                    xytext=(15, 15), textcoords='offset points', fontsize=8,
+                    arrowprops=dict(arrowstyle='->', lw=0.8))
+
+    ax.legend(fontsize=8)
+    ax.grid(True, which='both', alpha=0.3)
+
+    # --- Right: the gap itself, showing where it stabilises ---
+    ax2 = axes[1]
+    ax2.plot(thresholds, gap, lw=2, color='tab:purple')
+    ax2.axhline(min_gap, color='gray', ls='--', lw=1, label=f'Min gap = {min_gap}')
+    if threshold is not None:
+        ax2.axvline(threshold, color='k', ls=':', lw=1.5,
+                    label=f'Calibrated threshold = {threshold:.4f}')
+    ax2.set_xlabel('Headroom threshold')
+    ax2.set_ylabel('CCDF gap (real − noise)')
+    ax2.set_title('Divergence between real and noise-floor CCDFs')
+    ax2.legend(fontsize=8)
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, f"noise_floor_{reward_name}.png"),
+                    dpi=150, bbox_inches='tight')
+
+    return fig, axes, threshold
+
+
 def plot_figures(action_analysis, save_dir=None):
+    threshold = _load_npz_scalar(action_analysis, 'threshold')
+
     # ---- guards: only interpret headroom/direction where the model is trustworthy ----
     disagree_thresh = np.quantile(action_analysis['disagreement'], 0.75)   # flag top-quartile uncertainty
     trust_mask = action_analysis['disagreement'] < disagree_thresh
@@ -998,7 +1142,8 @@ def plot_figures(action_analysis, save_dir=None):
         action_analysis['headroom_joint'], 
         trust_mask, 
         survivor, 
-        nonsurvivor, 
+        nonsurvivor,
+        threshold,
         save_dir=save_dir
     )
 
@@ -1017,6 +1162,7 @@ def plot_figures(action_analysis, save_dir=None):
         trust_mask, 
         action_analysis['temporal_index'],
         actions=action_analysis['clinician_actions'],
+        calibrated_threshold=threshold,
         save_dir=save_dir
     )
 
@@ -1025,6 +1171,7 @@ def plot_figures(action_analysis, save_dir=None):
         action_analysis['headroom_joint'], 
         action_analysis['disagreement'], 
         disagree_thresh, 
+        threshold,
         save_dir=save_dir
     )
 
@@ -1034,10 +1181,18 @@ def plot_figures(action_analysis, save_dir=None):
         action_analysis['mortality_values'], 
         action_analysis['temporal_index'],
         disagree_thresh, 
+        threshold,
         save_dir=save_dir
     )
 
-
+    plot_noise_floor_comparison(
+        action_analysis['headroom_joint'],
+        action_analysis['noise_headroom'],
+        threshold=threshold,
+        thresholds=action_analysis['thresholds'],
+        gap=action_analysis['gap'],
+        save_dir=save_dir
+    )
 
 
     return

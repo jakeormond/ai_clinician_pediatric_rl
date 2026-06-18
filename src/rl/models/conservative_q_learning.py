@@ -463,6 +463,10 @@ class CQL:
 		temp: float = 1.0,         # Temperature for the LogSumExp
 		num_samples: int = 10,   # How many random actions to sample for the penalty
 
+		actor_loss_bc_scale: float = 2.0,  # Weight for the BC loss in the actor update
+		actor_loss_q_scale: float = 50.0,   # Weight for the Q loss in the actor update
+		actor_loss_entropy_scale: float = 0.1, # Weight for the entropy loss in the actor update
+
 		device: str = "CUDA" if torch.cuda.is_available() else "CPU",
 		action_mode: str = "continuous",
 		dose_actions: int = 2,  #  Number of dose actions
@@ -471,7 +475,10 @@ class CQL:
 		grad_clip: float = None,  # Add grad_clip argument
 		ema_alpha: float = 0.99,  # Add ema_alpha argument for moving
 		reward_scaling: float = 1.0,
-		use_monte_carlo_terminal_returns: bool = False
+		use_monte_carlo_terminal_returns: bool = False,
+
+		ratio_of_fluid_to_vaso: float = 1.0  # Add ratio_of_fluid_to_vaso argument
+
 	):
 		
 		self.actor = actor
@@ -491,6 +498,9 @@ class CQL:
 		self.temp = temp         # Add temp as an argument and assign it to the instance variable
 		self.num_samples = num_samples   # Add num_samples as an argument and assign it to the instance variable
 	
+		self.actor_loss_bc_scale = actor_loss_bc_scale
+		self.actor_loss_q_scale = actor_loss_q_scale
+		self.actor_loss_entropy_scale = actor_loss_entropy_scale
 
 		self.device = device
 		self.action_mode = action_mode
@@ -507,6 +517,8 @@ class CQL:
 		self.reward_scaling = reward_scaling
 
 		self.use_monte_carlo_terminal_returns = use_monte_carlo_terminal_returns
+
+		self.ratio_of_fluid_to_vaso = ratio_of_fluid_to_vaso
 
 		self.total_it = 0
 
@@ -534,49 +546,49 @@ class CQL:
 		############# MACRO LOSS #############
 		fluid_volume_loss = (pi[:, 0].mean() - action[:, 0].mean()) ** 2
 		vaso_volume_loss  = (pi[:, 1].mean()  - action[:, 1].mean()) ** 2		
-		vaso_volume_loss_weight = 10.0
+		vaso_volume_loss_weight = self.ratio_of_fluid_to_vaso
 		
-		########### MICRO LOSS ###########
-		# 1. Compute raw squared errors
-		squared_errors = (pi - action) ** 2 # [B, T, 2]
+		# ########### MICRO LOSS ###########
+		# # 1. Compute raw squared errors
+		# squared_errors = (pi - action) ** 2 # [B, T, 2]
 		
-		# 2. Define your weights
-		fluid_loss_weight = 1.0
-		vaso_loss_weight = 5.0  # Scale up the entire vasopressor channel        
-		active_multiplier = 1.0 # 10.0 # Heavily punish missing a true active dose
+		# # 2. Define your weights
+		# fluid_loss_weight = 1.0
+		# vaso_loss_weight = 5.0  # Scale up the entire vasopressor channel        
+		# active_multiplier = 1.0 # 10.0 # Heavily punish missing a true active dose
 		
-		# 3. Construct the weight matrix
-		weights = torch.ones_like(action)
-		weights[:, 0] = fluid_loss_weight
-		weights[:, 1] = vaso_loss_weight
+		# # 3. Construct the weight matrix
+		# weights = torch.ones_like(action)
+		# weights[:, 0] = fluid_loss_weight
+		# weights[:, 1] = vaso_loss_weight
 
-		# Apply the extra multiplier ONLY where the true fluid dose is > 0
-		true_fluid = action[:, 0]
-		weights[:, 0] = torch.where(true_fluid > 0, fluid_loss_weight * active_multiplier, fluid_loss_weight)
+		# # Apply the extra multiplier ONLY where the true fluid dose is > 0
+		# true_fluid = action[:, 0]
+		# weights[:, 0] = torch.where(true_fluid > 0, fluid_loss_weight * active_multiplier, fluid_loss_weight)
 
-		# Apply the extra multiplier ONLY where the true vasopressor dose is > 0
-		true_vaso = action[:, 1]
-		weights[:, 1] = torch.where(true_vaso > 0, vaso_loss_weight * active_multiplier, vaso_loss_weight)
+		# # Apply the extra multiplier ONLY where the true vasopressor dose is > 0
+		# true_vaso = action[:, 1]
+		# weights[:, 1] = torch.where(true_vaso > 0, vaso_loss_weight * active_multiplier, vaso_loss_weight)
 		
-		# 4. Apply weights and mask out padding steps
-		micro_fluid_loss = ((squared_errors[:, 0] * weights[:, 0])* exp_weights.squeeze()).mean()
-		micro_vaso_loss = ((squared_errors[:, 1] * weights[:, 1])* exp_weights.squeeze()).mean()
+		# # 4. Apply weights and mask out padding steps
+		# micro_fluid_loss = ((squared_errors[:, 0] * weights[:, 0])* exp_weights.squeeze()).mean()
+		# micro_vaso_loss = ((squared_errors[:, 1] * weights[:, 1])* exp_weights.squeeze()).mean()
 		
-		# macro and micro weight
-		lambda_macro = 10.0
-		lambda_micro = 5.0
+		# # macro and micro weight
+		# lambda_macro = 10.0
+		# lambda_micro = 5.0
 
-		fluid_loss = lambda_macro * fluid_volume_loss + lambda_micro * micro_fluid_loss
-		vaso_volume_loss = vaso_volume_loss * vaso_volume_loss_weight # we can scale up the macro vaso loss separately if we want to encourage better matching of overall vaso usage, which is clinically important
-		vaso_loss = lambda_macro * vaso_volume_loss + lambda_micro * micro_vaso_loss		
+		# fluid_loss = lambda_macro * fluid_volume_loss + lambda_micro * micro_fluid_loss
+		# vaso_volume_loss = vaso_volume_loss * vaso_volume_loss_weight # we can scale up the macro vaso loss separately if we want to encourage better matching of overall vaso usage, which is clinically important
+		# vaso_loss = lambda_macro * vaso_volume_loss + lambda_micro * micro_vaso_loss		
 		
-		total_loss = fluid_loss + vaso_loss
+		total_loss = fluid_volume_loss + vaso_volume_loss_weight*vaso_volume_loss
 		actor_dict = {
 			"total_bc_loss": total_loss,
 			"fluid_volume_loss": fluid_volume_loss,
 			"vaso_volume_loss": vaso_volume_loss,
-			"mse_fluid_loss": micro_fluid_loss,
-			"mse_vaso_loss": micro_vaso_loss
+			# "mse_fluid_loss": micro_fluid_loss,
+			# "mse_vaso_loss": micro_vaso_loss
 		}
 		
 		return actor_dict
@@ -819,10 +831,11 @@ class CQL:
 
 			f_ent = self.actor.fluid_log_std.clamp(self.actor.log_std_min, self.actor.log_std_max)
 			v_ent = self.actor.vaso_log_std.clamp(self.actor.log_std_min, self.actor.log_std_max)
-			actor_loss_ent = -0.1 * (f_ent + v_ent)					
+			actor_loss_ent = -(f_ent + v_ent)				
 
-
-			actor_loss = actor_loss_bc + 100*actor_loss_q + actor_loss_ent  # combine the losses with a large weight on the Q loss to encourage improvement over the current policy
+			actor_loss = self.actor_loss_bc_scale * actor_loss_bc + \
+				self.actor_loss_q_scale * actor_loss_q + \
+					self.actor_loss_entropy_scale * actor_loss_ent  # combine the losses with a large weight on the Q loss to encourage improvement over the current policy
 			# actor_loss = actor_loss_bc 
 			# actor_loss = actor_loss_q 
 			# ctor_loss = 100*actor_loss_q + self.beta * actor_loss_bc + actor_loss_ent # i think CQL doesn't normally include a BC 
@@ -1105,8 +1118,15 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		beta=hyperparams['beta'],
 		cql_alpha=hyperparams['cql_alpha'],
 		temp=hyperparams['temp'],
+
+		actor_loss_bc_scale=hyperparams['actor_loss_bc_scale'],
+		actor_loss_q_scale=hyperparams['actor_loss_q_scale'],
+		actor_loss_entropy_scale=hyperparams['actor_loss_entropy_scale'],
+
 		num_samples=hyperparams['num_samples'],
 		use_monte_carlo_terminal_returns=hyperparams['monte_carlo_terminal_returns'], 
+
+		ratio_of_fluid_to_vaso=config_manager.training_config['ratio_of_fluid_to_vaso']
 	)
 
 	return trainer

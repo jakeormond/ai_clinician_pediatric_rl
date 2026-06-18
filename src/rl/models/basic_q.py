@@ -1,4 +1,3 @@
-import typing
 from typing import Dict, List, Tuple
 import copy
 import numpy as np
@@ -586,9 +585,16 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 
 def get_evaluator(state_dim, action_dim, config_manager):
     discount = config_manager.training_config['discount']
-    model_path = os.path.join(config_manager.paths['rl_models_dir'], 
-        'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
-        config_manager.actions, f'final_model_discount_{discount}')
+    
+    if config_manager.training_config['health_score_scale'] == 0.0:    
+        model_path = os.path.join(config_manager.paths['rl_models_dir'], 
+            'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
+            config_manager.actions, "health_score_change_only", f'final_model_discount_{discount}')
+    else:
+        model_path = os.path.join(config_manager.paths['rl_models_dir'], 
+            'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
+            config_manager.actions, "raw_health_score_only", "final_model_discount_{discount}")
+    
     model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
     model_path = os.path.join(model_path, model_folder)
 
@@ -604,13 +610,13 @@ def get_evaluator(state_dim, action_dim, config_manager):
 
 def load_critic(state_dim, action_dim, config_manager = None, model_path = None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if model_path is None and config_manager is not None:
-        model_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.model_type, 
-                        f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions, "final_model")
+    # if model_path is None and config_manager is not None:
+    #     model_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.model_type, 
+    #                     f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions, "final_model")
     
-        # get folder inside model_path
-        model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
-        model_path = os.path.join(model_path, model_folder)
+    #     # get folder inside model_path
+    #     model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
+    #     model_path = os.path.join(model_path, model_folder)
 
     final_model_path = os.path.join(model_path, "final_model.pt")
 

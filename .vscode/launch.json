@@ -434,7 +434,7 @@
                 "--split_num", "0",
                 "--cohort", "sepsis",
                 "--actions", "intake-vis", 
-                "--discount", "0.975"
+                "--discount", "0.99"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
@@ -455,7 +455,8 @@
                 "--split_num", "0",
                 "--cohort", "sepsis",
                 "--actions", "intake-vis", 
-                "--discount", "0.975"
+                "--health_score_type", "health_score_change_only",
+                "--discount", "0.99"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

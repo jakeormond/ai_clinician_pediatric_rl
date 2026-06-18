@@ -61,6 +61,7 @@ def parse_args():
     parser.add_argument("--split_num", type=int, default=0)
     parser.add_argument("--cohort", type=str, default="sepsis")
     parser.add_argument("--actions", type=str, default="vis-intake")
+    parser.add_argument("--health_score_type", type=str, default=None)
     parser.add_argument("--discount", type=float, default=None)
     
     # The Flag (Action: store_true means if it's in the args, it becomes True)
@@ -138,7 +139,7 @@ def get_trajectory_data(processor, traj_start_inds, stay_id, as_tensor=True):
     mortalities = processor.rl_dataset["mortality"][indices]
 
     if not as_tensor:
-        return states, actions, rewards, next_states, next_actions, dones, mortalities
+        return states, actions, rewards, next_states, next_actions, dones, mortalities, indices
 
     # convert to torch tensors
     states = torch.as_tensor(states, dtype=torch.float32).to('cuda')
@@ -149,7 +150,7 @@ def get_trajectory_data(processor, traj_start_inds, stay_id, as_tensor=True):
     dones = torch.as_tensor(dones, dtype=torch.float32).to('cuda')
     mortalities = torch.as_tensor(mortalities, dtype=torch.float32).to('cuda')
 
-    return states, actions, rewards, next_states, next_actions, dones, mortalities
+    return states, actions, rewards, next_states, next_actions, dones, mortalities, indices
 
 
 
@@ -296,7 +297,8 @@ def evaluate_final_model(args=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     model_dir = os.path.join(RL_MODELS_PATH, 'basic_q', 
-        f"split_{args.split_num}", args.cohort, args.actions, f"final_model_discount_{discount}")
+        f"split_{args.split_num}", args.cohort, args.actions, 
+        args.health_score_type, f"final_model_discount_{discount}")
     # get the model dir inside the final_model folder
     inner_folders = [inner_f for inner_f in os.listdir(model_dir) 
                      if os.path.isdir(os.path.join(model_dir, inner_f))]
@@ -342,6 +344,7 @@ def evaluate_final_model(args=None):
 
     # get the actions and get their standard deviation
     actions = test_processor.rl_dataset["actions"]
+    shuffled_actions = actions[torch.randperm(actions.shape[0])]
     action_dim = actions.shape[1]
     
     action_std = torch.as_tensor(actions.std(axis=0), dtype=torch.float32).to(device)
@@ -367,8 +370,9 @@ def evaluate_final_model(args=None):
     
     for stay_id in stay_ids:
 
-        states, actions, rewards, next_states, next_actions, dones, mortalities = \
+        states, actions, rewards, next_states, next_actions, dones, mortalities, indices = \
             get_trajectory_data(test_processor, traj_start_inds, stay_id, as_tensor=True) 
+        shuffled_actions_stay = shuffled_actions[indices]
 
         n_batches = int(np.ceil(states.shape[0] / batch_size))
         
@@ -386,6 +390,7 @@ def evaluate_final_model(args=None):
             end_idx = min((i + 1) * batch_size, states.shape[0])
             states_batch = states[start_idx:end_idx]
             actions_batch = actions[start_idx:end_idx]
+            shuffled_actions_batch = shuffled_actions_stay[start_idx:end_idx]
 
             # evaluate the model on the batch
             with torch.no_grad():
@@ -403,6 +408,9 @@ def evaluate_final_model(args=None):
                     q_a = (q1_a + q2_a) / 2.0
                     best_joint = torch.maximum(best_joint, q_a)
                     joint_q_samples.append(q_a)
+
+                    alt_shuffled = (shuffled_actions_batch + noise).clamp(0.0, 1.0)  # use the shuffled actions for the alternative
+
                 
                 joint_q_samples = torch.cat(joint_q_samples, dim=1)   # (B, K)
                 hr_joint   = best_joint - q_clin

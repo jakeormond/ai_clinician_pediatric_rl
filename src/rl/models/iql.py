@@ -514,8 +514,10 @@ class IQL:
 		value_net_scheduler: torch.optim.lr_scheduler._LRScheduler = None,
 		
 		discount: float = 0.975,
+		expectile: float = 0.7,
+		awr_temperature: float = 1.0,
 
-		policy_freq: int = 2,
+		policy_freq: int = 1,
 
 		device: str = "CUDA" if torch.cuda.is_available() else "CPU",
 		
@@ -545,7 +547,9 @@ class IQL:
 		self.value_net_scheduler = value_net_scheduler
 
 		self.discount = discount
-
+		self.expectile = expectile
+		self.awr_temperature = awr_temperature
+		
 		self.policy_freq = policy_freq
 
 		self.device = device
@@ -558,6 +562,7 @@ class IQL:
 		# for calculating moving average of gradient clipping binary
 		self.critic_clip_fraction_ema = 0.0
 		self.actor_clip_fraction_ema = 0.0
+		self.value_clip_fraction_ema = 0.0
 		self.ema_alpha = ema_alpha # Closer to 1.0 means more smoothing
 		
 		self.reward_scaling = reward_scaling
@@ -572,13 +577,6 @@ class IQL:
 
 		self.utils = TrainerUtils()
 
-		# copy the actor network to create the target actor
-		self.actor_target = copy.deepcopy(self.actor)
-		self.actor_target.eval()  # Target networks start in eval mode to disable Dropout
-
-		# copy the critic network to create the target critic
-		self.critic_target = copy.deepcopy(self.critic)
-		self.critic_target.eval()  # Target networks start in eval mode to disable Dropout
 
 
 	def select_action(self, state):
@@ -615,21 +613,7 @@ class IQL:
 		}
 		
 		return actor_dict
-		
 
-	def target_q(self, action, next_state, reward, not_done):
-		with torch.no_grad():
-			# Select action according to policy and add clipped noise
-			next_action, _ = self.actor_target(next_state, deterministic=True)
-	
-			# Compute the target Q value
-			target_Q1, target_Q2 = self.critic_target(next_state, next_action)
-			target_Q = torch.min(target_Q1, target_Q2)
-
-			# Bellman equation
-			target_Q = reward + not_done * self.discount * target_Q			
-			
-			return target_Q
 
 
 	def train(self, batch: TensorBatch) -> Tuple[Dict[str, float], Dict[str, float]]:
@@ -663,13 +647,13 @@ class IQL:
 		# ---- 1. Value network update (expectile regression against dataset action's Q) ----
 		self.value_net.train()
 		with torch.no_grad():
-			q1, q2 = self.critic_target(state, action)
+			q1, q2 = self.critic(state, action)
 			q_min = torch.min(q1, q2)
 
 		v = self.value_net(state)
 		v_loss = self.expectile_loss(q_min - v, expectile=self.expectile).mean()
 		
-		self.value_optimizer.zero_grad()
+		self.value_net_optimizer.zero_grad()
 		v_loss.backward()
 		value_grad_norm = self._get_grad_norm(self.value_net)
 		grad_norm = {"value_grad_norm": value_grad_norm}
@@ -678,9 +662,9 @@ class IQL:
 			self.value_clip_fraction_ema = self.ema_alpha * self.value_clip_fraction_ema + (1 - self.ema_alpha) * grad_norm['value_was_clipped']
 			grad_norm['value_clip_fraction_ema'] = self.value_clip_fraction_ema
 			torch.nn.utils.clip_grad_norm_(self.value_net.parameters(), self.grad_clip)
-		self.value_optimizer.step()
-		if self.value_scheduler is not None:
-			self.value_scheduler.step()
+		self.value_net_optimizer.step()
+		if self.value_net_scheduler is not None:
+			self.value_net_scheduler.step()
 		
 		# ---- 2. Critic update (bootstraps from V(s'), not from a sampled next action) ----	
 		self.critic.train()          # Dropout ACTIVE for the network we are updating
@@ -720,51 +704,52 @@ class IQL:
 		losses["lr_critic"] = self.critic_optimizer.param_groups[0]['lr']
 
 
-		# update networks
-		with torch.no_grad():
-			for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-				target_param.mul_(1.0 - self.tau)
-				target_param.add_(param.data * self.tau)
-
 
 		# ---- 3. Actor update (advantage-weighted regression — delayed, like CQL) ----
 		with torch.no_grad():
-			q1, q2 = self.critic(state, action)
-			q_min = torch.min(q1, q2)
+			# q1, q2 = self.critic(state, action)
+			# q_min = torch.min(q1, q2)
+			q_min = torch.min(current_Q1, current_Q2)
 			v = self.value_net(state)
-			advantage = q_min - v
+			advantage_qv = q_min - v
 
 		# Delayed policy updates
-		if self.total_it % self.policy_freq != 0:
-			pi, _ = self.actor(state, deterministic=True)
-
+		if self.total_it % self.policy_freq != 0 or self.train_actor_flag is False:
+			self.actor.eval()  # Set actor to eval mode to disable Dropout
 			with torch.no_grad():
+				pi, _ = self.actor(state, deterministic=True)
 				Q1_actor, Q2_actor = self.critic(state, pi)
+
 			Q_actor = torch.min(Q1_actor, Q2_actor)
 
 			q_stats = get_q_stats(current_Q1, current_Q2, Q_actor, mortality)
-			q_stats["advantage_Q_mean"] = advantage.mean().item()		
+			q_stats["advantage_qv_mean"] = advantage_qv.mean().item()		
 		
 		else:
 			# Compute actor loss
 			self.actor.train() # Dropout ACTIVE for the network we are updating
 			
 			# Sample actions from the stochastic actor
-			pi, log_prob = self.actor(state)
+			pi, _ = self.actor(state, deterministic=True)
 			
-			exp_weight = torch.exp(advantage * self.awr_temperature).clamp(max=100.0).detach()
+			exp_weight = torch.exp(advantage_qv * self.awr_temperature).clamp(max=100.0).detach()
 
 			# Weighted regression toward the dataset action, weighted by advantage —
 			# this REPLACES the Q-maximisation gradient CQL used. The actor never
 			# differentiates through the critic in IQL.
 			actor_loss = (exp_weight * (pi - action).pow(2)).mean()
+
+			losses["actor_loss"] = actor_loss.item()
+			losses["exp_weight_mean"] = exp_weight.mean().item()
+			losses["exp_weight_max"] = exp_weight.max().item()
+			losses["exp_weight_pct_at_ceiling"] = (exp_weight >= 99.9).float().mean().item()
 			
 			with torch.no_grad():
 				Q1_actor, Q2_actor = self.critic(state, pi)
 			Q_actor = torch.min(Q1_actor, Q2_actor)
 			
 			q_stats = get_q_stats(current_Q1, current_Q2, Q_actor, mortality)
-			q_stats["advantage_Q_mean"] = advantage.mean().item()
+			q_stats["advantage_qv_mean"] = advantage_qv.mean().item()
 			
 			self.actor_optimizer.zero_grad()
 			actor_loss.backward()
@@ -826,6 +811,7 @@ class IQL:
 
 		return v0_mean, v0_sem
 
+
 	def evaluate(self, batch: TensorBatch) -> Tuple[Dict[str, float], Dict[str, float], Dict[str, float]]:
 		self.actor.eval()
 		self.critic.eval()
@@ -852,22 +838,37 @@ class IQL:
 			v = self.value_net(state)
 			q_min = torch.min(current_Q1, current_Q2)
 			v_loss = self.expectile_loss(q_min - v, expectile=self.expectile).mean()
-			advantage = q_min - v
+			advantage_qv = q_min - v
 
 			pi, _ = self.actor(state, deterministic=True)
+			Q1_actor, Q2_actor = self.critic(state, pi)
+			Q_actor = torch.min(Q1_actor, Q2_actor)
+
+			# Actor loss on held-out data, computed the same way as train(),
+			# but never used to update parameters — purely diagnostic
+			exp_weight = torch.exp(advantage_qv * self.awr_temperature).clamp(max=100.0)
+			actor_loss = (exp_weight * (pi - action).pow(2)).mean()
 
 			losses = {
 				"critic_loss": critic_loss.item(),
 				"v_loss": v_loss.item(),
+				"actor_loss": actor_loss.item(),
+				"exp_weight_mean": exp_weight.mean().item(),
+				"exp_weight_max": exp_weight.max().item(),
+				"exp_weight_pct_at_ceiling": (exp_weight >= 99.9).float().mean().item()
 			}
 
 			neuron_stats = self.critic.get_neuron_stats(state, action)
-			q_stats = get_q_stats(current_Q1, current_Q2, None, mortality)
-			q_stats["advantage_Q_mean"] = advantage.mean().item()
+			q_stats = get_q_stats(current_Q1, current_Q2, Q_actor, mortality)
+			q_stats["advantage_qv_mean"] = advantage_qv.mean().item()
 
 		return losses, q_stats, neuron_stats
 
 	
+	def set_actor_active(self, active: bool):
+		self.train_actor_flag = active
+
+
 	def state_dict(self) -> Dict[str, torch.Tensor]:
 		return {
 			"actor": self.actor.state_dict(),
@@ -875,10 +876,9 @@ class IQL:
 			
 			"critic": self.critic.state_dict(),
 			"critic_optimizer": self.critic_optimizer.state_dict(),
-			"critic_target": self.critic_target.state_dict(),
 			
 			"value_net": self.value_net.state_dict(),
-			"value_optimizer": self.value_optimizer.state_dict(),		
+			"value_net_optimizer": self.value_net_optimizer.state_dict(),		
 			
 		}
 
@@ -891,30 +891,41 @@ class IQL:
 		torch.save(self.actor.state_dict(), filename + "_actor")
 		torch.save(self.actor_optimizer.state_dict(), filename + "_actor_optimizer")
 
+		torch.save(self.value_net.state_dict(), filename + "_value_net")
+		torch.save(self.value_net_optimizer.state_dict(), filename + "_value_net_optimizer")
+
 	######################## currently unused ###############################
 	def load(self, filename):
 		self.critic.load_state_dict(torch.load(filename + "_critic"))
 		self.critic_optimizer.load_state_dict(torch.load(filename + "_critic_optimizer"))
-		self.critic_target = copy.deepcopy(self.critic)
 
 		self.actor.load_state_dict(torch.load(filename + "_actor"))
 		self.actor_optimizer.load_state_dict(torch.load(filename + "_actor_optimizer"))
-		self.actor_target = copy.deepcopy(self.actor)
+
+		self.value_net.load_state_dict(torch.load(filename + "_value_net"))
+		self.value_net_optimizer.load_state_dict(torch.load(filename + "_value_net_optimizer"))
+
+
 
 
 def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 
 	learning_rate_critic = float(hyperparams['learning_rate_critic'])
-	learning_rate_actor = float(hyperparams['learning_rate_actor'])
-	weight_decay = float(hyperparams.get('weight_decay', 0.01)) # New hyperparam
+	learning_rate_actor  = float(hyperparams['learning_rate_actor'])
+	learning_rate_value  = float(hyperparams.get('learning_rate_value', learning_rate_critic))
+	weight_decay = float(hyperparams.get('weight_decay', 0.01))
 	device = config_manager.training_config['device']
 
-	
+	hidden_dim = hyperparams['hidden_dim']
+	dropout = hyperparams['dropout']
+
+	value_dropout = hyperparams['value_dropout']
+	value_weight_decay = hyperparams['value_weight_decay']
+
 	actor = Actor(
 		state_dim=state_dim, 
 		action_dim=action_dim, 
-		# hidden_dim=hyperparams['hidden_dim'], 
-		dropout=hyperparams['dropout']
+		dropout=dropout
 	).to(config_manager.training_config['device'])
 	
 	actor_optimizer = torch.optim.AdamW(
@@ -923,14 +934,25 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		weight_decay=weight_decay
 		)
 	
-	actor_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-		actor_optimizer, 
-		T_max=hyperparams['total_steps']//hyperparams['policy_freq'], # we step the actor scheduler every policy_freq steps, so T_max should be total_steps // policy_freq
-		eta_min=learning_rate_actor * .10
+	# Actor only updates every policy_freq steps, AND only once unfrozen —
+	# T_max should reflect the number of ACTOR steps actually expected,
+	# i.e. (total_steps - actor_warmup_steps) // policy_freq, not the full
+	# total_steps // policy_freq, since the actor never sees any steps
+	# before warmup completes
+	actor_warmup_steps = 40000 # this is just a guess, since warm up is calculated in training.py 
+	# using convergence of v loss and critic loss
+	actor_total_steps = max(
+		(hyperparams['total_steps'] - actor_warmup_steps) // hyperparams['policy_freq'],
+		1
 	)
 	
-	hidden_dim = hyperparams['hidden_dim']
-	dropout = hyperparams['dropout']
+	actor_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+		actor_optimizer,
+		T_max=actor_total_steps,
+		eta_min=learning_rate_actor * 0.10
+	)
+	
+
 	critic = Critic(
 		state_dim, 
 		action_dim,
@@ -950,67 +972,50 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		eta_min=learning_rate_critic * .10
 	)
 
-	trainer = IQL(               # LIST OF PARAMETERS NEEDS TO BE UPDATED
+
+	value_net = ValueNetwork(
+		state_dim,
+		hidden_dim=hidden_dim,
+		dropout=value_dropout,
+	).to(device)
+
+	value_net_optimizer = torch.optim.AdamW(
+		value_net.parameters(),
+		lr=learning_rate_value,
+		weight_decay=value_weight_decay
+	)
+
+	value_net_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+		value_net_optimizer,
+		T_max=hyperparams['total_steps'],
+		eta_min=learning_rate_value * 0.10
+	)
+
+	trainer = IQL(
 		actor=actor,
 		actor_optimizer=actor_optimizer,
 		actor_scheduler=actor_scheduler,
 		critic=critic,
 		critic_optimizer=critic_optimizer,
 		critic_scheduler=critic_scheduler,
+		value_net=value_net,
+		value_net_optimizer=value_net_optimizer,
+		value_net_scheduler=value_net_scheduler,
+
 		discount=hyperparams['discount'],
-		device=config_manager.training_config['device'],
+		expectile=hyperparams['expectile'],
+		awr_temperature=hyperparams['awr_temperature'],
+		policy_freq=hyperparams['policy_freq'],
+
+		device=device,
 		action_mode=config_manager.action_mode,
 		tau=hyperparams['tau'],
-		policy_noise=hyperparams['policy_noise'],
-		noise_clip=hyperparams['noise_clip'],
 		grad_clip=hyperparams['grad_clip'],
-		policy_freq=hyperparams['policy_freq'],
-		beta=hyperparams['beta'],
-		cql_alpha=hyperparams['cql_alpha'],
-		temp=hyperparams['temp'],
+		reward_scaling=hyperparams.get('reward_scaling', 1.0),
+		use_monte_carlo_terminal_returns=hyperparams['monte_carlo_terminal_returns'],
 
-		actor_loss_bc_scale=hyperparams['actor_loss_bc_scale'],
-		actor_loss_q_scale=hyperparams['actor_loss_q_scale'],
-		actor_loss_entropy_scale=hyperparams['actor_loss_entropy_scale'],
-
-		num_samples=hyperparams['num_samples'],
-		use_monte_carlo_terminal_returns=hyperparams['monte_carlo_terminal_returns'], 
-
-		ratio_of_fluid_to_vaso=config_manager.training_config['ratio_of_fluid_to_vaso']
 	)
+
 
 	return trainer
 
-
-# def load_trained_actor(state_dim, action_dim, config_manager = None, model_path = None):
-# 	"""
-# 	used to load a trained actor for train of Fitted Q Evaluation (FQE) or for deployment. 
-# 	"""
-# 	if model_path is None and config_manager is not None:
-# 		model_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.model_type, 
-# 						f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions, "final_model")
-
-# 		# get folder inside model_path
-# 		model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
-# 		model_path = os.path.join(model_path, model_folder)
-
-# 	final_model_path = os.path.join(model_path, "final_model.pt")
-
-# 	# load results.json from model_folder, which has state_dim 
-# 	results_path = os.path.join(model_path, "results.json")
-# 	if os.path.exists(results_path):
-# 		with open(results_path, "r") as f:
-# 			results = json.load(f)
-# 			hidden_dim = results["hyperparameters"]["hidden_dim"]
-# 			dropout = results["hyperparameters"]["dropout"]
-
-# 	actor = Actor(
-# 		state_dim = state_dim, 
-# 		action_dim = action_dim, 
-# 		hidden_dim = hidden_dim
-# 	).to(config_manager.training_config['device'])
-
-# 	actor.load_state_dict(torch.load(final_model_path, weights_only=True))
-# 	actor.eval()
-
-# 	return actor

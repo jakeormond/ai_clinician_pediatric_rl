@@ -68,7 +68,7 @@ def parse_arguments():
                         default='any_percent_bc', 
                         choices=[
                             'any_percent_bc', 'td3_bc', 'basic_q', 'reward_analysis',
-                            'conservative_q_learning', 'cvp'
+                            'conservative_q_learning', 'cvp', 'iql'
                             ], 
                         help='Model type to train (default: any_percent_bc)') 
 

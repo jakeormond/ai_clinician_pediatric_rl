@@ -1,0 +1,64 @@
+    project: "AI_Clininician"
+    "group": "reinforcement_learning"
+    name: "implicit_q_learning"
+
+    tuning: False
+
+    n_episodes: 1000
+    checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"
+    discount: 0.975
+    device: "cuda"
+    learning_rate_critic: "loguniform(1e-4, 1e-3)"
+    learning_rate_actor: "loguniform(1e-4, 1e-3)"
+    learning_rate_value: "loguniform(1e-4, 1e-3)"
+    dropout: 0.2
+    tau: [0.001, 0.005, 0.01]
+    weight_decay: 1e-4
+
+    # IQL-specific: replaces policy_noise/noise_clip/cql_alpha/temp/num_samples
+    expectile: [0.6, 0.7, 0.8, 0.9]          # asymmetry of V's expectile regression — higher pushes V closer to max_a Q
+    awr_temperature: 3.0 # "loguniform(0.1, 10.0)" # inverse temperature for advantage weighting in the actor loss
+    policy_freq: 1                            # see note below — no strong reason to delay beyond 1 in IQL
+
+    batch_size: 1024
+    hidden_dim: 64
+
+    # Early stopping parameters (fixed for all combinations)
+    early_stopping_flag: False
+    patience: 3
+    eval_freq: 1
+    min_delta: 0.0001
+
+    # evaluation parameters
+    monitor_v0: True
+
+    # validation loss
+    loss_metric: "critic_loss"   # was "bellman_loss" — see note below on naming
+
+    # changes to reward structure
+    make_rewards_positive: False
+
+    # include next actions
+    include_next_actions: True
+
+    # gradient clipping
+    grad_clip: 1.
+
+    # actor loss weighting — IQL's actor loss is a single advantage-weighted
+    # regression term (no separate BC/Q/entropy decomposition), so the old
+    # actor_loss_bc_scale / actor_loss_q_scale / actor_loss_entropy_scale
+    # don't apply. awr_temperature above plays the equivalent role.
+
+    # health score reward shaping parameters
+    health_score_hourly_change_clip: 100.
+    health_score_scale: 0.
+    health_score_hourly_change_scale: 1.
+    total_health_score_scale: 1.
+    potential_based_reward_shaping: False
+    terminal_health_score_reward: 2.
+
+    n_step: 0
+
+    monte_carlo_terminal_returns: False
+
+    use_compressed_latents: False

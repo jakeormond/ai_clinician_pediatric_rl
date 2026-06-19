@@ -34,7 +34,8 @@ MODEL_MODULES = {
     "basic_q": "src.rl.models.basic_q",
     "td3_bc": "src.rl.models.td3_bc",
     "conservative_q_learning": "src.rl.models.conservative_q_learning",
-    "cvp": "src.rl.models.cvp"
+    "cvp": "src.rl.models.cvp",
+    "iql": "src.rl.models.iql",
 }
 
 DISTRIBUTIONS = {
@@ -496,18 +497,35 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
         )
         
 
-def has_reached_minimum(loss_history, patience=5, min_delta=0.0):
+def has_reached_minimum(loss_history, loss_type="critic_loss", split="val", patience=5, min_delta=0.0):
     """
     Returns True once loss_history has gone `patience` epochs without
     achieving a new minimum better than min_delta improvement.
     This is standard early-stopping logic, repurposed as a
     'value function has converged' signal rather than a stop-training signal.
     """
-    if len(loss_history) < patience + 1:
+    key = f"{split}/{loss_type}"
+    if len(loss_history[key]) < patience + 1:
         return False
-    best_so_far = min(loss_history[:-patience])
-    recent_best = min(loss_history[-patience:])
+    best_so_far = min(loss_history[key][:-patience])
+    recent_best = min(loss_history[key][-patience:])
     return recent_best >= best_so_far - min_delta
+
+
+def is_stably_converged(loss_history, loss_type="v_loss", split="val", burn_in=10, window=10, rel_tol=0.05):
+    """
+    Returns True once loss_history has been relatively flat (std/mean < rel_tol)
+    over the last `window` epochs, but only evaluated AFTER `burn_in` epochs
+    have passed — avoiding the early near-zero/rising phase being mistaken
+    for convergence.
+    """
+    key = f"{split}/{loss_type}"
+    if len(loss_history[key]) < burn_in + window:
+        return False
+    
+    recent = np.array(loss_history[key][-window:])
+    rel_variability = recent.std() / (abs(recent.mean()) + 1e-8)
+    return rel_variability < rel_tol
 
 
 def train_with_hyperparameters(
@@ -620,7 +638,7 @@ def train_with_hyperparameters(
     testing = getattr(config_manager, 'testing', False)
     if testing:
         logger.info(" Testing mode enabled: will limit training to 10 epochs and 100 batches per epoch.")
-        n_epochs = min(n_epochs, 5)
+        n_epochs = min(n_epochs, 25)
     
     torch.cuda.empty_cache()
 
@@ -754,9 +772,13 @@ def train_with_hyperparameters(
             # converged, so we can start training the actor
             if config_manager.model_type == "iql":
                 if not trainer.train_actor_flag:
-                    min_flag_value = has_reached_minimum(training_metrics, loss_type="v_loss", patience=5, min_delta=0.0)
-                    min_flag_critic = has_reached_minimum(training_metrics, loss_type="critic_loss", patience=5, min_delta=0.0)
+                    min_flag_value = is_stably_converged(training_metrics.val_losses, loss_type="v_loss", burn_in=10, window=10, rel_tol=0.05)
+                    min_flag_critic = has_reached_minimum(training_metrics.val_losses, loss_type="critic_loss", patience=5, min_delta=0.0)
             
+                    if min_flag_value and min_flag_critic:
+                        trainer.set_actor_active(True)
+                        logger.info(f"Epoch {epoch}: V and Critic losses have converged, starting to train actor.")
+
             # Check for improvement and copy model parameters if best, only if early stopping is enabled
             if early_stopping['flag']:
                 improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)
@@ -828,6 +850,20 @@ def train_with_hyperparameters(
             'critic_target_state_dict': trainer.critic_target.state_dict(),
             'actor_optimizer_state_dict': trainer.actor_optimizer.state_dict(),
             'critic_optimizer_state_dict': trainer.critic_optimizer.state_dict(),
+            'hyperparameters': hyperparams,
+            'training_config': config_manager.training_config,
+        }
+        torch.save(checkpoint, model_path)
+
+    elif config_manager.model_type in ['iql']:
+        checkpoint = {
+            'total_it': trainer.total_it,
+            'actor_state_dict': trainer.actor.state_dict(),
+            'critic_state_dict': trainer.critic.state_dict(),
+            'v_net_state_dict': trainer.v_net.state_dict(),
+            'actor_optimizer_state_dict': trainer.actor_optimizer.state_dict(),
+            'critic_optimizer_state_dict': trainer.critic_optimizer.state_dict(),
+            'v_net_optimizer_state_dict': trainer.v_net_optimizer.state_dict(),
             'hyperparameters': hyperparams,
             'training_config': config_manager.training_config,
         }

@@ -21,7 +21,7 @@
     noise_clip: 0.5 # Range to clip target policy noise
     policy_freq: 2 # Frequency of delayed policy updates
     beta: 0.1 # Weighting for BC loss term
-    cql_alpha: 0.01 # 0.001 #.001 # Weighting for CQL penalty term
+    cql_alpha: 0.0001 # 0.01 # 0.001 #.001 # Weighting for CQL penalty term
     temp: 1.0 # Temperature for CQL penalty term
     num_samples: 10 # Number of samples for CQL penalty term
 
@@ -49,7 +49,7 @@
     # gradient clipping
     grad_clip: 1.0
 
-    actor_loss_bc_scale: 2.0
+    actor_loss_bc_scale: 0.5
     actor_loss_q_scale: 50.
     actor_loss_entropy_scale: 0.1
 

@@ -496,6 +496,20 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
         )
         
 
+def has_reached_minimum(loss_history, patience=5, min_delta=0.0):
+    """
+    Returns True once loss_history has gone `patience` epochs without
+    achieving a new minimum better than min_delta improvement.
+    This is standard early-stopping logic, repurposed as a
+    'value function has converged' signal rather than a stop-training signal.
+    """
+    if len(loss_history) < patience + 1:
+        return False
+    best_so_far = min(loss_history[:-patience])
+    recent_best = min(loss_history[-patience:])
+    return recent_best >= best_so_far - min_delta
+
+
 def train_with_hyperparameters(
         train_processor, 
         val_processor, 
@@ -736,6 +750,13 @@ def train_with_hyperparameters(
             current_val_loss = training_metrics.get_current_epoch_val_loss(loss_metric)
             logger.info(f"Epoch {epoch}: Val {loss_metric}={current_val_loss:.4f}")
                                  
+            # if model_type is iql, we need to check for whether v_net and critic loss have
+            # converged, so we can start training the actor
+            if config_manager.model_type == "iql":
+                if not trainer.train_actor_flag:
+                    min_flag_value = has_reached_minimum(training_metrics, loss_type="v_loss", patience=5, min_delta=0.0)
+                    min_flag_critic = has_reached_minimum(training_metrics, loss_type="critic_loss", patience=5, min_delta=0.0)
+            
             # Check for improvement and copy model parameters if best, only if early stopping is enabled
             if early_stopping['flag']:
                 improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)

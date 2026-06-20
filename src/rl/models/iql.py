@@ -646,6 +646,7 @@ class IQL:
 
 		# ---- 1. Value network update (expectile regression against dataset action's Q) ----
 		self.value_net.train()
+		self.critic.eval()  # Set critic to eval mode to disable Dropout
 		with torch.no_grad():
 			q1, q2 = self.critic(state, action)
 			q_min = torch.min(q1, q2)
@@ -667,8 +668,8 @@ class IQL:
 			self.value_net_scheduler.step()
 		
 		# ---- 2. Critic update (bootstraps from V(s'), not from a sampled next action) ----	
-		self.critic.train()          # Dropout ACTIVE for the network we are updating
-		
+		self.critic.train()        # Dropout ACTIVE for the network we are updating
+		self.value_net.eval()  # Set value net to eval mode to disable Dropout
 		with torch.no_grad(): # uses target actor for next action
 			if self.use_monte_carlo_terminal_returns:
 				# is 1 where mortality is 1, else 0. 
@@ -703,13 +704,12 @@ class IQL:
 			self.critic_scheduler.step()
 		losses["lr_critic"] = self.critic_optimizer.param_groups[0]['lr']
 
-
-
 		# ---- 3. Actor update (advantage-weighted regression — delayed, like CQL) ----
+		self.critic.eval()  # Set critic to eval mode to disable Dropout
+		self.value_net.eval()  # Set value net to eval mode to disable Dropout
 		with torch.no_grad():
-			# q1, q2 = self.critic(state, action)
-			# q_min = torch.min(q1, q2)
-			q_min = torch.min(current_Q1, current_Q2)
+			q1_eval, q2_eval = self.critic(state, action)
+			q_min = torch.min(q1_eval, q2_eval)
 			v = self.value_net(state)
 			advantage_qv = q_min - v
 
@@ -720,7 +720,7 @@ class IQL:
 				pi, _ = self.actor(state, deterministic=True)
 				Q1_actor, Q2_actor = self.critic(state, pi)
 
-			Q_actor = torch.min(Q1_actor, Q2_actor)
+			Q_actor = (Q1_actor + Q2_actor) / 2.0 
 
 			q_stats = get_q_stats(current_Q1, current_Q2, Q_actor, mortality)
 			q_stats["advantage_qv_mean"] = advantage_qv.mean().item()		
@@ -728,7 +728,6 @@ class IQL:
 		else:
 			# Compute actor loss
 			self.actor.train() # Dropout ACTIVE for the network we are updating
-			
 			# Sample actions from the stochastic actor
 			pi, _ = self.actor(state, deterministic=True)
 			
@@ -737,16 +736,18 @@ class IQL:
 			# Weighted regression toward the dataset action, weighted by advantage —
 			# this REPLACES the Q-maximisation gradient CQL used. The actor never
 			# differentiates through the critic in IQL.
-			actor_loss = (exp_weight * (pi - action).pow(2)).mean()
+			actor_raw_sq_error = (pi - action).pow(2)
+			actor_loss = (exp_weight * actor_raw_sq_error).mean()
 
 			losses["actor_loss"] = actor_loss.item()
+			losses["actor_raw_sq_error"] = actor_raw_sq_error.mean().item()
 			losses["exp_weight_mean"] = exp_weight.mean().item()
 			losses["exp_weight_max"] = exp_weight.max().item()
 			losses["exp_weight_pct_at_ceiling"] = (exp_weight >= 99.9).float().mean().item()
 			
 			with torch.no_grad():
 				Q1_actor, Q2_actor = self.critic(state, pi)
-			Q_actor = torch.min(Q1_actor, Q2_actor)
+			Q_actor = (Q1_actor + Q2_actor) / 2.0
 			
 			q_stats = get_q_stats(current_Q1, current_Q2, Q_actor, mortality)
 			q_stats["advantage_qv_mean"] = advantage_qv.mean().item()

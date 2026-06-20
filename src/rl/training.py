@@ -638,7 +638,7 @@ def train_with_hyperparameters(
     testing = getattr(config_manager, 'testing', False)
     if testing:
         logger.info(" Testing mode enabled: will limit training to 10 epochs and 100 batches per epoch.")
-        n_epochs = min(n_epochs, 25)
+        n_epochs = min(n_epochs, 20)
     
     torch.cuda.empty_cache()
 
@@ -860,10 +860,10 @@ def train_with_hyperparameters(
             'total_it': trainer.total_it,
             'actor_state_dict': trainer.actor.state_dict(),
             'critic_state_dict': trainer.critic.state_dict(),
-            'v_net_state_dict': trainer.v_net.state_dict(),
+            'v_net_state_dict': trainer.value_net.state_dict(),
             'actor_optimizer_state_dict': trainer.actor_optimizer.state_dict(),
             'critic_optimizer_state_dict': trainer.critic_optimizer.state_dict(),
-            'v_net_optimizer_state_dict': trainer.v_net_optimizer.state_dict(),
+            'v_net_optimizer_state_dict': trainer.value_net_optimizer.state_dict(),
             'hyperparameters': hyperparams,
             'training_config': config_manager.training_config,
         }

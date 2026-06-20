@@ -661,6 +661,7 @@
                 "--cohort", "sepsis",
                 "--n_epochs", "200",
                 "--action_mode", "continuous_only",  
+                "--testing",
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

@@ -215,6 +215,10 @@ def plot_data(training_metrics, x_axes, all_keys, group, plot_dir, policy_freque
                             # from index policy_frequency-1
                             x_axis_data = x_axis_data[policy_frequency-1::policy_frequency]
                             
+                    # if length is still not right, just use x_axis from the right
+                    if len(batch_data) != x_axis_data.shape[0]:
+                        x_axis_data = x_axis_data[-len(batch_data):]
+
                     plt.plot(x_axis_data, batch_data, color=plt.cm.Reds(0.6), linewidth=1, label='Batch Training')
             
             # check if epoch_training data exists
@@ -222,7 +226,11 @@ def plot_data(training_metrics, x_axes, all_keys, group, plot_dir, policy_freque
                 epoch_key = f'train/epoch_{key}'
                 if epoch_key in epoch_training_data:
                     epoch_data = epoch_training_data[epoch_key]
-                    plt.plot(x_axes['train/epoch'], epoch_data, color=plt.cm.Reds(0.9), linewidth=2, label='Epoch Training')
+                    if len(epoch_data) != len(x_axes['train/epoch']):
+                        x_axis_data = x_axes['train/epoch'][-len(epoch_data):]
+                    else:
+                        x_axis_data = x_axes['train/epoch']
+                    plt.plot(x_axis_data, epoch_data, color=plt.cm.Reds(0.9), linewidth=2, label='Epoch Training')
 
             # check if val data exists
             if val_data is not None:

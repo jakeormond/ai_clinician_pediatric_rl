@@ -921,7 +921,7 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 	dropout = hyperparams['dropout']
 
 	value_dropout = hyperparams['value_dropout']
-	value_weight_decay = hyperparams['value_weight_decay']
+	value_weight_decay = float(hyperparams['value_weight_decay'])
 
 	actor = Actor(
 		state_dim=state_dim, 

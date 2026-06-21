@@ -477,6 +477,8 @@
                 "--split_num", "0",
                 "--cohort", "sepsis",
                 "--actions", "intake-vis", 
+                "--reward_type", "health_score_change_only",
+                "--discount", "0.975"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

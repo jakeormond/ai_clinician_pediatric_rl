@@ -87,11 +87,12 @@ class ConfigManager:
                         else:
                             self.experiment_dir = Path(results_dir)
 
-            elif self.experiment_type == "hyperparameter_search_evaluation":
+            elif self.experiment_type == "hyperparameter_search_evaluation" or self.experiment_type == "model_evaluation":
                 results_dir = os.path.join(
-                        self.paths["rl_models_dir"], self.rl_type,
-                        f"split_{self.split_num}", self.cohort, self.actions
-                    )
+                    self.paths["rl_models_dir"], self.rl_type,
+                    f"split_{self.split_num}", self.cohort, self.actions
+                )
+                self.results_dir = results_dir
                     # find the directory within result_dir
                 model_folders_final = []
                 model_folders = [f for f in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, f))]
@@ -104,7 +105,7 @@ class ConfigManager:
                 
                 self.model_folders = model_folders_final
 
-            elif self.experiment_type == "model_evaluation":               
+            elif self.experiment_type == "final_model_evaluation":               
                 results_dir = os.path.join(
                         self.paths["rl_models_dir"], self.rl_type,
                         f"split_{self.split_num}", self.cohort, self.actions, "final_model"

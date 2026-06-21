@@ -1,6 +1,8 @@
 import argparse
 import json
 import os
+import pickle
+from pathlib import Path
 
 import torch
 import numpy as np
@@ -8,25 +10,79 @@ from ..config_manager import ConfigManager
 from .models.basic_q import Critic
 from .models.td3_bc import Actor as TD3Actor
 from .models.conservative_q_learning import Actor as CQLActor
-# from .training import create_processor_from_shards
+from .training import create_processor_from_shards
 from .replay_buffer import RLDataset
 from torch.utils.data import DataLoader, TensorDataset
 from scipy import stats
+
+from ..setup_environment import load_paths
 
 
 # rl_models_path = "/home/jake/Documents/AI_Clinician/rl_models/" 
 
 
+def load_configuration(config_manager_path):
+    if not os.path.exists(config_manager_path):
+        print(f"Config manager not found in: {config_manager_path}, skipping evaluation.")
+        raise FileNotFoundError(f"Config manager not found in: {config_manager_path}")
+    else:
+        print(f"Loading config manager from: {config_manager_path}")
+        with open(config_manager_path, "rb") as cfg_file:
+            config_manager = pickle.load(cfg_file)
+    
+    # set paths 
+    config_manager.paths, config_manager.environment = load_paths(config_manager.hospital)
+    if config_manager.environment == "local":
+        config_manager.config_dir = Path(config_manager.paths['config_dir'])
+    config_manager.set_data()
+    config_manager.reset_cohort(config_manager.cohort)
+
+    return config_manager
+
+
+def create_test_rl_dataset(train_processor, test_processor, config_manager, hyperparams):
+    action_names=config_manager.data_config['actions']
+    n_step = hyperparams['n_step']
+    gamma = hyperparams['discount']
+    use_compressed_latents = hyperparams['use_compressed_latents']
+
+    scaler = train_processor.create_rl_dataset(
+        states="model_outputs", 
+        scaler=None, 
+        action_names=action_names, 
+        use_compressed_latents=use_compressed_latents,
+        n_step=n_step,
+        gamma=gamma
+    ) 
+
+    _ = test_processor.create_rl_dataset(
+        states="model_outputs",
+        scaler=scaler,
+        action_names=action_names,
+        use_compressed_latents=use_compressed_latents,
+        n_step=n_step,
+        gamma=gamma
+    )
+
+    return train_processor, test_processor, scaler
+
+
 def load_sarsa_critic(config_manager = None, model_path = None):
+    reward_type = config_manager.reward_type
+    discount = config_manager.discount
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if model_path is None and config_manager is not None:
         model_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.model_type, 
-                        f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions, "final_model")
-    
+                        f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions, 
+                        reward_type, f"final_model_discount_{discount}",)
+                                              
         # get folder inside model_path
         model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
         model_path = os.path.join(model_path, model_folder)
 
+    configuration_path = os.path.join(model_path, "config_manager.pkl")
+    sarsa_configuration = load_configuration(configuration_path)
+    
     final_model_path = os.path.join(model_path, "final_model.pt")
 
     # load results.json from model_folder, which has state_dim 
@@ -37,9 +93,20 @@ def load_sarsa_critic(config_manager = None, model_path = None):
             hidden_dim = results["hyperparameters"]["hidden_dim"]
 
     sarsa_critic = Critic(512,2, hidden_dim=hidden_dim).to(device)
-    sarsa_critic.load_state_dict(torch.load(final_model_path, weights_only=True))
+    sarsa_critic.to(device)
+    checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
+    state_dict = checkpoint['critic_state_dict'] 
+    sarsa_critic.load_state_dict(state_dict)
     sarsa_critic.eval()
-    return sarsa_critic
+
+    # load hyperparameters from results.json
+    results_path = os.path.join(model_path, "results.json")
+    if os.path.exists(results_path):
+        with open(results_path, "r") as f:
+            results = json.load(f)  
+    sarsa_hyperparams = results["hyperparameters"]
+        
+    return sarsa_critic, sarsa_configuration, sarsa_hyperparams
 
 
 def load_actor(config_manager, model_path=None):
@@ -62,10 +129,10 @@ def load_actor(config_manager, model_path=None):
             hyperparams = results["hyperparameters"]
             # hidden_dim = hyperparams["hidden_dim"]
 
-    if config_manager.rl_type == "td3_bc":
+    if config_manager.model_type == "td3_bc":
         actor = TD3Actor(512, 2).to(device)
-    elif config_manager.rl_type == "conservative_q_learning":
-        actor = CQLActor(512, 2).to(device)
+    elif config_manager.model_type == "conservative_q_learning":
+        actor = CQLActor(512, hyperparams["hidden_dim"]).to(device)
 
     checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
     actor.load_state_dict(checkpoint['actor_state_dict'])
@@ -85,6 +152,8 @@ def parse_args():
     parser.add_argument("--split_num", type=int, default=0)
     parser.add_argument("--cohort", type=str, default="sepsis")
     parser.add_argument("--actions", type=str, default="vis-intake")
+    parser.add_argument("--reward_type", type=str, default="health_score_change_only")
+    parser.add_argument("--discount", type=float, default=0.975)
     
     # The Flag (Action: store_true means if it's in the args, it becomes True)
     parser.add_argument("--testing", action="store_true", help="Run in test mode")
@@ -372,7 +441,7 @@ def evaluate(config_manager=None, sarsa_critic=None, model_path=None):
     # 1. Load the "Jury" (SARSA Critic)
     # Using the exact same architecture as your training
     if sarsa_critic is None:
-        sarsa_critic = load_sarsa_critic(config_manager, model_path=model_path)
+        sarsa_critic, sarsa_configuration = load_sarsa_critic(config_manager, model_path=model_path)
    
     # 2. Load the RL Policies (Actors)
     actor, hyperparams, model_folder = load_actor(config_manager, model_path=model_path)
@@ -434,11 +503,23 @@ def evaluate_multiple_models():
 
     # 1. Load the "Jury" (SARSA Critic)
     # Using the exact same architecture as your training
-    sarsa_critic = load_sarsa_critic(config_manager)
+    sarsa_critic, sarsa_configuration, sarsa_hyperparams = load_sarsa_critic(config_manager)
+
+    # load the data
+    train_processor, _, test_processor = create_processor_from_shards(sarsa_configuration, normalize=True, set_to_return='all')
+
+    # process the reward
+    health_score_median = train_processor.process_reward(config_manager, sarsa_hyperparams)
+    test_processor.process_reward(config_manager, sarsa_hyperparams, health_score_median=health_score_median)
+    
+    # create rl dataset
+    batch_size = 1024
+    train_processor, test_processor, _ = create_test_rl_dataset(train_processor, test_processor, config_manager, sarsa_hyperparams)
 
     # get the model directories
     rl_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.rl_type, 
-                    f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions)
+                    f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions,
+                    config_manager.reward_type, f"discount_{config_manager.discount}")
     rl_folders = [f for f in os.listdir(rl_path) if os.path.isdir(os.path.join(rl_path, f))]
     if "final_model" in rl_folders or "*_run" in rl_folders:
         rl_folders.remove("final_model")
@@ -447,14 +528,27 @@ def evaluate_multiple_models():
     for rl_folder in rl_folders:
         model_path = os.path.join(rl_path, rl_folder)
         
-        # check if advantage_plot.png already exists in the model_path, if it does, skip evaluation for that model
-        advantage_plot_path = os.path.join(model_path, "advantage_plot.png")
-        if os.path.exists(advantage_plot_path):
-            print(f"Advantage plot already exists for model in folder: {model_path}, skipping evaluation.")
-            continue
-        
-        print(f"Evaluating model in folder: {model_path}")
-        evaluate(config_manager, sarsa_critic=sarsa_critic, model_path=model_path)
+        # load the configuration
+        configuration_path = os.path.join(model_path, "config_manager.pkl")
+        model_cfg = load_configuration(configuration_path)
+
+        # find directories within model_path that begin with "local" or "unknown"
+        model_subfolders = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and (f.startswith("local") or f.startswith("unknown"))]
+
+        for subfolder in model_subfolders:
+            model_subfolder_path = os.path.join(model_path, subfolder)
+            evaluate(config_manager=model_cfg, sarsa_critic=sarsa_critic, model_path=model_subfolder_path)
+
+            # check if advantage_plot.png already exists in the model_path, if it does, skip evaluation for that model
+            advantage_plot_path = os.path.join(model_subfolder_path, "advantage_plot.png")
+            if os.path.exists(advantage_plot_path):
+                print(f"Advantage plot already exists for model in folder: {model_subfolder_path}, skipping evaluation.")
+                continue
+            
+            
+            
+            print(f"Evaluating model in folder: {model_subfolder_path}")
+            evaluate(config_manager, sarsa_critic=sarsa_critic, model_path=model_subfolder_path)
 
 
 

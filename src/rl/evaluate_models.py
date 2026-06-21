@@ -10,6 +10,10 @@ from ..config_manager import ConfigManager
 from .models.basic_q import Critic
 from .models.td3_bc import Actor as TD3Actor
 from .models.conservative_q_learning import Actor as CQLActor
+from .models.conservative_q_learning import Critic as CQLCritic
+from .models.iql import Actor as IQLActor
+from .models.iql import Critic as IQLCritic
+from .models.iql import Value as IQLValue
 from .training import create_processor_from_shards
 from .replay_buffer import RLDataset
 from torch.utils.data import DataLoader, TensorDataset
@@ -119,6 +123,9 @@ def load_actor(config_manager, model_path=None):
         model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
         model_path = os.path.join(model_path, model_folder)
 
+    configuration_path = os.path.join(model_path, "config_manager.pkl")
+    actor_configuration = load_configuration(configuration_path)
+
     final_model_path = os.path.join(model_path, "final_model.pt")
 
     # load results.json from model_folder, which has state_dim 
@@ -129,15 +136,24 @@ def load_actor(config_manager, model_path=None):
             hyperparams = results["hyperparameters"]
             # hidden_dim = hyperparams["hidden_dim"]
 
-    if config_manager.model_type == "td3_bc":
+    if actor_configuration.model_type == "td3_bc":
         actor = TD3Actor(512, 2).to(device)
-    elif config_manager.model_type == "conservative_q_learning":
+    elif actor_configuration.model_type == "conservative_q_learning":
         actor = CQLActor(512, hyperparams["hidden_dim"]).to(device)
+        critic = CQLCritic(512, 2, hidden_dim=hyperparams["hidden_dim"]).to(device)
+    elif actor_configuration.model_type == "iql":
+        actor = IQLActor(512, hyperparams["hidden_dim"]).to(device)
+        critic = IQLCritic(512, 2, hidden_dim=hyperparams["hidden_dim"]).to(device)
 
     checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
     actor.load_state_dict(checkpoint['actor_state_dict'])
     actor.eval()
-    return actor, hyperparams, model_path
+
+    # load critic as well
+    critic.load_state_dict(checkpoint['critic_state_dict'])
+    critic.eval()
+
+    return actor, critic, actor_configuration, hyperparams, model_path
 
 
 def parse_args():
@@ -426,7 +442,12 @@ def run_decile_statistics(advantage, q_clinician):
     return results_df
 
 
-def evaluate(config_manager=None, sarsa_critic=None, model_path=None):
+def evaluate(
+        config_manager=None, 
+        sarsa_critic=None, 
+        sarsa_configuration=None,
+        model_path=None
+    ):
     from .training import create_processor_from_shards
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -444,20 +465,20 @@ def evaluate(config_manager=None, sarsa_critic=None, model_path=None):
         sarsa_critic, sarsa_configuration = load_sarsa_critic(config_manager, model_path=model_path)
    
     # 2. Load the RL Policies (Actors)
-    actor, hyperparams, model_folder = load_actor(config_manager, model_path=model_path)
+    actor, actor_configuration, actor_hyperparams, model_folder = load_actor(config_manager, model_path=model_path)
     
     # load data
     train_processor, _, test_processor = create_processor_from_shards(config_manager, normalize=True, set_to_return='all')
-    train_processor.process_reward(config_manager, hyperparams) # not sure this line is necessary???
-    test_processor.process_reward(config_manager, hyperparams)
+    train_processor.process_reward(actor_configuration, actor_hyperparams) # not sure this line is necessary???
+    test_processor.process_reward(actor_configuration, actor_hyperparams)
 
     # get the scaler for the dynamic deephit states
-    action_names = config_manager.data_config['actions']
+    action_names = actor_configuration.data_config['actions']
     scaler = train_processor.create_rl_dataset(states="model_outputs", scaler=None, action_names=action_names) # states argumen
     test_processor.create_rl_dataset(states="model_outputs", scaler=scaler, action_names=action_names)
     test_dataset = RLDataset(test_processor)
 
-    batch_size = hyperparams["batch_size"]
+    batch_size = actor_hyperparams["batch_size"]
 
     rl_actions = generate_actions(actor, test_dataset.states, batch_size=batch_size, device=device)
 
@@ -537,7 +558,12 @@ def evaluate_multiple_models():
 
         for subfolder in model_subfolders:
             model_subfolder_path = os.path.join(model_path, subfolder)
-            evaluate(config_manager=model_cfg, sarsa_critic=sarsa_critic, model_path=model_subfolder_path)
+            evaluate(
+                config_manager=model_cfg, 
+                sarsa_critic=sarsa_critic, 
+                sarsa_configuration=sarsa_configuration,
+                model_path=model_subfolder_path
+                )
 
             # check if advantage_plot.png already exists in the model_path, if it does, skip evaluation for that model
             advantage_plot_path = os.path.join(model_subfolder_path, "advantage_plot.png")

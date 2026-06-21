@@ -346,7 +346,6 @@ def evaluate_final_model(args=None):
     test_processor.process_reward(config_manager, hyperparams, health_score_median=health_score_median)
 
     # create rl dataset
-    batch_size = 1024
     train_processor, test_processor, _ = create_test_rl_dataset(train_processor, test_processor, config_manager, hyperparams)
 
     # load the model

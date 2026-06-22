@@ -478,7 +478,9 @@ def generate_model_outputs(
         test_processor, 
         batch_size=1024, 
         model=None,
+        actions=None,
         model_type="critic",
+        reduction='mean',
         device="cuda" if torch.cuda.is_available() else "cpu"
     ):
     """
@@ -486,11 +488,10 @@ def generate_model_outputs(
     """
     
     # get the actions and get their standard deviation
-    actions = test_processor.rl_dataset["actions"]
-    shuffled_actions = actions[torch.randperm(actions.shape[0])]
-    action_dim = actions.shape[1]
+    all_actions = test_processor.rl_dataset["actions"]
+    action_dim = all_actions.shape[1]
     
-    action_std = torch.as_tensor(actions.std(axis=0), dtype=torch.float32).to(device)
+    action_std = torch.as_tensor(all_actions.std(axis=0), dtype=torch.float32).to(device)
     print(f"Action std: {action_std}")    
     
     # loop through trajectories in test_processor.rl_dataset and evaluate the model
@@ -506,7 +507,7 @@ def generate_model_outputs(
         }
     elif model_type == "actor":
         model_outputs = {
-            'actor_actions': torch.zeros(test_processor.rl_dataset["states"].shape[0], action_dim, dtype=torch.float32).to(device)
+            'actions': torch.zeros(test_processor.rl_dataset["states"].shape[0], action_dim, dtype=torch.float32).to(device)
         }
     elif model_type == "value_network":
         model_outputs = {
@@ -516,32 +517,86 @@ def generate_model_outputs(
     for stay_id in stay_ids:
         states, actions, rewards, next_states, next_actions, dones, mortalities, indices = \
             get_trajectory_data(test_processor, traj_start_inds, stay_id, as_tensor=True) 
-        shuffled_actions_stay = shuffled_actions[indices]
+        
+        if actions is not None:
+            # use the provided actions instead of the ones from the dataset
+            actions = actions[indices]
+        
         n_batches = int(np.ceil(states.shape[0] / batch_size))
+        
         for i in range(n_batches):
             start_idx = i * batch_size
             end_idx = min((i + 1) * batch_size, states.shape[0])
             states_batch = states[start_idx:end_idx]
             actions_batch = actions[start_idx:end_idx]
-            shuffled_actions_batch = (shuffled_actions_stay[start_idx:end_idx]).to(device)
 
             # run inference
             with torch.no_grad():
                 if model_type == "critic":
                     q1, q2 = model(states_batch, actions_batch)
-                    q1_shuffled, q2_shuffled = model(states_batch, shuffled_actions_batch)
-                    model_outputs["q_values"][indices[start_idx:end_idx]] = torch.min(q1, q2).cpu().numpy()
-                    model_outputs["q_values_shuffled"][indices[start_idx:end_idx]] = torch.min(q1_shuffled, q2_shuffled).cpu().numpy()
+                    if reduction == 'mean':
+                        model_outputs["q_values"][indices[start_idx:end_idx]] = ((q1 + q2) / 2.0).flatten()
+                    elif reduction == 'min':
+                        model_outputs["q_values"][indices[start_idx:end_idx]] = torch.min(q1, q2).flatten()
                 elif model_type == "actor":
                     actor_actions = model.act(states_batch, device=device)
-                    model_outputs["actor_actions"][indices[start_idx:end_idx]] = actor_actions.cpu().numpy()
+                    model_outputs["actions"][indices[start_idx:end_idx]] = actor_actions
                 elif model_type == "value_network":
                     v_values = model(states_batch)
-                    model_outputs["v_values"][indices[start_idx:end_idx]] = v_values.cpu().numpy()
+                    model_outputs["v_values"][indices[start_idx:end_idx]] = v_values.flatten()
 
     return model_outputs
 
 
+@torch.no_grad()
+def compute_paired_advantage_and_noise_floor(critic, actor, test_processor,
+                                              reduction='mean', n_shuffles=100,
+                                              seed=42, device='cuda'):
+    
+    q_clin = generate_model_outputs(
+        test_processor, 
+        model=critic,
+        actions=None,
+        model_type="critic",
+        reduction=reduction
+    )
+
+    actions = generate_model_outputs(
+        test_processor,
+        model=actor,
+        model_type="actor"
+    )
+
+    q_policy = generate_model_outputs(
+        test_processor,
+        model=critic,
+        actions=actions["actions"],
+        model_type="critic",
+        reduction=reduction
+    )
+
+    # real advantage
+    advantage_real = (q_policy - q_clin).cpu().numpy().ravel()
+
+    # generate noise floor by shuffling clinician actions and evaluating critic
+    clinician_actions = test_processor.rl_dataset["actions"]
+    rng = np.random.default_rng(seed)
+    n = s.shape[0]
+    all_noise_adv = []
+    for _ in range(n_shuffles):
+        shuffled_actions = clinician_actions[torch.randperm(clinician_actions.size(0))]
+        q_shuffled = generate_model_outputs(
+            test_processor,
+            model=critic,
+            actions=shuffled_actions,
+            model_type="critic",
+            reduction=reduction
+        )
+        all_noise_adv.append((q_shuffled - q_clin).cpu().numpy().ravel())
+    
+    advantage_noise = np.concatenate(all_noise_adv)
+    
+    return advantage_real, advantage_noise
 
 
 def evaluate(
@@ -551,7 +606,12 @@ def evaluate(
         model_path=None,
         test_processor=None
     ):
-    from .training import create_processor_from_shards
+    """
+    1. calculate advantage of RL policy over clinician actions using the SARSA critic.
+    2. calculate advantage of RL policy over clinician actions using the RL critic.
+    3. TO IMPLEMENT calculatate advantage of RL policy over clinician actions using fitted Q evaluation.
+
+    """
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -572,42 +632,13 @@ def evaluate(
     
     batch_size = actor_hyperparams["batch_size"]
 
-    # generate model outputs
-    q_values_sarsa_clinician = generate_model_outputs(
-        test_processor, 
-        batch_size=1024, 
-        model=sarsa_critic,
-        model_type="critic",
-        device="cuda" if torch.cuda.is_available() else "cpu"
-    )
-
-    q_values_critic_clinician = generate_model_outputs(
-        test_processor, 
-        batch_size=1024, 
-        model=critic,
-        model_type="critic",    
-        device="cuda" if torch.cuda.is_available() else "cpu"
-    )
-
-    actor_actions = generate_model_outputs(
-        test_processor, 
-        batch_size=1024, 
-        model=actor,
-        model_type="actor",
-        device="cuda" if torch.cuda.is_available() else "cpu"
-    )
-
-    q_values_sarsa_actor = generate_model_outputs(
-        test_processor, 
-        batch_size=1024, 
-        model=sarsa_critic,
-        actions = actor_actions["actor_actions"],
-        model_type="critic",
-        device="cuda" if torch.cuda.is_available() else "cpu"
-    )
-
+    # calculate advantage of RL policy over clinician actions using the SARSA critic.
+    compute_paired_advantage_and_noise_floor(sarsa_critic, actor, test_processor,
+                                              reduction='mean', n_shuffles=100)
     
-    
+    # calculate advantage of RL policy over clinician actions using the RL critic.
+    compute_paired_advantage_and_noise_floor(critic, actor, test_processor,
+                                              reduction='min', n_shuffles=100)
     
     
     rl_actions = generate_actions(actor, test_dataset.states, batch_size=batch_size, device=device)
@@ -693,7 +724,7 @@ def evaluate_multiple_models():
                 sarsa_critic=sarsa_critic, 
                 sarsa_configuration=sarsa_configuration,
                 model_path=model_subfolder_path,
-                test_data = test_processor
+                test_processor=test_processor
                 )
 
             # check if advantage_plot.png already exists in the model_path, if it does, skip evaluation for that model

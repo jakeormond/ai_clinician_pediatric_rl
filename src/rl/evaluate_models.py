@@ -3,6 +3,7 @@ import json
 import os
 import pickle
 from pathlib import Path
+import matplotlib.pyplot as plt
 
 import torch
 import numpy as np
@@ -595,6 +596,117 @@ def compute_paired_advantage_and_noise_floor(critic, actor, test_processor,
     return advantage_real, advantage_noise
 
 
+
+def find_calibrated_threshold_relative(real_headroom, noise_headroom,
+                                         min_relative_gap=0.5, n_thresholds=500,
+                                         stable_window=20):
+    """
+    Find the threshold where the real distribution's CCDF exceeds the
+    noise-floor distribution's CCDF by at least `min_relative_gap` as a
+    RELATIVE (not absolute) amount. Robust on a log-scale CCDF, where
+    absolute gaps shrink in the tail even when the relative separation
+    is large and real.
+
+    min_relative_gap: e.g. 0.5 means "real curve is at least 50% higher
+                       than noise curve at this threshold"
+    stable_window:    require the gap to hold for this many consecutive
+                       threshold steps, so a single noisy crossing isn't
+                       mistaken for genuine divergence
+    """
+    max_val = max(real_headroom.max(), noise_headroom.max())
+    thresholds = np.linspace(0, max_val, n_thresholds)
+
+    real_ccdf  = np.array([(real_headroom  > t).mean() for t in thresholds])
+    noise_ccdf = np.array([(noise_headroom > t).mean() for t in thresholds])
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        relative_excess = np.where(
+            noise_ccdf > 0,
+            (real_ccdf - noise_ccdf) / noise_ccdf,
+            np.where(real_ccdf > 0, np.inf, 0.0)
+        )
+
+    candidate_idx = np.where(relative_excess >= min_relative_gap)[0]
+
+    if len(candidate_idx) == 0:
+        return None, thresholds, real_ccdf, noise_ccdf, relative_excess
+
+    for idx in candidate_idx:
+        window_end = min(idx + stable_window, len(relative_excess))
+        if window_end - idx == stable_window and \
+           (relative_excess[idx:window_end] >= min_relative_gap).all():
+            return thresholds[idx], thresholds, real_ccdf, noise_ccdf, relative_excess
+
+    # Fall back to first crossing if no fully stable window found
+    threshold = thresholds[candidate_idx[0]]
+    return threshold, thresholds, real_ccdf, noise_ccdf, relative_excess
+
+
+def plot_noise_floor_comparison(real_dist, noise_dist, label="headroom",
+                                  min_relative_gap=0.5, stable_window=20,
+                                  save_dir=None):
+
+    threshold, thresholds, real_ccdf, noise_ccdf, relative_excess = \
+        find_calibrated_threshold_relative(
+            real_dist, noise_dist,
+            min_relative_gap=min_relative_gap, stable_window=stable_window
+        )
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # --- Left: CCDF comparison with calibrated threshold marked ---
+    ax = axes[0]
+    for d, series_label, color in [
+        (real_dist,  'Real (e.g. policy vs clinician)', 'tab:blue'),
+        (noise_dist, 'Noise floor (random baseline)', 'tab:red'),
+    ]:
+        d_sorted = np.sort(d)
+        ccdf = 1.0 - np.arange(len(d_sorted)) / len(d_sorted)
+        ax.plot(d_sorted, ccdf, lw=2, label=series_label, color=color)
+
+    ax.set_yscale('log')
+    ax.set_xlabel('Threshold')
+    ax.set_ylabel('Fraction of samples > threshold')
+    ax.set_title(f'Noise floor calibration — {label}')
+
+    if threshold is not None:
+        ax.axvline(threshold, color='k', ls=':', lw=1.5,
+                   label=f'Calibrated threshold = {threshold:.4f}')
+        pct_above = (real_dist > threshold).mean() * 100
+        ax.annotate(f'{pct_above:.2f}% of samples\nabove threshold',
+                    xy=(threshold, max((real_dist > threshold).mean(), 1e-5)),
+                    xytext=(15, 15), textcoords='offset points', fontsize=8,
+                    arrowprops=dict(arrowstyle='->', lw=0.8))
+
+    ax.legend(fontsize=8)
+    ax.grid(True, which='both', alpha=0.3)
+
+    # --- Right: relative excess, showing where it stabilises ---
+    ax2 = axes[1]
+    ax2.plot(thresholds, relative_excess, lw=2, color='tab:purple')
+    ax2.axhline(min_relative_gap, color='gray', ls='--', lw=1,
+                label=f'Min relative gap = {min_relative_gap}')
+    if threshold is not None:
+        ax2.axvline(threshold, color='k', ls=':', lw=1.5,
+                    label=f'Calibrated threshold = {threshold:.4f}')
+    ax2.set_xlabel('Threshold')
+    ax2.set_ylabel('Relative excess: (real − noise) / noise')
+    ax2.set_title('Relative divergence between real and noise-floor CCDFs')
+    finite_excess = relative_excess[np.isfinite(relative_excess)]
+    if finite_excess.size > 0:
+        ax2.set_ylim(0, np.nanpercentile(finite_excess, 95) * 1.2)
+    ax2.legend(fontsize=8)
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, f"noise_floor_{label}.png"),
+                    dpi=150, bbox_inches='tight')
+
+    return fig, axes, threshold
+
+
+
 def evaluate(
         config_manager=None, 
         sarsa_critic=None, 
@@ -629,12 +741,19 @@ def evaluate(
     batch_size = actor_hyperparams["batch_size"]
 
     # calculate advantage of RL policy over clinician actions using the SARSA critic.
-    compute_paired_advantage_and_noise_floor(sarsa_critic, actor, test_processor,
-                                              reduction='mean', n_shuffles=100)
+    advantage_sarsa_real, advantage_sarsa_noise = compute_paired_advantage_and_noise_floor(
+        sarsa_critic, actor, test_processor,
+        reduction='mean', n_shuffles=100)
+    
+    plot_noise_floor_comparison(advantage_sarsa_real, advantage_sarsa_noise, label="SARSA Advantage", save_dir=model_folder)
+    
+    
+    
     
     # calculate advantage of RL policy over clinician actions using the RL critic.
-    compute_paired_advantage_and_noise_floor(critic, actor, test_processor,
-                                              reduction='min', n_shuffles=100)
+    advantage_rl_real, advantage_rl_noise = compute_paired_advantage_and_noise_floor(
+        critic, actor, test_processor,
+        reduction='min', n_shuffles=100)
     
     
     rl_actions = generate_actions(actor, test_dataset.states, batch_size=batch_size, device=device)

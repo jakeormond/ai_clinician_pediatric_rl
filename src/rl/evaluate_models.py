@@ -478,7 +478,7 @@ def generate_model_outputs(
         test_processor, 
         batch_size=1024, 
         model=None,
-        actions=None,
+        actions_to_use=None,
         model_type="critic",
         reduction='mean',
         device="cuda" if torch.cuda.is_available() else "cpu"
@@ -501,26 +501,21 @@ def generate_model_outputs(
     
     # create storage
     if model_type == "critic":
-        model_outputs = {
-            'q_values': torch.zeros(test_processor.rl_dataset["states"].shape[0], dtype=torch.float32).to(device),
-            'q_values_shuffled': torch.zeros(test_processor.rl_dataset["states"].shape[0], dtype=torch.float32).to(device)
-        }
+        model_outputs = torch.zeros(test_processor.rl_dataset["states"].shape[0], dtype=torch.float32).to(device)
     elif model_type == "actor":
-        model_outputs = {
-            'actions': torch.zeros(test_processor.rl_dataset["states"].shape[0], action_dim, dtype=torch.float32).to(device)
-        }
+        model_outputs = torch.zeros(test_processor.rl_dataset["states"].shape[0], action_dim, dtype=torch.float32).to(device)
     elif model_type == "value_network":
-        model_outputs = {
-            'v_values': torch.zeros(test_processor.rl_dataset["states"].shape[0], dtype=torch.float32).to(device)
-        }
+        model_outputs = torch.zeros(test_processor.rl_dataset["states"].shape[0], dtype=torch.float32).to(device)
 
     for stay_id in stay_ids:
-        states, actions, rewards, next_states, next_actions, dones, mortalities, indices = \
+        states, traj_actions, rewards, next_states, next_actions, dones, mortalities, indices = \
             get_trajectory_data(test_processor, traj_start_inds, stay_id, as_tensor=True) 
         
-        if actions is not None:
+        if actions_to_use is not None:
             # use the provided actions instead of the ones from the dataset
-            actions = actions[indices]
+            actions = actions_to_use[indices].to(device)
+        else:
+            actions = traj_actions
         
         n_batches = int(np.ceil(states.shape[0] / batch_size))
         
@@ -535,15 +530,16 @@ def generate_model_outputs(
                 if model_type == "critic":
                     q1, q2 = model(states_batch, actions_batch)
                     if reduction == 'mean':
-                        model_outputs["q_values"][indices[start_idx:end_idx]] = ((q1 + q2) / 2.0).flatten()
+                        model_outputs[indices[start_idx:end_idx]] = ((q1 + q2) / 2.0).flatten()
                     elif reduction == 'min':
-                        model_outputs["q_values"][indices[start_idx:end_idx]] = torch.min(q1, q2).flatten()
+                        model_outputs[indices[start_idx:end_idx]] = torch.min(q1, q2).flatten()
                 elif model_type == "actor":
-                    actor_actions = model.act(states_batch, device=device)
-                    model_outputs["actions"][indices[start_idx:end_idx]] = actor_actions
+                    actor_actions = model(states_batch)
+                    model_outputs[indices[start_idx:end_idx]] = actor_actions[0]
+                    # probabilities of actions will have to be implemented here
                 elif model_type == "value_network":
                     v_values = model(states_batch)
-                    model_outputs["v_values"][indices[start_idx:end_idx]] = v_values.flatten()
+                    model_outputs[indices[start_idx:end_idx]] = v_values.flatten()
 
     return model_outputs
 
@@ -556,7 +552,7 @@ def compute_paired_advantage_and_noise_floor(critic, actor, test_processor,
     q_clin = generate_model_outputs(
         test_processor, 
         model=critic,
-        actions=None,
+        actions_to_use=None,
         model_type="critic",
         reduction=reduction
     )
@@ -564,13 +560,14 @@ def compute_paired_advantage_and_noise_floor(critic, actor, test_processor,
     actions = generate_model_outputs(
         test_processor,
         model=actor,
+        actions_to_use=None,
         model_type="actor"
     )
 
     q_policy = generate_model_outputs(
         test_processor,
         model=critic,
-        actions=actions["actions"],
+        actions_to_use=actions,
         model_type="critic",
         reduction=reduction
     )
@@ -581,14 +578,13 @@ def compute_paired_advantage_and_noise_floor(critic, actor, test_processor,
     # generate noise floor by shuffling clinician actions and evaluating critic
     clinician_actions = test_processor.rl_dataset["actions"]
     rng = np.random.default_rng(seed)
-    n = s.shape[0]
     all_noise_adv = []
     for _ in range(n_shuffles):
         shuffled_actions = clinician_actions[torch.randperm(clinician_actions.size(0))]
         q_shuffled = generate_model_outputs(
             test_processor,
             model=critic,
-            actions=shuffled_actions,
+            actions_to_use=shuffled_actions,
             model_type="critic",
             reduction=reduction
         )

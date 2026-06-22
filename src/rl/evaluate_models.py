@@ -13,7 +13,7 @@ from .models.conservative_q_learning import Actor as CQLActor
 from .models.conservative_q_learning import Critic as CQLCritic
 from .models.iql import Actor as IQLActor
 from .models.iql import Critic as IQLCritic
-from .models.iql import Value as IQLValue
+from .models.iql import ValueNetwork as IQLValue
 from .training import create_processor_from_shards
 from .replay_buffer import RLDataset
 from torch.utils.data import DataLoader, TensorDataset
@@ -123,7 +123,8 @@ def load_actor(config_manager, model_path=None):
         model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
         model_path = os.path.join(model_path, model_folder)
 
-    configuration_path = os.path.join(model_path, "config_manager.pkl")
+    # configuration file is in the parent directory of the model_path
+    configuration_path = os.path.join(os.path.dirname(model_path), "config_manager.pkl")
     actor_configuration = load_configuration(configuration_path)
 
     final_model_path = os.path.join(model_path, "final_model.pt")
@@ -442,11 +443,113 @@ def run_decile_statistics(advantage, q_clinician):
     return results_df
 
 
+
+def get_trajectory_data(processor, traj_start_inds, stay_id, as_tensor=True):
+
+    stay_ids = processor.dynamic_deephit_dataset["stay_ids"]
+    # get index of stay_id in stay_ids
+    stay_idx = np.where(stay_ids == stay_id)[0][0]
+    indices = np.arange(traj_start_inds[stay_idx], traj_start_inds[stay_idx+1])
+    states = processor.rl_dataset["states"][indices]
+    actions = processor.rl_dataset["actions"][indices]
+    rewards = processor.rl_dataset["rewards"][indices]
+    next_states = processor.rl_dataset["next_states"][indices]
+    next_actions = processor.rl_dataset["next_actions"][indices]
+    dones = processor.rl_dataset["dones"][indices]
+    mortalities = processor.rl_dataset["mortality"][indices]
+
+    if not as_tensor:
+        return states, actions, rewards, next_states, next_actions, dones, mortalities, indices
+
+    # convert to torch tensors
+    states = torch.as_tensor(states, dtype=torch.float32).to('cuda')
+    actions = torch.as_tensor(actions, dtype=torch.float32).to('cuda')
+    rewards = torch.as_tensor(rewards, dtype=torch.float32).to('cuda')
+    next_states = torch.as_tensor(next_states, dtype=torch.float32).to('cuda')
+    next_actions = torch.as_tensor(next_actions, dtype=torch.float32).to('cuda')
+    dones = torch.as_tensor(dones, dtype=torch.float32).to('cuda')
+    mortalities = torch.as_tensor(mortalities, dtype=torch.float32).to('cuda')
+
+    return states, actions, rewards, next_states, next_actions, dones, mortalities, indices
+
+
+
+def generate_model_outputs(
+        test_processor, 
+        batch_size=1024, 
+        model=None,
+        model_type="critic",
+        device="cuda" if torch.cuda.is_available() else "cpu"
+    ):
+    """
+    model types are critic, actor, value_network. If critic is provided, it will generate q_values and q_values_shuffled.
+    """
+    
+    # get the actions and get their standard deviation
+    actions = test_processor.rl_dataset["actions"]
+    shuffled_actions = actions[torch.randperm(actions.shape[0])]
+    action_dim = actions.shape[1]
+    
+    action_std = torch.as_tensor(actions.std(axis=0), dtype=torch.float32).to(device)
+    print(f"Action std: {action_std}")    
+    
+    # loop through trajectories in test_processor.rl_dataset and evaluate the model
+    traj_end_inds = np.where(test_processor.rl_dataset["dones"] == 1)[0]
+    traj_start_inds = np.concatenate(([0], traj_end_inds + 1))
+    stay_ids = test_processor.dynamic_deephit_dataset["stay_ids"]
+    
+    # create storage
+    if model_type == "critic":
+        model_outputs = {
+            'q_values': torch.zeros(test_processor.rl_dataset["states"].shape[0], dtype=torch.float32).to(device),
+            'q_values_shuffled': torch.zeros(test_processor.rl_dataset["states"].shape[0], dtype=torch.float32).to(device)
+        }
+    elif model_type == "actor":
+        model_outputs = {
+            'actor_actions': torch.zeros(test_processor.rl_dataset["states"].shape[0], action_dim, dtype=torch.float32).to(device)
+        }
+    elif model_type == "value_network":
+        model_outputs = {
+            'v_values': torch.zeros(test_processor.rl_dataset["states"].shape[0], dtype=torch.float32).to(device)
+        }
+
+    for stay_id in stay_ids:
+        states, actions, rewards, next_states, next_actions, dones, mortalities, indices = \
+            get_trajectory_data(test_processor, traj_start_inds, stay_id, as_tensor=True) 
+        shuffled_actions_stay = shuffled_actions[indices]
+        n_batches = int(np.ceil(states.shape[0] / batch_size))
+        for i in range(n_batches):
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, states.shape[0])
+            states_batch = states[start_idx:end_idx]
+            actions_batch = actions[start_idx:end_idx]
+            shuffled_actions_batch = (shuffled_actions_stay[start_idx:end_idx]).to(device)
+
+            # run inference
+            with torch.no_grad():
+                if model_type == "critic":
+                    q1, q2 = model(states_batch, actions_batch)
+                    q1_shuffled, q2_shuffled = model(states_batch, shuffled_actions_batch)
+                    model_outputs["q_values"][indices[start_idx:end_idx]] = torch.min(q1, q2).cpu().numpy()
+                    model_outputs["q_values_shuffled"][indices[start_idx:end_idx]] = torch.min(q1_shuffled, q2_shuffled).cpu().numpy()
+                elif model_type == "actor":
+                    actor_actions = model.act(states_batch, device=device)
+                    model_outputs["actor_actions"][indices[start_idx:end_idx]] = actor_actions.cpu().numpy()
+                elif model_type == "value_network":
+                    v_values = model(states_batch)
+                    model_outputs["v_values"][indices[start_idx:end_idx]] = v_values.cpu().numpy()
+
+    return model_outputs
+
+
+
+
 def evaluate(
         config_manager=None, 
         sarsa_critic=None, 
         sarsa_configuration=None,
-        model_path=None
+        model_path=None,
+        test_processor=None
     ):
     from .training import create_processor_from_shards
     
@@ -465,21 +568,48 @@ def evaluate(
         sarsa_critic, sarsa_configuration = load_sarsa_critic(config_manager, model_path=model_path)
    
     # 2. Load the RL Policies (Actors)
-    actor, actor_configuration, actor_hyperparams, model_folder = load_actor(config_manager, model_path=model_path)
+    actor, critic, actor_configuration, actor_hyperparams, model_folder = load_actor(config_manager, model_path=model_path)
     
-    # load data
-    train_processor, _, test_processor = create_processor_from_shards(config_manager, normalize=True, set_to_return='all')
-    train_processor.process_reward(actor_configuration, actor_hyperparams) # not sure this line is necessary???
-    test_processor.process_reward(actor_configuration, actor_hyperparams)
-
-    # get the scaler for the dynamic deephit states
-    action_names = actor_configuration.data_config['actions']
-    scaler = train_processor.create_rl_dataset(states="model_outputs", scaler=None, action_names=action_names) # states argumen
-    test_processor.create_rl_dataset(states="model_outputs", scaler=scaler, action_names=action_names)
-    test_dataset = RLDataset(test_processor)
-
     batch_size = actor_hyperparams["batch_size"]
 
+    # generate model outputs
+    q_values_sarsa_clinician = generate_model_outputs(
+        test_processor, 
+        batch_size=1024, 
+        model=sarsa_critic,
+        model_type="critic",
+        device="cuda" if torch.cuda.is_available() else "cpu"
+    )
+
+    q_values_critic_clinician = generate_model_outputs(
+        test_processor, 
+        batch_size=1024, 
+        model=critic,
+        model_type="critic",    
+        device="cuda" if torch.cuda.is_available() else "cpu"
+    )
+
+    actor_actions = generate_model_outputs(
+        test_processor, 
+        batch_size=1024, 
+        model=actor,
+        model_type="actor",
+        device="cuda" if torch.cuda.is_available() else "cpu"
+    )
+
+    q_values_sarsa_actor = generate_model_outputs(
+        test_processor, 
+        batch_size=1024, 
+        model=sarsa_critic,
+        actions = actor_actions["actor_actions"],
+        model_type="critic",
+        device="cuda" if torch.cuda.is_available() else "cpu"
+    )
+
+    
+    
+    
+    
     rl_actions = generate_actions(actor, test_dataset.states, batch_size=batch_size, device=device)
 
     advantage, q_clinician, q_rl = calculate_advantage(
@@ -562,7 +692,8 @@ def evaluate_multiple_models():
                 config_manager=model_cfg, 
                 sarsa_critic=sarsa_critic, 
                 sarsa_configuration=sarsa_configuration,
-                model_path=model_subfolder_path
+                model_path=model_subfolder_path,
+                test_data = test_processor
                 )
 
             # check if advantage_plot.png already exists in the model_path, if it does, skip evaluation for that model

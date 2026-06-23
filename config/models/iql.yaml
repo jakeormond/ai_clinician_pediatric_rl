@@ -15,7 +15,7 @@
     value_dropout: 0.3
     tau: 0.005 #[0.001, 0.005, 0.01]
     weight_decay: 1.e-4
-    value_weight_decay: 1.e-3
+    value_weight_decay: 1.e-5
 
     # IQL-specific: replaces policy_noise/noise_clip/cql_alpha/temp/num_samples
     expectile: [0.6, 0.7, 0.8, 0.9]          # asymmetry of V's expectile regression — higher pushes V closer to max_a Q

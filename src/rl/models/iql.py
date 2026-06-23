@@ -398,7 +398,7 @@ class ValueNetwork(nn.Module):
 
 
 
-def get_q_stats(current_Q1, current_Q2, actor_Q, mortality):
+def get_q_stats(current_Q1, current_Q2, actor_Q, value, mortality):
 	
 	# create current_Q as the mean of current_Q1 and current_Q2
 	current_Q = (current_Q1 + current_Q2) / 2.0
@@ -419,19 +419,23 @@ def get_q_stats(current_Q1, current_Q2, actor_Q, mortality):
 		survival_vals = current_Q[survival_mask]
 		survival_Q = survival_vals.mean().item()
 		survival_variance_Q = survival_vals.var().item()
+		survival_value = value[survival_mask].mean().item()
 	else:
 		survival_Q = float('nan')
 		survival_variance_Q = float('nan')
 		survival_n = 0
+		survival_value = float('nan')
 
 	if non_survival_n > 2:
 		non_survival_vals = current_Q[non_survival_mask]
 		non_survival_Q = non_survival_vals.mean().item()
 		non_survival_variance_Q = non_survival_vals.var().item()
+		non_survival_value = value[non_survival_mask].mean().item()
 	else:
 		non_survival_Q = float('nan')
 		non_survival_variance_Q = float('nan')
 		non_survival_n = 0
+		non_survival_value = float('nan')
 
 	if survival_n >= 2 and non_survival_n >= 2:
 		# calculate signal to noise ratio of the difference between survival and non-survival Q values
@@ -459,7 +463,9 @@ def get_q_stats(current_Q1, current_Q2, actor_Q, mortality):
 		"non_survival_Q": non_survival_Q,
 		"non_survival_variance_Q": non_survival_variance_Q,
 		"signal_to_noise": signal_to_noise,
-		"auc_Q": auc_Q
+		"auc_Q": auc_Q,
+		"survival_value": survival_value,
+		"non_survival_value": non_survival_value
 	}
 
 	# log_dict.update({
@@ -621,22 +627,22 @@ class IQL:
 
 		# Sample replay buffer 
 		state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
-		with torch.no_grad():
-			# add noise to states
-			state_std = state.std(dim=0, keepdim=True)
-			noise_scale = state_std * 0.04 + 1e-6
-			state_noise = torch.randn_like(state) * noise_scale
-			smoothed_states = state + state_noise
+		# with torch.no_grad():
+		# 	# add noise to states
+		# 	state_std = state.std(dim=0, keepdim=True)
+		# 	noise_scale = state_std * 0.04 + 1e-6
+		# 	state_noise = torch.randn_like(state) * noise_scale
+		# 	smoothed_states = state + state_noise
 
-			next_state_noise = torch.randn_like(next_state) * noise_scale
-			smoothed_next_states = next_state + next_state_noise
+		# 	next_state_noise = torch.randn_like(next_state) * noise_scale
+		# 	smoothed_next_states = next_state + next_state_noise
 			
-			# add noise to actions
-			critic_action_noise = (torch.randn_like(action) * 0.04).clamp(-0.1, 0.1)
-			smoothed_actions = action + critic_action_noise
-			is_zero_dose = (action < 1e-4)
-			smoothed_actions = torch.where(is_zero_dose, torch.zeros_like(smoothed_actions), smoothed_actions)			
-			smoothed_actions = smoothed_actions.clamp(0, 1.0) # Ensure actions remain in valid range after smoothing
+		# 	# add noise to actions
+		# 	critic_action_noise = (torch.randn_like(action) * 0.04).clamp(-0.1, 0.1)
+		# 	smoothed_actions = action + critic_action_noise
+		# 	is_zero_dose = (action < 1e-4)
+		# 	smoothed_actions = torch.where(is_zero_dose, torch.zeros_like(smoothed_actions), smoothed_actions)			
+		# 	smoothed_actions = smoothed_actions.clamp(0, 1.0) # Ensure actions remain in valid range after smoothing
 
 		reward = reward * self.reward_scaling
 		
@@ -651,12 +657,12 @@ class IQL:
 		self.value_net.train()
 		self.critic.eval()  # Set critic to eval mode to disable Dropout
 		with torch.no_grad():
-			# q1, q2 = self.critic(state, action)
-			q1, q2 = self.critic(smoothed_states, smoothed_actions)
+			q1, q2 = self.critic(state, action)
+			# q1, q2 = self.critic(smoothed_states, smoothed_actions)
 			q_min = torch.min(q1, q2)
 
-		# v = self.value_net(state)
-		v = self.value_net(smoothed_states)
+		v = self.value_net(state)
+		# v = self.value_net(smoothed_states)
 		v_loss = self.expectile_loss(q_min - v, expectile=self.expectile).mean()
 		
 		self.value_net_optimizer.zero_grad()
@@ -681,19 +687,19 @@ class IQL:
 				target_Q = -(mortality - 1).float()
 			else:
 				
-				# next_v = self.value_net(next_state)   # no target net needed for V itself
-				next_v = self.value_net(smoothed_next_states)   # no target net needed for V itself
+				next_v = self.value_net(next_state)   # no target net needed for V itself
+				# next_v = self.value_net(smoothed_next_states)   # no target net needed for V itself
 				target_Q = reward + not_done * self.discount * next_v
 
 		# Get current Q estimates>
-		# current_Q1, current_Q2 = self.critic(state, action)
-		current_Q1, current_Q2 = self.critic(smoothed_states, smoothed_actions)
+		current_Q1, current_Q2 = self.critic(state, action)
+		# current_Q1, current_Q2 = self.critic(smoothed_states, smoothed_actions)
 
 		critic_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
 
 		losses = {
 			"v_loss": v_loss.item(),
-			"critic_loss": critic_loss.item(),
+			"critic_loss": critic_loss.item(),			
 		}
 
 		self.critic_optimizer.zero_grad()
@@ -714,33 +720,34 @@ class IQL:
 		self.critic.eval()  # Set critic to eval mode to disable Dropout
 		self.value_net.eval()  # Set value net to eval mode to disable Dropout
 		with torch.no_grad():
-			# q1_eval, q2_eval = self.critic(state, action)
-			q1_eval, q2_eval = self.critic(smoothed_states, smoothed_actions)
+			q1_eval, q2_eval = self.critic(state, action)
+			# q1_eval, q2_eval = self.critic(smoothed_states, smoothed_actions)
 			q_min = torch.min(q1_eval, q2_eval)
-			# v = self.value_net(state)
-			v = self.value_net(smoothed_states)
+			v = self.value_net(state)
+			# v = self.value_net(smoothed_states)
 			advantage_qv = q_min - v
 
 		# Delayed policy updates
 		if self.total_it % self.policy_freq != 0 or self.train_actor_flag is False:
 			self.actor.eval()  # Set actor to eval mode to disable Dropout
 			with torch.no_grad():
-				# pi, _ = self.actor(state, deterministic=True)
-				pi, _ = self.actor(smoothed_states, deterministic=True)
-				# Q1_actor, Q2_actor = self.critic(state, pi)
-				Q1_actor, Q2_actor = self.critic(smoothed_states, pi)
+				pi, _ = self.actor(state, deterministic=True)
+				# pi, _ = self.actor(smoothed_states, deterministic=True)
+				Q1_actor, Q2_actor = self.critic(state, pi)
+				# Q1_actor, Q2_actor = self.critic(smoothed_states, pi)
 
 			Q_actor = (Q1_actor + Q2_actor) / 2.0 
 
-			q_stats = get_q_stats(current_Q1, current_Q2, Q_actor, mortality)
-			q_stats["advantage_qv_mean"] = advantage_qv.mean().item()		
+			q_stats = get_q_stats(current_Q1, current_Q2, Q_actor, v, mortality)
+			q_stats["advantage_qv_mean"] = advantage_qv.mean().item()	
+	
 		
 		else:
 			# Compute actor loss
 			self.actor.train() # Dropout ACTIVE for the network we are updating
 			# Sample actions from the stochastic actor
-			# pi, _ = self.actor(state, deterministic=True)
-			pi, _ = self.actor(smoothed_states, deterministic=True)
+			pi, _ = self.actor(state, deterministic=True)
+			# pi, _ = self.actor(smoothed_states, deterministic=True)
 			
 			exp_weight = torch.exp(advantage_qv * self.awr_temperature).clamp(max=100.0).detach()
 
@@ -757,11 +764,11 @@ class IQL:
 			losses["exp_weight_pct_at_ceiling"] = (exp_weight >= 99.9).float().mean().item()
 			
 			with torch.no_grad():
-				# Q1_actor, Q2_actor = self.critic(state, pi)
-				Q1_actor, Q2_actor = self.critic(smoothed_states, pi)
+				Q1_actor, Q2_actor = self.critic(state, pi)
+				# Q1_actor, Q2_actor = self.critic(smoothed_states, pi)
 			Q_actor = (Q1_actor + Q2_actor) / 2.0
 			
-			q_stats = get_q_stats(current_Q1, current_Q2, Q_actor, mortality)
+			q_stats = get_q_stats(current_Q1, current_Q2, Q_actor, v, mortality)
 			q_stats["advantage_qv_mean"] = advantage_qv.mean().item()
 			
 			self.actor_optimizer.zero_grad()
@@ -872,7 +879,7 @@ class IQL:
 			}
 
 			neuron_stats = self.critic.get_neuron_stats(state, action)
-			q_stats = get_q_stats(current_Q1, current_Q2, Q_actor, mortality)
+			q_stats = get_q_stats(current_Q1, current_Q2, Q_actor, v, mortality)
 			q_stats["advantage_qv_mean"] = advantage_qv.mean().item()
 
 		return losses, q_stats, neuron_stats

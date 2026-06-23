@@ -470,7 +470,7 @@
             "module": "src.rl.evaluate_models",
             "args": [
                 "--hospital", "choc", 
-                "--rl_type", "conservative_q_learning",
+                "--rl_type", "implicit_q_learning",
                 "--experiment_type", "model_evaluation",
                 "--model_type", "basic_q", 
                 "--mode", "single_split",
@@ -663,7 +663,6 @@
                 "--cohort", "sepsis",
                 "--n_epochs", "200",
                 "--action_mode", "continuous_only",  
-                "--testing",
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

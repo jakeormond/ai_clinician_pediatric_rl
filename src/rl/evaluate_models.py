@@ -3,7 +3,9 @@ import json
 import os
 import pickle
 from pathlib import Path
+from turtle import pd
 import matplotlib.pyplot as plt
+import pandas as pd
 
 import torch
 import numpy as np
@@ -163,7 +165,7 @@ def parse_args():
 
     # Keyword Arguments (Match your launch.json)
     parser.add_argument("--hospital", type=str, default="choc")
-    parser.add_argument("--rl_type", type=str, choices=["td3_bc", "conservative_q_learning", "bc"], required=True)
+    parser.add_argument("--rl_type", type=str, choices=["td3_bc", "conservative_q_learning", "bc", "implicit_q_learning"], required=True)
     parser.add_argument("--experiment_type", type=str, default="model_evaluation")
     parser.add_argument("--model_type", type=str, default="basic_q")
     parser.add_argument("--mode", type=str, default="single_split")
@@ -215,13 +217,13 @@ def calculate_advantage(sarsa_critic, states, clinician_actions, rl_actions, dev
     return advantage.cpu().numpy().flatten(), q_clinician.cpu().numpy().flatten(), q_rl.cpu().numpy().flatten()
 
 
-def plot_advantage(advantage, model_folder, config_manager):
+def plot_advantage(advantage, title=None, save_dir=None):
     # plot as kde plot
     import matplotlib.pyplot as plt
     import seaborn as sns
     plt.figure(figsize=(7, 4))
     sns.kdeplot(advantage, fill=True)
-    plt.title(f"Advantage Distribution of {config_manager.rl_type.upper()} over Clinician Actions")
+    plt.title(f"Advantage Distribution of {title} over Clinician Actions")
     plt.xlabel("Advantage")
     plt.ylabel("Density")
     plt.xlim(-.1, .2)
@@ -236,10 +238,59 @@ def plot_advantage(advantage, model_folder, config_manager):
     plt.axvline(median_advantage, color='green', linestyle='--', label=f"Median Advantage: {median_advantage:.4f}")
     plt.legend()
     
-    results_dir = os.path.join(model_folder, "advantage_plot.png")
+    results_dir = os.path.join(save_dir, f"advantage_plot_{title.replace(' ', '_')}.png")
     plt.savefig(results_dir)
     plt.close()
-    # plt.show()
+
+
+def plot_real_and_noise_advantage(advantage, noise_advantage, title=None, save_dir=None):
+    # plot as kde plot
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    plt.figure(figsize=(7, 4))
+    sns.kdeplot(advantage, fill=True)
+
+    sns.kdeplot(noise_advantage, fill=True, color='orange', alpha=0.5)
+
+    plt.title(f"Advantage Distribution of {title} over Clinician Actions")
+    plt.xlabel("Advantage")
+    plt.ylabel("Density")
+    plt.legend(["Real Advantage", "Noise Advantage"])
+    plt.xlim(-.1, .2)
+
+    # plot a vertical line at mean advantage
+    mean_advantage = np.mean(advantage)
+    plt.axvline(mean_advantage, color='red', linestyle='--', label=f"Real mean: {mean_advantage:.4f}")
+    plt.legend()
+
+    # plot a vertical line at median advantage
+    median_advantage = np.median(advantage)
+    plt.axvline(median_advantage, color='green', linestyle='--', label=f"Real median: {median_advantage:.4f}")
+    plt.legend()
+
+    # plot a vertical line at mean noise advantage
+    mean_noise_advantage = np.mean(noise_advantage)
+    plt.axvline(mean_noise_advantage, color='orange', linestyle='--', label=f"Noise mean: {mean_noise_advantage:.4f}")
+    plt.legend()
+
+    # plot a vertical line at median noise advantage
+    median_noise_advantage = np.median(noise_advantage)
+    plt.axvline(median_noise_advantage, color='purple', linestyle='--', label=f"Noise median: {median_noise_advantage:.4f}")
+    plt.legend()
+
+    results_dir = os.path.join(save_dir, f"advantage_plot_{title.replace(' ', '_')}.png")
+    plt.savefig(results_dir)
+    plt.close()
+
+    advantage_stats = {
+        "model directory": save_dir,
+        "Real Mean Advantage": mean_advantage,
+        "Real Median Advantage": median_advantage,
+        "Noise Mean Advantage": mean_noise_advantage,
+        "Noise Median Advantage": median_noise_advantage
+    }
+    return advantage_stats
+
 
 
 def plot_advantage_against_clinician_q_values(advantage, q_clinician, model_folder, config_manager):
@@ -702,6 +753,8 @@ def plot_noise_floor_comparison(real_dist, noise_dist, label="headroom",
     if save_dir is not None:
         plt.savefig(os.path.join(save_dir, f"noise_floor_{label}.png"),
                     dpi=150, bbox_inches='tight')
+        
+    plt.close(fig)
 
     return fig, axes, threshold
 
@@ -745,48 +798,39 @@ def evaluate(
         sarsa_critic, actor, test_processor,
         reduction='mean', n_shuffles=100)
     
+    # plot advantage
+    sarsa_advantage_results = plot_real_and_noise_advantage(advantage_sarsa_real, advantage_sarsa_noise, title="SARSA", save_dir=model_folder)     
     plot_noise_floor_comparison(advantage_sarsa_real, advantage_sarsa_noise, label="SARSA Advantage", save_dir=model_folder)
-    
-    
-    
-    
+          
     # calculate advantage of RL policy over clinician actions using the RL critic.
     advantage_rl_real, advantage_rl_noise = compute_paired_advantage_and_noise_floor(
         critic, actor, test_processor,
         reduction='min', n_shuffles=100)
     
-    
-    rl_actions = generate_actions(actor, test_dataset.states, batch_size=batch_size, device=device)
-
-    advantage, q_clinician, q_rl = calculate_advantage(
-        sarsa_critic, 
-        test_dataset.states, 
-        test_dataset.actions, 
-        rl_actions, 
-        device
-        )   
-
     # plot advantage
-    plot_advantage(advantage, model_folder, config_manager)
-    
-    # calculate non-parametric t-test to see if advantage is significantly greater than 0       
-    t_stat, p_value = stats.ttest_1samp(advantage, 0, alternative='greater')
-    print(f"T-statistic: {t_stat:.4f}, P-value: {p_value:.4f}")
+    rl_advantage_results = plot_real_and_noise_advantage(advantage_rl_real, advantage_rl_noise, title="RL", save_dir=model_folder)     
+    plot_noise_floor_comparison(advantage_rl_real, advantage_rl_noise, label="RL Advantage", save_dir=model_folder)
+
+    return sarsa_advantage_results, rl_advantage_results
+
+    # # calculate non-parametric t-test to see if advantage is significantly greater than 0       
+    # t_stat, p_value = stats.ttest_1samp(advantage, 0, alternative='greater')
+    # print(f"T-statistic: {t_stat:.4f}, P-value: {p_value:.4f}")
 
     
-    plot_advantage_against_clinician_q_values(advantage, q_clinician, model_folder, config_manager)
+    # plot_advantage_against_clinician_q_values(advantage, q_clinician, model_folder, config_manager)
 
-    plot_binned_advantage(advantage, q_clinician, model_folder, config_manager)    
+    # plot_binned_advantage(advantage, q_clinician, model_folder, config_manager)    
 
-    stats_summary = plot_publication_deciles(advantage, q_clinician, model_folder)
+    # stats_summary = plot_publication_deciles(advantage, q_clinician, model_folder)
 
-    rescue_rate(advantage, q_clinician)
+    # rescue_rate(advantage, q_clinician)
 
-    plot_journal_advantage(advantage, q_clinician, model_folder)
+    # plot_journal_advantage(advantage, q_clinician, model_folder)
 
-    plot_publication_deciles(advantage, q_clinician, model_folder)
+    # plot_publication_deciles(advantage, q_clinician, model_folder)
 
-    run_decile_statistics(advantage, q_clinician)
+    # run_decile_statistics(advantage, q_clinician)
 
 
 def evaluate_multiple_models():
@@ -822,6 +866,9 @@ def evaluate_multiple_models():
         rl_folders.remove("final_model")
         rl_folders = [f for f in rl_folders if not f.endswith("_run")]
 
+    sarsa_advantage_results =[]
+    rl_advantage_results = []
+
     for rl_folder in rl_folders:
         model_path = os.path.join(rl_path, rl_folder)
         
@@ -834,7 +881,10 @@ def evaluate_multiple_models():
 
         for subfolder in model_subfolders:
             model_subfolder_path = os.path.join(model_path, subfolder)
-            evaluate(
+            
+            print(f"Evaluating model in folder: {model_subfolder_path}")
+
+            sarsa_advantage_result, rl_advantage_result = evaluate(
                 config_manager=model_cfg, 
                 sarsa_critic=sarsa_critic, 
                 sarsa_configuration=sarsa_configuration,
@@ -842,19 +892,15 @@ def evaluate_multiple_models():
                 test_processor=test_processor
                 )
 
-            # check if advantage_plot.png already exists in the model_path, if it does, skip evaluation for that model
-            advantage_plot_path = os.path.join(model_subfolder_path, "advantage_plot.png")
-            if os.path.exists(advantage_plot_path):
-                print(f"Advantage plot already exists for model in folder: {model_subfolder_path}, skipping evaluation.")
-                continue
-            
-            
-            
-            print(f"Evaluating model in folder: {model_subfolder_path}")
-            evaluate(config_manager, sarsa_critic=sarsa_critic, model_path=model_subfolder_path)
+            sarsa_advantage_results.append(sarsa_advantage_result)
+            rl_advantage_results.append(rl_advantage_result)
 
+    # convert results to dataframe and save as csv
+    sarsa_advantage_df = pd.DataFrame(sarsa_advantage_results)
+    rl_advantage_df = pd.DataFrame(rl_advantage_results)
 
-
+    sarsa_advantage_df.to_csv(os.path.join(rl_path, 'sarsa_advantage_results.csv'), index=False)
+    rl_advantage_df.to_csv(os.path.join(rl_path, 'rl_advantage_results.csv'), index=False)
 
 
 def main():

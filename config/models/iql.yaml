@@ -10,7 +10,7 @@
     device: "cuda"
     learning_rate_critic:  "loguniform(1e-6, 1e-5)" # 1.e-5 # "loguniform(1e-4, 1e-3)"
     learning_rate_actor: 1e-4 # 1.e-3 # "loguniform(1e-4, 1e-3)"
-    learning_rate_value: "log_uniform(1e-7, 1.e-6)" # "loguniform(1e-4, 1e-3)"
+    learning_rate_value: "loguniform(1e-7, 1.e-6)" # "loguniform(1e-4, 1e-3)"
     dropout: 0.2
     value_dropout: 0.3
     tau: 0.005 #[0.001, 0.005, 0.01]

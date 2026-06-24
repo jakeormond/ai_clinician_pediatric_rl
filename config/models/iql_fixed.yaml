@@ -61,6 +61,6 @@
 
     n_step: 0
 
-    monte_carlo_terminal_returns: False
+    monte_carlo_terminal_returns: True
 
     use_compressed_latents: False

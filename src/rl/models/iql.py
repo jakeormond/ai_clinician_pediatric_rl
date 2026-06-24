@@ -627,6 +627,11 @@ class IQL:
 
 		# Sample replay buffer 
 		state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
+		
+		# for troubleshootng, let's make a copy of done
+		done_copy = done.clone()
+		
+		
 		# with torch.no_grad():
 		# 	# add noise to states
 		# 	state_std = state.std(dim=0, keepdim=True)
@@ -691,6 +696,20 @@ class IQL:
 				# next_v = self.value_net(smoothed_next_states)   # no target net needed for V itself
 				target_Q = reward + not_done * self.discount * next_v
 
+				# for trouble shooting, let's check V at terminal states
+				terminal_survival_mask = (done_copy == 1) & (mortality == 0)
+				terminal_non_survival_mask = (done_copy == 1) & (mortality == 1)
+				if terminal_survival_mask.any():
+					terminal_survival_v = next_v[terminal_survival_mask].mean().item()
+				else:
+					terminal_survival_v = float('nan')
+
+				if terminal_non_survival_mask.any():
+					terminal_non_survival_v = next_v[terminal_non_survival_mask].mean().item()
+				else:
+					terminal_non_survival_v = float('nan')
+
+
 		# Get current Q estimates>
 		current_Q1, current_Q2 = self.critic(state, action)
 		# current_Q1, current_Q2 = self.critic(smoothed_states, smoothed_actions)
@@ -740,6 +759,8 @@ class IQL:
 
 			q_stats = get_q_stats(current_Q1, current_Q2, Q_actor, v, mortality)
 			q_stats["advantage_qv_mean"] = advantage_qv.mean().item()	
+			q_stats["terminal_survival_v"] = terminal_survival_v
+			q_stats["terminal_non_survival_v"] = terminal_non_survival_v
 	
 		
 		else:
@@ -770,6 +791,8 @@ class IQL:
 			
 			q_stats = get_q_stats(current_Q1, current_Q2, Q_actor, v, mortality)
 			q_stats["advantage_qv_mean"] = advantage_qv.mean().item()
+			q_stats["terminal_survival_v"] = terminal_survival_v
+			q_stats["terminal_non_survival_v"] = terminal_non_survival_v
 			
 			self.actor_optimizer.zero_grad()
 			actor_loss.backward()

@@ -583,6 +583,11 @@ class IQL:
 
 		self.utils = TrainerUtils()
 
+		# copy the critic network to create the target critic
+		self.critic_target = copy.deepcopy(self.critic)
+		self.critic_target.eval()  # Target networks start in eval mode to disable Dropout
+
+
 
 
 	def select_action(self, state):
@@ -662,7 +667,8 @@ class IQL:
 		self.value_net.train()
 		self.critic.eval()  # Set critic to eval mode to disable Dropout
 		with torch.no_grad():
-			q1, q2 = self.critic(state, action)
+			# q1, q2 = self.critic(state, action)
+			q1, q2 = self.critic_target(state, action)   # changed from self.critic
 			# q1, q2 = self.critic(smoothed_states, smoothed_actions)
 			q_min = torch.min(q1, q2)
 
@@ -734,6 +740,11 @@ class IQL:
 		if self.critic_scheduler is not None:
 			self.critic_scheduler.step()
 		losses["lr_critic"] = self.critic_optimizer.param_groups[0]['lr']
+
+		with torch.no_grad():
+			for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+				target_param.mul_(1.0 - self.tau)
+				target_param.add_(param.data * self.tau)
 
 		# ---- 3. Actor update (advantage-weighted regression — delayed, like CQL) ----
 		self.critic.eval()  # Set critic to eval mode to disable Dropout

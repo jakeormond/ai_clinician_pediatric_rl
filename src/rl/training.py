@@ -772,16 +772,17 @@ def train_with_hyperparameters(
             # if model_type is iql, we need to check for whether v_net and critic loss have
             # converged, so we can start training the actor
             if config_manager.model_type in ["iql", "iql_with_sarsa"]:
-                if not trainer.train_actor_flag:
-                    min_flag_value = is_stably_converged(training_metrics.val_losses, loss_type="v_loss", burn_in=10, window=10, rel_tol=0.05)
-                    
+                if not trainer.train_actor_flag:                   
                     if config_manager.model_type == "iql":
-                        min_flag_critic = has_reached_minimum(training_metrics.val_losses, loss_type="critic_loss", patience=5, min_delta=0.0)
+                        min_flag_value = is_stably_converged(training_metrics.val_losses, loss_type="v_loss", burn_in=10, window=10, rel_tol=0.05)
+                        min_flag_critic = has_reached_minimum(training_metrics.val_losses, loss_type="critic_loss", patience=10, min_delta=0.0)
                 
                         if min_flag_value and min_flag_critic:
                             trainer.set_actor_active(True)
                             logger.info(f"Epoch {epoch}: V and Critic losses have converged, starting to train actor.")
+                    
                     else: # iql_with_sarsa
+                        min_flag_critic = has_reached_minimum(training_metrics.val_losses, loss_type="v_loss", patience=10, min_delta=0.0)
                         if min_flag_value:
                             trainer.set_actor_active(True)
                             logger.info(f"Epoch {epoch}: V loss has converged, starting to train actor.")

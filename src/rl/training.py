@@ -771,14 +771,21 @@ def train_with_hyperparameters(
                                  
             # if model_type is iql, we need to check for whether v_net and critic loss have
             # converged, so we can start training the actor
-            if config_manager.model_type == "iql":
+            if config_manager.model_type in ["iql", "iql_with_sarsa"]:
                 if not trainer.train_actor_flag:
                     min_flag_value = is_stably_converged(training_metrics.val_losses, loss_type="v_loss", burn_in=10, window=10, rel_tol=0.05)
-                    min_flag_critic = has_reached_minimum(training_metrics.val_losses, loss_type="critic_loss", patience=5, min_delta=0.0)
-            
-                    if min_flag_value and min_flag_critic:
-                        trainer.set_actor_active(True)
-                        logger.info(f"Epoch {epoch}: V and Critic losses have converged, starting to train actor.")
+                    
+                    if config_manager.model_type == "iql":
+                        min_flag_critic = has_reached_minimum(training_metrics.val_losses, loss_type="critic_loss", patience=5, min_delta=0.0)
+                
+                        if min_flag_value and min_flag_critic:
+                            trainer.set_actor_active(True)
+                            logger.info(f"Epoch {epoch}: V and Critic losses have converged, starting to train actor.")
+                    else: # iql_with_sarsa
+                        if min_flag_value:
+                            trainer.set_actor_active(True)
+                            logger.info(f"Epoch {epoch}: V loss has converged, starting to train actor.")
+
 
             # Check for improvement and copy model parameters if best, only if early stopping is enabled
             if early_stopping['flag']:
@@ -856,18 +863,31 @@ def train_with_hyperparameters(
         }
         torch.save(checkpoint, model_path)
 
-    elif config_manager.model_type in ['iql']:
-        checkpoint = {
-            'total_it': trainer.total_it,
-            'actor_state_dict': trainer.actor.state_dict(),
-            'critic_state_dict': trainer.critic.state_dict(),
-            'v_net_state_dict': trainer.value_net.state_dict(),
-            'actor_optimizer_state_dict': trainer.actor_optimizer.state_dict(),
-            'critic_optimizer_state_dict': trainer.critic_optimizer.state_dict(),
-            'v_net_optimizer_state_dict': trainer.value_net_optimizer.state_dict(),
-            'hyperparameters': hyperparams,
-            'training_config': config_manager.training_config,
-        }
+    elif config_manager.model_type in ['iql', 'iql_with_sarsa']:
+        if hasattr(trainer, 'critic_optimizer'):
+                checkpoint = {
+                'total_it': trainer.total_it,
+                'actor_state_dict': trainer.actor.state_dict(),
+                'critic_state_dict': trainer.critic.state_dict(),
+                'v_net_state_dict': trainer.value_net.state_dict(),
+                'actor_optimizer_state_dict': trainer.actor_optimizer.state_dict(),
+                'critic_optimizer_state_dict': trainer.critic_optimizer.state_dict(),
+                'v_net_optimizer_state_dict': trainer.value_net_optimizer.state_dict(),
+                'hyperparameters': hyperparams,
+                'training_config': config_manager.training_config,
+            }
+            
+        else:        
+            checkpoint = {
+                'total_it': trainer.total_it,
+                'actor_state_dict': trainer.actor.state_dict(),
+                'critic_state_dict': trainer.critic.state_dict(),
+                'v_net_state_dict': trainer.value_net.state_dict(),
+                'actor_optimizer_state_dict': trainer.actor_optimizer.state_dict(),
+                'v_net_optimizer_state_dict': trainer.value_net_optimizer.state_dict(),
+                'hyperparameters': hyperparams,
+                'training_config': config_manager.training_config,
+            }
         torch.save(checkpoint, model_path)
     
     elif config_manager.model_type == 'cvp':

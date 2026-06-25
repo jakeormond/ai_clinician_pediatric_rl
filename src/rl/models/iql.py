@@ -670,11 +670,12 @@ class IQL:
 			# q1, q2 = self.critic(state, action)
 			q1, q2 = self.critic_target(state, action)   # changed from self.critic
 			# q1, q2 = self.critic(smoothed_states, smoothed_actions)
-			q_min = torch.min(q1, q2)
+			# q_min = torch.min(q1, q2)
+			q_mean = (q1 + q2) / 2.0
 
 		v = self.value_net(state)
 		# v = self.value_net(smoothed_states)
-		v_loss = self.expectile_loss(q_min - v, expectile=self.expectile).mean()
+		v_loss = self.expectile_loss(q_mean - v, expectile=self.expectile).mean()
 		
 		self.value_net_optimizer.zero_grad()
 		v_loss.backward()
@@ -752,10 +753,11 @@ class IQL:
 		with torch.no_grad():
 			q1_eval, q2_eval = self.critic(state, action)
 			# q1_eval, q2_eval = self.critic(smoothed_states, smoothed_actions)
-			q_min = torch.min(q1_eval, q2_eval)
+			# q_min = torch.min(q1_eval, q2_eval)
+			q_mean = (q1_eval + q2_eval) / 2.0
 			v = self.value_net(state)
 			# v = self.value_net(smoothed_states)
-			advantage_qv = q_min - v
+			advantage_qv = q_mean - v
 
 		# Delayed policy updates
 		if self.total_it % self.policy_freq != 0 or self.train_actor_flag is False:
@@ -890,13 +892,13 @@ class IQL:
 			critic_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
 
 			v = self.value_net(state)
-			q_min = torch.min(current_Q1, current_Q2)
-			v_loss = self.expectile_loss(q_min - v, expectile=self.expectile).mean()
-			advantage_qv = q_min - v
+			q_mean = (current_Q1 + current_Q2) / 2.0
+			v_loss = self.expectile_loss(q_mean - v, expectile=self.expectile).mean()
+			advantage_qv = q_mean - v
 
 			pi, _ = self.actor(state, deterministic=True)
 			Q1_actor, Q2_actor = self.critic(state, pi)
-			Q_actor = torch.min(Q1_actor, Q2_actor)
+			Q_actor = (Q1_actor + Q2_actor) / 2.0
 
 			# Actor loss on held-out data, computed the same way as train(),
 			# but never used to update parameters — purely diagnostic

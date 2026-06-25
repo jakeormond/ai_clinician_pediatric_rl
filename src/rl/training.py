@@ -782,7 +782,7 @@ def train_with_hyperparameters(
                             logger.info(f"Epoch {epoch}: V and Critic losses have converged, starting to train actor.")
                     
                     else: # iql_with_sarsa
-                        min_flag_critic = has_reached_minimum(training_metrics.val_losses, loss_type="v_loss", patience=10, min_delta=0.0)
+                        min_flag_value = has_reached_minimum(training_metrics.val_losses, loss_type="v_loss", patience=10, min_delta=0.0)
                         if min_flag_value:
                             trainer.set_actor_active(True)
                             logger.info(f"Epoch {epoch}: V loss has converged, starting to train actor.")

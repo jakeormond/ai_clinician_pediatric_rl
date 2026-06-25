@@ -670,6 +670,28 @@
         },
 
         {
+            "name": "choc_iql_with_sarsa_fixed",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.rl.reinforcement_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "reinforcement_learning",
+                "--model_type", "iql_with_sarsa", 
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--model_dir", "sepsis_models/intake_vis",
+                "--search_variant", "fixed_hyperparameters",
+                "--cohort", "sepsis",
+                "--n_epochs", "200",
+                "--action_mode", "continuous_only",  
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
             "name": "choc_cvp_random_search",
             "type": "debugpy",
             "request": "launch",

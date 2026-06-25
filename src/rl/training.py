@@ -36,6 +36,7 @@ MODEL_MODULES = {
     "conservative_q_learning": "src.rl.models.conservative_q_learning",
     "cvp": "src.rl.models.cvp",
     "iql": "src.rl.models.iql",
+    "iql_with_sarsa": "src.rl.models.iql_with_sarsa",
 }
 
 DISTRIBUTIONS = {

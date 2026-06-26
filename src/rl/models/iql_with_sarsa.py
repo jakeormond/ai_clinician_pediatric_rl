@@ -546,13 +546,18 @@ class IQL_SARSA:
 			losses["exp_weight_mean"] = exp_weight.mean().item()
 			losses["exp_weight_max"] = exp_weight.max().item()
 			losses["exp_weight_pct_at_ceiling"] = (exp_weight >= 99.9).float().mean().item()
-			
+
+			losses["pi_fluid_mean"] = pi[:, 0].mean().item()
+			losses["pi_fluid_std"] = pi[:, 0].std().item()
+			losses["pi_vaso_mean"] = pi[:, 1].mean().item()
+			losses["pi_vaso_std"] = pi[:, 1].std().item()
+
 			with torch.no_grad():
 				Q1_actor, Q2_actor = self.critic(state, pi)
 				# Q1_actor, Q2_actor = self.critic(smoothed_states, pi)
 			Q_actor = (Q1_actor + Q2_actor) / 2.0
 			
-			q_stats = get_q_stats(q1, Q2_actor, Q_actor, v, mortality)
+			q_stats = get_q_stats(q1, q2, Q_actor, v, mortality)
 			q_stats["advantage_qv_mean"] = advantage_qv.mean().item()
 			
 			self.actor_optimizer.zero_grad()
@@ -659,7 +664,11 @@ class IQL_SARSA:
 				"actor_loss": actor_loss.item(),
 				"exp_weight_mean": exp_weight.mean().item(),
 				"exp_weight_max": exp_weight.max().item(),
-				"exp_weight_pct_at_ceiling": (exp_weight >= 99.9).float().mean().item()
+				"exp_weight_pct_at_ceiling": (exp_weight >= 99.9).float().mean().item(),
+				"pi_fluid_mean": pi[:, 0].mean().item(),
+				"pi_fluid_std": pi[:, 0].std().item(),
+				"pi_vaso_mean": pi[:, 1].mean().item(),
+				"pi_vaso_std": pi[:, 1].std().item(),
 			}
 
 			neuron_stats = self.critic.get_neuron_stats(state, action)

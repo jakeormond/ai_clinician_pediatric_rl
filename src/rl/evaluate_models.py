@@ -297,6 +297,20 @@ def plot_advantage_against_clinician_q_values(advantage, q_clinician, model_fold
     import matplotlib.pyplot as plt
     import seaborn as sns
     from scipy import stats
+    os.makedirs(model_folder, exist_ok=True)
+
+    advantage = np.asarray(advantage)
+    q_clinician = np.asarray(q_clinician)
+    finite_mask = np.isfinite(advantage) & np.isfinite(q_clinician)
+
+    if finite_mask.sum() < 2:
+        print(
+            f"Skipping plot_advantage_against_clinician_q_values: only {finite_mask.sum()} finite points."
+        )
+        return
+
+    advantage = advantage[finite_mask]
+    q_clinician = q_clinician[finite_mask]
     
     plt.figure(figsize=(6, 4))
 
@@ -307,16 +321,21 @@ def plot_advantage_against_clinician_q_values(advantage, q_clinician, model_fold
                 line_kws={'color':'red', 'label':'Linear Trend'})
 
     # 2. Calculate Pearson correlation for the title
-    r, p = stats.pearsonr(q_clinician, advantage)
+    try:
+        r, p = stats.pearsonr(q_clinician, advantage)
+    except ValueError:
+        r, p = np.nan, np.nan
 
-    plt.title(f"Advantage vs Clinician Q-Values ({config_manager.rl_type.upper()})\n"
+    plt.title(f"Advantage vs Clinician Q-Values ({config_manager.model_type.upper()})\n"
                 f"Pearson R: {r:.3f}, p-value: {p:.3e}")
-    plt.xlabel("Clinician Q-Values (Evaluated by {critic_type.upper()})")
+    plt.xlabel(f"Clinician Q-Values (Evaluated by {critic_type.upper()})")
     plt.ylabel("RL Policy Advantage")
     plt.grid(True, alpha=0.3)
+    plt.tight_layout()
 
     results_dir = os.path.join(model_folder, f"advantage_vs_clinician_q_values_{critic_type}.png")
-    plt.savefig(results_dir)
+    plt.savefig(results_dir, dpi=300, bbox_inches='tight')
+    print(f"Saved advantage-vs-clinician plot to: {results_dir}")
     plt.close()
     # plt.show()
 
@@ -615,7 +634,7 @@ def compute_paired_advantage_and_noise_floor(critic, actor, test_processor,
         actions_to_use=None,
         model_type="actor"
     )
-    
+
     q_policy = generate_model_outputs(
         test_processor,
         model=critic,

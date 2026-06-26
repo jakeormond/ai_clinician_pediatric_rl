@@ -293,7 +293,7 @@ def plot_real_and_noise_advantage(advantage, noise_advantage, title=None, save_d
 
 
 
-def plot_advantage_against_clinician_q_values(advantage, q_clinician, model_folder, config_manager):
+def plot_advantage_against_clinician_q_values(advantage, q_clinician, model_folder, config_manager, critic_type="sarsa"):
     import matplotlib.pyplot as plt
     import seaborn as sns
     from scipy import stats
@@ -311,18 +311,18 @@ def plot_advantage_against_clinician_q_values(advantage, q_clinician, model_fold
 
     plt.title(f"Advantage vs Clinician Q-Values ({config_manager.rl_type.upper()})\n"
                 f"Pearson R: {r:.3f}, p-value: {p:.3e}")
-    plt.xlabel("Clinician Q-Values (Evaluated by SARSA)")
+    plt.xlabel("Clinician Q-Values (Evaluated by {critic_type.upper()})")
     plt.ylabel("RL Policy Advantage")
     plt.grid(True, alpha=0.3)
 
-    results_dir = os.path.join(model_folder, "advantage_vs_clinician_q_values.png")
+    results_dir = os.path.join(model_folder, f"advantage_vs_clinician_q_values_{critic_type}.png")
     plt.savefig(results_dir)
     plt.close()
     # plt.show()
 
 
 
-def plot_binned_advantage(advantage, q_clinician, model_folder, config_manager):
+def plot_binned_advantage(advantage, q_clinician, model_folder, config_manager, critic_type="sarsa"):
     import pandas as pd
     import matplotlib.pyplot as plt
     import seaborn as sns
@@ -353,24 +353,24 @@ def plot_binned_advantage(advantage, q_clinician, model_folder, config_manager):
     plt.ylabel("Mean RL Advantage")
     plt.grid(True, alpha=0.2)
 
-    save_path = os.path.join(model_folder, "binned_advantage_trend.png")
+    save_path = os.path.join(model_folder, f"binned_advantage_trend_{critic_type}.png")
     plt.savefig(save_path, dpi=300)
     plt.close()
     # plt.show()
 
 
-def rescue_rate(advantage, q_clinician):
-# Create the mask for that 10th bin (lowest performance)
-    bottom_10_mask = q_clinician < 9.0 
+# def rescue_rate(advantage, q_clinician, model_folder, critic_type="sarsa"):
+# # Create the mask for that 10th bin (lowest performance)
+#     bottom_10_mask = q_clinician < 9.0 
 
-    # What % of these 'deteriorating' cases did the AI improve upon?
-    improvements = advantage[bottom_10_mask] > 0
-    rescue_rate = 100 * improvements.mean().item()
+#     # What % of these 'deteriorating' cases did the AI improve upon?
+#     improvements = advantage[bottom_10_mask] > 0
+#     rescue_rate = 100 * improvements.mean().item()
 
-    print(f"In the bottom 10% of cases, RL proposed a better action than the clinician {rescue_rate:.1f}% of the time.")
+#     print(f"In the bottom 10% of cases, RL proposed a better action than the clinician {rescue_rate:.1f}% of the time.")
 
 
-def plot_journal_advantage(advantage, q_clinician, model_folder):
+def plot_journal_advantage(advantage, q_clinician, model_folder, critic_type="sarsa"):
     import pandas as pd
     import matplotlib.pyplot as plt
     import seaborn as sns
@@ -404,12 +404,12 @@ def plot_journal_advantage(advantage, q_clinician, model_folder):
                  arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=5))
 
     plt.tight_layout()
-    plt.savefig(os.path.join(model_folder, "journal_advantage_deciles.png"), dpi=300)
+    plt.savefig(os.path.join(model_folder, f"journal_advantage_deciles_{critic_type}.png"), dpi=300)
     plt.close()
 
 
 
-def plot_publication_deciles(advantage, q_clinician, model_folder):
+def plot_publication_deciles(advantage, q_clinician, model_folder, critic_type="sarsa"):
     import pandas as pd
     import matplotlib.pyplot as plt
     import seaborn as sns
@@ -460,7 +460,7 @@ def plot_publication_deciles(advantage, q_clinician, model_folder):
     # Clean up spines
     sns.despine()
     plt.tight_layout()
-    plt.savefig(f"{model_folder}/publication_decile_stats.png", dpi=300)
+    plt.savefig(f"{model_folder}/publication_decile_stats_{critic_type}.png", dpi=300)
     plt.close()
     
     return stats_df
@@ -607,7 +607,7 @@ def compute_paired_advantage_and_noise_floor(critic, actor, test_processor,
         actions_to_use=None,
         model_type="critic",
         reduction=reduction
-    )
+    ).cpu().numpy().ravel()
 
     actions = generate_model_outputs(
         test_processor,
@@ -615,17 +615,17 @@ def compute_paired_advantage_and_noise_floor(critic, actor, test_processor,
         actions_to_use=None,
         model_type="actor"
     )
-
+    
     q_policy = generate_model_outputs(
         test_processor,
         model=critic,
         actions_to_use=actions,
         model_type="critic",
         reduction=reduction
-    )
+    ).cpu().numpy().ravel()
 
     # real advantage
-    advantage_real = (q_policy - q_clin).cpu().numpy().ravel()
+    advantage_real = q_policy - q_clin
 
     # generate noise floor by shuffling clinician actions and evaluating critic
     clinician_actions = test_processor.rl_dataset["actions"]
@@ -639,13 +639,12 @@ def compute_paired_advantage_and_noise_floor(critic, actor, test_processor,
             actions_to_use=shuffled_actions,
             model_type="critic",
             reduction=reduction
-        )
-        all_noise_adv.append((q_shuffled - q_clin).cpu().numpy().ravel())
+        ).cpu().numpy().ravel()
+        all_noise_adv.append(q_shuffled - q_clin)
     
     advantage_noise = np.concatenate(all_noise_adv)
     
-    return advantage_real, advantage_noise
-
+    return advantage_real, advantage_noise, q_policy, q_clin
 
 
 def find_calibrated_threshold_relative(real_headroom, noise_headroom,
@@ -794,7 +793,7 @@ def evaluate(
     batch_size = actor_hyperparams["batch_size"]
 
     # calculate advantage of RL policy over clinician actions using the SARSA critic.
-    advantage_sarsa_real, advantage_sarsa_noise = compute_paired_advantage_and_noise_floor(
+    advantage_sarsa_real, advantage_sarsa_noise, q_policy_sarsa, q_clin_sarsa = compute_paired_advantage_and_noise_floor(
         sarsa_critic, actor, test_processor,
         reduction='mean', n_shuffles=100)
     
@@ -803,7 +802,7 @@ def evaluate(
     plot_noise_floor_comparison(advantage_sarsa_real, advantage_sarsa_noise, label="SARSA Advantage", save_dir=model_folder)
           
     # calculate advantage of RL policy over clinician actions using the RL critic.
-    advantage_rl_real, advantage_rl_noise = compute_paired_advantage_and_noise_floor(
+    advantage_rl_real, advantage_rl_noise, q_policy_rl, q_clin_rl = compute_paired_advantage_and_noise_floor(
         critic, actor, test_processor,
         reduction='min', n_shuffles=100)
     
@@ -811,29 +810,26 @@ def evaluate(
     rl_advantage_results = plot_real_and_noise_advantage(advantage_rl_real, advantage_rl_noise, title="RL", save_dir=model_folder)     
     plot_noise_floor_comparison(advantage_rl_real, advantage_rl_noise, label="RL Advantage", save_dir=model_folder)
 
-    return sarsa_advantage_results, rl_advantage_results
-
     # # calculate non-parametric t-test to see if advantage is significantly greater than 0       
     # t_stat, p_value = stats.ttest_1samp(advantage, 0, alternative='greater')
     # print(f"T-statistic: {t_stat:.4f}, P-value: {p_value:.4f}")
 
-    
-    # plot_advantage_against_clinician_q_values(advantage, q_clinician, model_folder, config_manager)
+    plot_advantage_against_clinician_q_values(advantage_sarsa_real, q_clin_sarsa, model_folder, config_manager, critic_type="sarsa")
 
-    # plot_binned_advantage(advantage, q_clinician, model_folder, config_manager)    
+    plot_binned_advantage(advantage_sarsa_real, q_clin_sarsa, model_folder, config_manager, critic_type="sarsa")    
 
-    # stats_summary = plot_publication_deciles(advantage, q_clinician, model_folder)
+    stats_summary = plot_publication_deciles(advantage_sarsa_real, q_clin_sarsa, model_folder, critic_type="sarsa")
 
-    # rescue_rate(advantage, q_clinician)
+    # rescue_rate(advantage_sarsa_real, q_clin_sarsa, model_folder, critic_type="sarsa")
 
-    # plot_journal_advantage(advantage, q_clinician, model_folder)
+    plot_journal_advantage(advantage_sarsa_real, q_clin_sarsa, model_folder, critic_type="sarsa")
 
-    # plot_publication_deciles(advantage, q_clinician, model_folder)
+    plot_publication_deciles(advantage_sarsa_real, q_clin_sarsa, model_folder, critic_type="sarsa")
 
-    # run_decile_statistics(advantage, q_clinician)
+    run_decile_statistics(advantage_sarsa_real, q_clin_sarsa)
+    return sarsa_advantage_results, rl_advantage_results
 
-
-def evaluate_multiple_models():
+def evaluate_multiple_models(rl_model_dir=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # parse arguments
@@ -869,7 +865,7 @@ def evaluate_multiple_models():
     sarsa_advantage_results =[]
     rl_advantage_results = []
 
-    for rl_folder in rl_folders:
+    for rl_folder in rl_folders:       
         model_path = os.path.join(rl_path, rl_folder)
         
         # load the configuration
@@ -880,6 +876,10 @@ def evaluate_multiple_models():
         model_subfolders = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and (f.startswith("local") or f.startswith("unknown"))]
 
         for subfolder in model_subfolders:
+            if rl_model_dir is not None:
+                if subfolder != rl_model_dir:
+                    continue
+
             model_subfolder_path = os.path.join(model_path, subfolder)
             
             print(f"Evaluating model in folder: {model_subfolder_path}")
@@ -905,7 +905,8 @@ def evaluate_multiple_models():
 
 def main():
     # evaluate()
-    evaluate_multiple_models()
+    # evaluate_multiple_models()
+    evaluate_multiple_models(rl_model_dir="unknown_cx3-20-5_20260619-025044_7ac09ff8")  # Set to None to evaluate all models, or specify a model directory name
 
 
 if __name__ == "__main__":

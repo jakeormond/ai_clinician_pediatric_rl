@@ -442,6 +442,8 @@ class IQL_SARSA:
 	def train(self, batch: TensorBatch) -> Tuple[Dict[str, float], Dict[str, float]]:
 		self.total_it += 1
 
+		self.critic.eval()  # Set critic to evaluation mode to disable Dropout and BatchNorm
+		
 		# Sample replay buffer 
 		state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
 		
@@ -785,6 +787,7 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		config_manager, 
 		model_path=model_path
 	)
+	critic.eval()  # Set critic to evaluation mode to disable Dropout and BatchNorm	
 
 	value_net = ValueNetwork(
 		state_dim,

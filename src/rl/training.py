@@ -13,7 +13,7 @@ import xgboost as xgb
 import torch
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
-from ..utils.logging_utilities import wandb_init, generate_run_seed, get_job_id
+from ..utils.logging_utilities import wandb_init, generate_run_seed, get_job_id, can_reach_wandb
 from ..data.data_processor import DataProcessor
 from ..data.data_processor_for_shards import ShardProcessor
 from .replay_buffer import RLDataset
@@ -428,7 +428,8 @@ def single_split_training(config_manager):
     if config_manager.environment == "local":
         config_manager.training_config['wandb_mode'] = "online"
     else:
-        config_manager.training_config['wandb_mode'] = "offline"
+        config_manager.training_config['wandb_mode'] = "online" if can_reach_wandb() else "offline"
+        logger.info(f"HPC wandb connectivity check: mode set to '{config_manager.training_config['wandb_mode']}'")
     
     logger.info("Starting single split training...")
     logger.info("Discount set to: " + str(config_manager.training_config['discount']))

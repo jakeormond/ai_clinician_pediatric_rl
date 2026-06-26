@@ -4,6 +4,16 @@ from typing import Dict
 import numpy as np
 import os
 import hashlib
+import socket
+
+
+def can_reach_wandb(timeout=3):
+    """Check whether the wandb server is reachable (e.g. HPC compute node may lack internet)."""
+    try:
+        socket.create_connection(("api.wandb.ai", 443), timeout=timeout)
+        return True
+    except OSError:
+        return False
 
 
 def generate_run_seed(job_id: str, search_idx: int) -> int:

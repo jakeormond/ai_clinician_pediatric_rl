@@ -14,19 +14,19 @@
     learning_rate_critic: 1.e-3 # 5e-6 # "loguniform(1e-4, 1e-3)"   
     learning_rate_actor: 1e-3  # "loguniform(1e-4, 1e-3)"   
     dropout: 0.2 # 0.05 # "uniform(0.0, 0.5)"
-    tau: 0.005 # 0.0005 # Target network update rate
+    tau: 0.001 # 0.0005 # Target network update rate
     weight_decay: 1.e-4 #1e-4 # L2 regularization strength
     
     policy_noise: 0.2 # Noise added to target policy during critic updates
     noise_clip: 0.5 # Range to clip target policy noise
     policy_freq: 2 # Frequency of delayed policy updates
     beta: 0.1 # Weighting for BC loss term
-    cql_alpha: 0.0001 # 0.01 # 0.001 #.001 # Weighting for CQL penalty term
+    cql_alpha: 0.01 # 0.001 # 0.01 # 0.001 #.001 # Weighting for CQL penalty term
     temp: 1.0 # Temperature for CQL penalty term
     num_samples: 10 # Number of samples for CQL penalty term
 
     batch_size: 1024 # [256, 512, 1024]  # Batch size for all networks
-    hidden_dim: 256 # [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
+    hidden_dim: 64 # 256 # [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
 
     # Early stopping parameters (fixed for all combinations)
     early_stopping_flag: False  # Whether to use early stopping

@@ -347,10 +347,11 @@ class Critic(nn.Module):
 def get_q_stats(current_Q1, current_Q2, actor_Q, mortality):
 	
 	# create current_Q as the mean of current_Q1 and current_Q2
-	current_Q = (current_Q1 + current_Q2) / 2.0
-	mean_Q = current_Q.mean().item()
-	variance_Q = current_Q.var().item()
-	batch_n = current_Q.shape[0]
+	current_Q_mean = (current_Q1 + current_Q2) / 2.0
+	current_Q_min = torch.min(current_Q1, current_Q2)
+	mean_Q = current_Q_mean.mean().item()
+	variance_Q = current_Q_mean.var().item()
+	batch_n = current_Q_mean.shape[0]
 	uncertainty_Q = F.mse_loss(current_Q1, current_Q2).item() # simple measure of uncertainty based on disagreement between the two critics
 
 	# masks and counts
@@ -362,7 +363,7 @@ def get_q_stats(current_Q1, current_Q2, actor_Q, mortality):
 	
 	# only compute subgroup mean/variance together when n > 2
 	if survival_n > 2:
-		survival_vals = current_Q[survival_mask]
+		survival_vals = current_Q_mean[survival_mask]
 		survival_Q = survival_vals.mean().item()
 		survival_variance_Q = survival_vals.var().item()
 	else:
@@ -371,7 +372,7 @@ def get_q_stats(current_Q1, current_Q2, actor_Q, mortality):
 		survival_n = 0
 
 	if non_survival_n > 2:
-		non_survival_vals = current_Q[non_survival_mask]
+		non_survival_vals = current_Q_mean[non_survival_mask]
 		non_survival_Q = non_survival_vals.mean().item()
 		non_survival_variance_Q = non_survival_vals.var().item()
 	else:
@@ -387,7 +388,7 @@ def get_q_stats(current_Q1, current_Q2, actor_Q, mortality):
 		signal_to_noise = signal / noise if noise > 0 else float('inf')
 
 		# also calculate AUC of using Q value to predict mortality, as an alternative measure of signal to noise
-		auc_Q = roc_auc_score(1-mortality.detach().cpu().numpy(), current_Q.detach().cpu().numpy())
+		auc_Q = roc_auc_score(1-mortality.detach().cpu().numpy(), current_Q_mean.detach().cpu().numpy())
 
 	else:
 		signal_to_noise = float('nan')
@@ -422,8 +423,8 @@ def get_q_stats(current_Q1, current_Q2, actor_Q, mortality):
 	# })
 
 	if actor_Q is not None:
-		advantage_Q = actor_Q - current_Q # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
-		advantage_Q_mean = (actor_Q - current_Q).mean().item() # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
+		advantage_Q = actor_Q - current_Q_min # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
+		advantage_Q_mean = (actor_Q - current_Q_min).mean().item() # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
 		survival_advantage_Q = advantage_Q[survival_mask].mean().item() if survival_n > 0 else float('nan')
 		non_survival_advantage_Q = advantage_Q[non_survival_mask].mean().item() if non_survival_n > 0 else float('nan')
 		
@@ -853,6 +854,10 @@ class CQL:
 				"actor_loss_total": actor_loss.item(),
 				"actor_loss_q": actor_loss_q.item(),
 				"actor_loss_bc": actor_loss_bc.item(),
+				"fluid_volume_loss": actor_dict['fluid_volume_loss'].item(),
+				"vaso_volume_loss": actor_dict['vaso_volume_loss'].item(),
+				"fluid_mean": pi[:, 0].mean().item(),
+				"vaso_mean": pi[:, 1].mean().item(),
 				"actor_raw_advantage_mean": raw_advantage.mean().item(),
 				"actor_loss_ent": actor_loss_ent.item()
 			})

@@ -367,7 +367,7 @@ def plot_binned_advantage(advantage, q_clinician, model_folder, config_manager, 
     # Add a horizontal line at y=0 (Neutral advantage)
     plt.axhline(0, color='black', linestyle='--', alpha=0.6)
     
-    plt.title(f"Mean Policy Advantage by Clinician Performance ({config_manager.rl_type.upper()})")
+    plt.title(f"Mean Policy Advantage by Clinician Performance ({config_manager.model_type.upper()})")
     plt.xlabel("Clinician Q-Value (Binned Deciles)")
     plt.ylabel("Mean RL Advantage")
     plt.grid(True, alpha=0.2)
@@ -376,6 +376,81 @@ def plot_binned_advantage(advantage, q_clinician, model_folder, config_manager, 
     plt.savefig(save_path, dpi=300)
     plt.close()
     # plt.show()
+
+
+def plot_binned_advantage_by_mortality(advantage, q_clinician, mortality, model_folder, config_manager, critic_type="sarsa"):
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    # Create a DataFrame for easier manipulation
+    df = pd.DataFrame({
+        'Clinician_Q': q_clinician,
+        'Advantage': advantage,
+        'Mortality': mortality
+    })
+
+    # Divide Clinician Q-values into 10 equal-sized bins
+    df['Q_Bin'] = pd.qcut(df['Clinician_Q'], q=10, labels=False, duplicates='drop')
+    
+    # Calculate the mean Q-value for each bin to use as the X-axis center
+    bin_centers = df.groupby('Q_Bin')['Clinician_Q'].mean()
+    df['Bin_Center'] = df['Q_Bin'].map(bin_centers)
+
+    # create figure with 2 subplots: one for survivors and one for non-survivors
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+    for ax, mortality_status in zip(axes, [0, 1]):
+        subset = df[df['Mortality'] == mortality_status]
+        sns.lineplot(data=subset, x='Bin_Center', y='Advantage', marker='o', ax=ax, color='teal', linewidth=2.5)
+        ax.axhline(0, color='black', linestyle='--', alpha=0.6)
+        ax.set_title(f"{'Survivors' if mortality_status == 0 else 'Non-Survivors'}")
+        ax.set_xlabel("Clinician Q-Value (Binned Deciles)")
+        ax.set_ylabel("Mean RL Advantage")
+        ax.grid(True, alpha=0.2)
+         
+    save_path = os.path.join(model_folder, f"binned_advantage_trend_by_mortality_{critic_type}.png")
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    # plt.show()
+
+
+def plot_actions_by_q_clinician_by_mortality(
+        advantage, q_clinician, mortality, clinician_actions, rl_actions,
+        model_folder):
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    # Create a DataFrame for easier manipulation
+    df = pd.DataFrame({
+        'Clinician_Q': q_clinician,
+        'Advantage': advantage,
+        'Mortality': mortality
+    })
+
+    # Divide Clinician Q-values into 10 equal-sized bins
+    df['Q_Bin'] = pd.qcut(df['Clinician_Q'], q=10, labels=False, duplicates='drop')
+    
+    # Calculate the mean Q-value for each bin to use as the X-axis center
+    bin_centers = df.groupby('Q_Bin')['Clinician_Q'].mean()
+    df['Bin_Center'] = df['Q_Bin'].map(bin_centers)
+
+    # create figure with 2 subplots: one for survivors and one for non-survivors
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+    for ax, mortality_status in zip(axes, [0, 1]):
+        subset = df[df['Mortality'] == mortality_status]
+        sns.lineplot(data=subset, x='Bin_Center', y='Advantage', marker='o', ax=ax, color='teal', linewidth=2.5)
+        ax.axhline(0, color='black', linestyle='--', alpha=0.6)
+        ax.set_title(f"{'Survivors' if mortality_status == 0 else 'Non-Survivors'}")
+        ax.set_xlabel("Clinician Q-Value (Binned Deciles)")
+        ax.set_ylabel("Mean RL Advantage")
+        ax.grid(True, alpha=0.2)
+         
+    save_path = os.path.join(model_folder, f"binned_advantage_trend_by_mortality_{critic_type}.png")
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    # plt.show()
+
 
 
 # def rescue_rate(advantage, q_clinician, model_folder, critic_type="sarsa"):
@@ -778,6 +853,211 @@ def plot_noise_floor_comparison(real_dist, noise_dist, label="headroom",
 
 
 
+
+ 
+def plot_actions_by_q_clinician_by_mortality(
+    advantage, q_clinician, mortality, clinician_actions, policy_actions,
+    save_dir=None, n_q_bins=5, deadband=0.02, action_names=("fluid", "vaso")
+):
+    """
+    For each (mortality x Q-bin) cell, compare clinician vs policy dosing,
+    and show the advantage distribution and signed direction of change.
+ 
+    advantage:          (N,) array — per-timestep advantage (e.g. SARSA-evaluated)
+    q_clinician:        (N,) array — per-timestep Q(s, a_clinician), used to bin severity
+    mortality:          (N,) array — 0 = survivor, 1 = non-survivor
+    clinician_actions:  (N, 2) array — clinician fluid/vaso doses
+    policy_actions:     (N, 2) array — policy fluid/vaso doses
+    n_q_bins:           number of quantile bins to split q_clinician into, PER mortality group
+    deadband:           +/- range around zero treated as "about the same" for direction analysis
+    """
+    advantage = np.asarray(advantage).ravel()
+    q_clinician = np.asarray(q_clinician).ravel()
+    mortality = np.asarray(mortality).ravel()
+    clinician_actions = np.asarray(clinician_actions)
+    policy_actions = np.asarray(policy_actions)
+ 
+    os.makedirs(save_dir, exist_ok=True) if save_dir else None
+ 
+    mortality_groups = [("Survivors", mortality == 0), ("Non-survivors", mortality == 1)]
+ 
+    # ------------------------------------------------------------------
+    # Build per-cell summary table (printed + returned), bins computed
+    # SEPARATELY within each mortality group so bins reflect that group's
+    # own Q-distribution rather than a shared, potentially mismatched range
+    # ------------------------------------------------------------------
+    summary_rows = []
+    for group_label, group_mask in mortality_groups:
+        q_group = q_clinician[group_mask]
+        if q_group.size < n_q_bins * 5:
+            continue  # not enough data to bin meaningfully
+ 
+        bin_edges = np.quantile(q_group, np.linspace(0, 1, n_q_bins + 1))
+        bin_edges[-1] += 1e-8  # ensure max value falls into last bin
+        bin_idx_group = np.digitize(q_group, bin_edges[1:-1], right=True)
+ 
+        adv_group = advantage[group_mask]
+        clin_group = clinician_actions[group_mask]
+        pol_group = policy_actions[group_mask]
+ 
+        for b in range(n_q_bins):
+            cell_mask = bin_idx_group == b
+            n_cell = cell_mask.sum()
+            if n_cell < 5:
+                continue
+ 
+            row = {
+                "mortality_group": group_label,
+                "q_bin": b,
+                "q_bin_range": (bin_edges[b], bin_edges[b + 1]),
+                "n": int(n_cell),
+                "mean_advantage": float(adv_group[cell_mask].mean()),
+            }
+ 
+            for d, name in enumerate(action_names):
+                clin_d = clin_group[cell_mask, d]
+                pol_d = pol_group[cell_mask, d]
+                diff_d = pol_d - clin_d
+ 
+                row[f"{name}_clinician_mean"] = float(clin_d.mean())
+                row[f"{name}_policy_mean"] = float(pol_d.mean())
+                row[f"{name}_clinician_pct_nonzero"] = float((clin_d > 1e-4).mean() * 100)
+                row[f"{name}_policy_pct_nonzero"] = float((pol_d > 1e-4).mean() * 100)
+ 
+                clin_nonzero = clin_d[clin_d > 1e-4]
+                pol_nonzero = pol_d[pol_d > 1e-4]
+                row[f"{name}_clinician_mean_given_nonzero"] = (
+                    float(clin_nonzero.mean()) if clin_nonzero.size > 0 else float("nan")
+                )
+                row[f"{name}_policy_mean_given_nonzero"] = (
+                    float(pol_nonzero.mean()) if pol_nonzero.size > 0 else float("nan")
+                )
+ 
+                row[f"{name}_pct_more"] = float((diff_d > deadband).mean() * 100)
+                row[f"{name}_pct_less"] = float((diff_d < -deadband).mean() * 100)
+                row[f"{name}_pct_same"] = float((np.abs(diff_d) <= deadband).mean() * 100)
+                row[f"{name}_mean_diff"] = float(diff_d.mean())
+ 
+            summary_rows.append(row)
+ 
+    # Print a readable summary table
+    print(f"{'Group':<14} {'Qbin':<5} {'N':<7} {'AdvMean':<9} "
+          + "".join([f"{n}_clin{'':<3}{n}_pol{'':<3}{n}_%more{'':<2}{n}_%less{'':<3}"
+                      for n in action_names]))
+    for row in summary_rows:
+        line = (f"{row['mortality_group']:<14} {row['q_bin']:<5} {row['n']:<7} "
+                 f"{row['mean_advantage']:<9.4f} ")
+        for name in action_names:
+            line += (f"{row[f'{name}_clinician_mean']:<9.3f}"
+                      f"{row[f'{name}_policy_mean']:<9.3f}"
+                      f"{row[f'{name}_pct_more']:<8.1f}"
+                      f"{row[f'{name}_pct_less']:<8.1f}")
+        print(line)
+ 
+    # ------------------------------------------------------------------
+    # FIGURE 1 — dosing comparison (clinician vs policy mean dose, and
+    # % nonzero) across Q-bins, one row per action dimension, one column
+    # per mortality group
+    # ------------------------------------------------------------------
+    n_actions = len(action_names)
+    fig1, axes1 = plt.subplots(n_actions, len(mortality_groups),
+                                figsize=(6 * len(mortality_groups), 4 * n_actions),
+                                squeeze=False)
+ 
+    for col, (group_label, _) in enumerate(mortality_groups):
+        group_rows = [r for r in summary_rows if r["mortality_group"] == group_label]
+        if not group_rows:
+            continue
+        bins = [r["q_bin"] for r in group_rows]
+ 
+        for row_i, name in enumerate(action_names):
+            ax = axes1[row_i, col]
+            clin_means = [r[f"{name}_clinician_mean"] for r in group_rows]
+            pol_means = [r[f"{name}_policy_mean"] for r in group_rows]
+ 
+            width = 0.35
+            x = np.arange(len(bins))
+            ax.bar(x - width / 2, clin_means, width, label="Clinician", color="tab:blue")
+            ax.bar(x + width / 2, pol_means, width, label="Policy", color="tab:orange")
+            ax.set_xticks(x)
+            ax.set_xticklabels([f"Q-bin {b}" for b in bins], fontsize=8)
+            ax.set_ylabel(f"Mean {name} dose")
+            ax.set_title(f"{group_label} — {name}")
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3, axis='y')
+ 
+    plt.tight_layout()
+    if save_dir:
+        fig1.savefig(os.path.join(save_dir, "actions_by_qbin_mortality_dosing.png"),
+                      dpi=150, bbox_inches='tight')
+ 
+    # ------------------------------------------------------------------
+    # FIGURE 2 — direction of change (% more / less / same) across Q-bins
+    # ------------------------------------------------------------------
+    fig2, axes2 = plt.subplots(n_actions, len(mortality_groups),
+                                figsize=(6 * len(mortality_groups), 4 * n_actions),
+                                squeeze=False)
+ 
+    for col, (group_label, _) in enumerate(mortality_groups):
+        group_rows = [r for r in summary_rows if r["mortality_group"] == group_label]
+        if not group_rows:
+            continue
+        bins = [r["q_bin"] for r in group_rows]
+ 
+        for row_i, name in enumerate(action_names):
+            ax = axes2[row_i, col]
+            pct_more = [r[f"{name}_pct_more"] for r in group_rows]
+            pct_less = [r[f"{name}_pct_less"] for r in group_rows]
+            pct_same = [r[f"{name}_pct_same"] for r in group_rows]
+ 
+            x = np.arange(len(bins))
+            ax.bar(x, pct_less, label="Less", color="tab:red")
+            ax.bar(x, pct_same, bottom=pct_less, label="Same", color="tab:gray")
+            ax.bar(x, pct_more,
+                   bottom=[a + b for a, b in zip(pct_less, pct_same)],
+                   label="More", color="tab:green")
+            ax.set_xticks(x)
+            ax.set_xticklabels([f"Q-bin {b}" for b in bins], fontsize=8)
+            ax.set_ylabel("% of timesteps")
+            ax.set_title(f"{group_label} — {name} direction of change")
+            ax.legend(fontsize=8, loc='lower right')
+            ax.grid(True, alpha=0.3, axis='y')
+ 
+    plt.tight_layout()
+    if save_dir:
+        fig2.savefig(os.path.join(save_dir, "actions_by_qbin_mortality_direction.png"),
+                     dpi=150, bbox_inches='tight')
+ 
+    # ------------------------------------------------------------------
+    # FIGURE 3 — advantage by Q-bin, both groups overlaid, to anchor the
+    # dosing/direction findings against where advantage actually concentrates
+    # ------------------------------------------------------------------
+    fig3, ax3 = plt.subplots(figsize=(7, 5))
+    for group_label, color in [("Survivors", "tab:blue"), ("Non-survivors", "tab:orange")]:
+        group_rows = [r for r in summary_rows if r["mortality_group"] == group_label]
+        if not group_rows:
+            continue
+        bins = [r["q_bin"] for r in group_rows]
+        adv = [r["mean_advantage"] for r in group_rows]
+        ax3.plot(bins, adv, marker='o', label=group_label, color=color)
+ 
+    ax3.set_xlabel("Q-bin (0 = lowest clinician Q, within mortality group)")
+    ax3.set_ylabel("Mean advantage")
+    ax3.set_title("Advantage by Q-bin and mortality group")
+    ax3.axhline(0, color='k', lw=0.5)
+    ax3.legend(fontsize=9)
+    ax3.grid(True, alpha=0.3)
+ 
+    plt.tight_layout()
+    if save_dir:
+        fig3.savefig(os.path.join(save_dir, "advantage_by_qbin_mortality.png"),
+                     dpi=150, bbox_inches='tight')
+ 
+    return summary_rows, (fig1, fig2, fig3)
+
+
+
+
 def evaluate(
         config_manager=None, 
         sarsa_critic=None, 
@@ -836,8 +1116,23 @@ def evaluate(
     plot_advantage_against_clinician_q_values(advantage_sarsa_real, q_clin_sarsa, model_folder, config_manager, critic_type="sarsa")
 
     plot_binned_advantage(advantage_sarsa_real, q_clin_sarsa, model_folder, config_manager, critic_type="sarsa")    
-
+    plot_binned_advantage_by_mortality(advantage_sarsa_real, q_clin_sarsa, test_processor.rl_dataset["mortality"], model_folder, config_manager, critic_type="sarsa")
     stats_summary = plot_publication_deciles(advantage_sarsa_real, q_clin_sarsa, model_folder, critic_type="sarsa")
+
+    # plot actions by binned advantage by mortality
+    actions = generate_model_outputs(
+        test_processor,
+        model=actor,
+        actions_to_use=None,
+        model_type="actor"
+    ).cpu().numpy()
+
+    plot_actions_by_q_clinician_by_mortality(
+        advantage_sarsa_real, q_clin_sarsa, test_processor.rl_dataset["mortality"], 
+        test_processor.rl_dataset["actions"], actions, model_folder)
+    
+    
+
 
     # rescue_rate(advantage_sarsa_real, q_clin_sarsa, model_folder, critic_type="sarsa")
 

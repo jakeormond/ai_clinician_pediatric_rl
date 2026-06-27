@@ -4,6 +4,8 @@
     
     tuning: False
     
+    use_smoothing: False  
+
     n_episodes: 1000  # How many episodes run during evaluation
     # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
@@ -11,8 +13,8 @@
     # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
     # max_traj_len: 2000  # Max trajectory length - probably need to change this
     device: "cuda"  # Device (cuda or cpu)
-    learning_rate_critic: 1.e-3 # 5e-6 # "loguniform(1e-4, 1e-3)"   
-    learning_rate_actor: 1e-3  # "loguniform(1e-4, 1e-3)"   
+    learning_rate_critic: 1.e-4 # 5e-6 # "loguniform(1e-4, 1e-3)"   
+    learning_rate_actor: 1e-4  # "loguniform(1e-4, 1e-3)"   
     dropout: 0.2 # 0.05 # "uniform(0.0, 0.5)"
     tau: 0.001 # 0.0005 # Target network update rate
     weight_decay: 1.e-4 #1e-4 # L2 regularization strength
@@ -49,8 +51,8 @@
     # gradient clipping
     grad_clip: 1.0
 
-    actor_loss_bc_scale: 0.5
-    actor_loss_q_scale: 50.
+    actor_loss_bc_scale: 0.1
+    actor_loss_q_scale: 10.
     actor_loss_entropy_scale: 0.1
 
     # health score reward shaping parameters

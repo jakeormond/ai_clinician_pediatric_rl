@@ -17,7 +17,7 @@
 
     # IQL-specific: replaces policy_noise/noise_clip/cql_alpha/temp/num_samples
     expectile: 0.8 # [0.6, 0.7, 0.8, 0.9]          # asymmetry of V's expectile regression — higher pushes V closer to max_a Q
-    awr_temperature: [2.0, 3.0, 5.0, 9.0, 15.0] # "loguniform(0.1, 10.0)" # inverse temperature for advantage weighting in the actor loss
+    awr_temperature: [15.0, 25., 50., 100.] # "loguniform(0.1, 10.0)" # inverse temperature for advantage weighting in the actor loss
     policy_freq: 1                            # see note below — no strong reason to delay beyond 1 in IQL
 
     batch_size: 1024

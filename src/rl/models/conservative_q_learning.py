@@ -30,7 +30,7 @@ class Actor(nn.Module):
 		state_dim: int,
 		hidden_dim: int = 64,
 		log_std_min: float = -3,
-		log_std_max: float = 0.,
+		log_std_max: float = -1.5, # 0.
 		action_dim: int = 2,
 		dropout: float = 0.1
 	):
@@ -448,6 +448,9 @@ def get_q_stats(current_Q1, current_Q2, actor_Q, mortality):
 class CQL:
 	def __init__(
 		self,
+		
+		use_smoothing: bool = False,
+
 		actor: nn.Module = None,
 		actor_optimizer: torch.optim.Optimizer = None,
 		actor_scheduler: torch.optim.lr_scheduler._LRScheduler = None,
@@ -482,6 +485,8 @@ class CQL:
 
 	):
 		
+		self.use_smoothing = use_smoothing
+
 		self.actor = actor
 		self.actor_optimizer = actor_optimizer
 		self.actor_scheduler = actor_scheduler
@@ -619,19 +624,21 @@ class CQL:
 
 		# Sample replay buffer 
 		state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
-		with torch.no_grad():
-			# add noise to states
-			state_std = state.std(dim=0, keepdim=True)
-			noise_scale = state_std * 0.04 + 1e-6
-			state_noise = torch.randn_like(state) * noise_scale
-			smoothed_states = state + state_noise
-			
-			# add noise to actions
-			critic_action_noise = (torch.randn_like(action) * 0.04).clamp(-0.1, 0.1)
-			smoothed_actions = action + critic_action_noise
-			is_zero_dose = (action < 1e-4)
-			smoothed_actions = torch.where(is_zero_dose, torch.zeros_like(smoothed_actions), smoothed_actions)			
-			smoothed_actions = smoothed_actions.clamp(0, 1.0) # Ensure actions remain in valid range after smoothing
+		
+		if self.use_smoothing is True:
+			with torch.no_grad():
+				# add noise to states
+				state_std = state.std(dim=0, keepdim=True)
+				noise_scale = state_std * 0.04 + 1e-6
+				state_noise = torch.randn_like(state) * noise_scale
+				smoothed_states = state + state_noise
+				
+				# add noise to actions
+				critic_action_noise = (torch.randn_like(action) * 0.04).clamp(-0.1, 0.1)
+				smoothed_actions = action + critic_action_noise
+				is_zero_dose = (action < 1e-4)
+				smoothed_actions = torch.where(is_zero_dose, torch.zeros_like(smoothed_actions), smoothed_actions)			
+				smoothed_actions = smoothed_actions.clamp(0, 1.0) # Ensure actions remain in valid range after smoothing
 
 		reward = reward * self.reward_scaling
 		
@@ -654,16 +661,24 @@ class CQL:
 
 		# Get current Q estimates>
 		# current_Q1, current_Q2 = self.critic(state, action)
-		current_Q1, current_Q2 = self.critic(smoothed_states, smoothed_actions)
+		if self.use_smoothing is True:
+			current_Q1, current_Q2 = self.critic(smoothed_states, smoothed_actions)
+		else:
+			current_Q1, current_Q2 = self.critic(state, action)
 
 		# 2. CQL CONSERVATIVE LOSS
         # We need to sample random actions to penalize them
 		batch_size = state.shape[0]
 
 		with torch.no_grad():
-			# Sample random actions uniformly [0, 1]
-			random_actions = torch.FloatTensor(batch_size, self.num_samples, self.dose_actions).uniform_(0, 1).to(self.device)
 			
+			# Sample random actions uniformly [0, 1]
+			# random_actions = torch.FloatTensor(batch_size, self.num_samples, self.dose_actions).uniform_(0, 1).to(self.device)
+			
+			# shuffle actions to create random actions from the batch
+			random_indices = torch.randint(0, batch_size, (batch_size * self.num_samples,), device=self.device)
+			random_actions = action[random_indices].view(batch_size, self.num_samples, -1)
+
 			# Sample current actions from our Stochastic Actor
 			# We sample multiple times to get a good estimate of the current policy's Q-values
 			curr_actions, curr_log_probs = self.actor(
@@ -701,15 +716,26 @@ class CQL:
 			
 		# 3. CONSTRUCT THE CQL PENALTY (LogSumExp)
 		# We concatenate the Q-values of all sampled actions
+		# cat_q1 = torch.cat([
+		# 	q1_rand, 
+		# 	q1_curr - curr_log_probs, 
+		# 	q1_next - next_log_probs
+		# ], dim=1)
+		# cat_q2 = torch.cat([
+		# 	q2_rand, 
+		# 	q2_curr - curr_log_probs, 
+		# 	q2_next - next_log_probs
+		# ], dim=1)
+
 		cat_q1 = torch.cat([
 			q1_rand, 
-			q1_curr - curr_log_probs, 
-			q1_next - next_log_probs
+			q1_curr, 
+			q1_next
 		], dim=1)
 		cat_q2 = torch.cat([
 			q2_rand, 
-			q2_curr - curr_log_probs, 
-			q2_next - next_log_probs
+			q2_curr, 
+			q2_next
 		], dim=1)
 
 		num_samples = cat_q1.shape[1]
@@ -727,15 +753,16 @@ class CQL:
 		# 4. COMBINED CRITIC LOSS
 		bellman_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
 		cql_loss = cql_loss1 + cql_loss2
-		# dynamic warm up for cql_alpha
-		if self.total_it < 1000:
-			current_alpha = 0.0
-		elif 1000 <= self.total_it < 2000:
-			# Linearly scale alpha from 0.0 to your target_alpha over 10,000 steps
-			progress = (self.total_it - 1000) / 1000.0
-			current_alpha = progress * self.cql_alpha
-		else:
-			current_alpha = self.cql_alpha
+		# # dynamic warm up for cql_alpha
+		# if self.total_it < 1000:
+		# 	current_alpha = 0.0
+		# elif 1000 <= self.total_it < 2000:
+		# 	# Linearly scale alpha from 0.0 to your target_alpha over 10,000 steps
+		# 	progress = (self.total_it - 1000) / 1000.0
+		# 	current_alpha = progress * self.cql_alpha
+		# else:
+		# 	current_alpha = self.cql_alpha
+		current_alpha = self.cql_alpha  # Use the fixed cql_alpha value for now
 
 		critic_loss = bellman_loss + current_alpha * cql_loss			
 					
@@ -886,6 +913,10 @@ class CQL:
 				self.actor_scheduler.step()
 				# log_dict.update(lr_actor=self.actor_optimizer.param_groups[0]['lr'])
 				losses.update(lr_actor=self.actor_optimizer.param_groups[0]['lr'])
+
+			with torch.no_grad():
+				self.actor.fluid_log_std.clamp_(self.actor.log_std_min, self.actor.log_std_max)
+				self.actor.vaso_log_std.clamp_(self.actor.log_std_min, self.actor.log_std_max)
 
 			# # Log the actor loss and its components
 			# log_dict.update({
@@ -1123,6 +1154,8 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		beta=hyperparams['beta'],
 		cql_alpha=hyperparams['cql_alpha'],
 		temp=hyperparams['temp'],
+
+		use_smoothing=hyperparams['use_smoothing'],
 
 		actor_loss_bc_scale=hyperparams['actor_loss_bc_scale'],
 		actor_loss_q_scale=hyperparams['actor_loss_q_scale'],

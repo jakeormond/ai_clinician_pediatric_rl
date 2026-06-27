@@ -8,7 +8,7 @@
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"
     discount: 0.975
     device: "cuda"
-    learning_rate_actor: [3.e-3, 5.e-3, 1.e-2] # [3.e-5, 1.e-4, 3.e-4, 1.e-3, 3.e-3] # 1.e-3 # "loguniform(1e-4, 1e-3)"
+    learning_rate_actor: 5.e-3 # [3.e-3, 5.e-3, 1.e-2] # [3.e-5, 1.e-4, 3.e-4, 1.e-3, 3.e-3] # 1.e-3 # "loguniform(1e-4, 1e-3)"
     learning_rate_value: 1.e-6 # 1.e-5 # "loguniform(1e-4, 1e-3)"
     dropout: 0.2
     value_dropout: 0.3
@@ -17,7 +17,7 @@
 
     # IQL-specific: replaces policy_noise/noise_clip/cql_alpha/temp/num_samples
     expectile: 0.8 # [0.6, 0.7, 0.8, 0.9]          # asymmetry of V's expectile regression — higher pushes V closer to max_a Q
-    awr_temperature: 3.0 # "loguniform(0.1, 10.0)" # inverse temperature for advantage weighting in the actor loss
+    awr_temperature: [2.0, 3.0, 5.0, 9.0, 15.0] # "loguniform(0.1, 10.0)" # inverse temperature for advantage weighting in the actor loss
     policy_freq: 1                            # see note below — no strong reason to delay beyond 1 in IQL
 
     batch_size: 1024

@@ -1220,7 +1220,8 @@ def evaluate_multiple_models(rl_model_dir=None):
 def main():
     # evaluate()
     # evaluate_multiple_models()
-    evaluate_multiple_models(rl_model_dir="unknown_cx3-20-5_20260619-025044_7ac09ff8")  # Set to None to evaluate all models, or specify a model directory name
+    # evaluate_multiple_models(rl_model_dir="unknown_cx3-20-5_20260619-025044_7ac09ff8")  # Set to None to evaluate all models, or specify a model directory name
+    evaluate_multiple_models(rl_model_dir="local_504db0af")  # Set to None to evaluate all models, or specify a model directory name
 
 
 if __name__ == "__main__":

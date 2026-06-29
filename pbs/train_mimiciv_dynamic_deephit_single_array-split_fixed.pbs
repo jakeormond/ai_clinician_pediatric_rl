@@ -2,7 +2,8 @@
 # pbs/train_mimiciv_dynamic_deephit_single_split.pbs
 
 # Job name
-#PBS -J 1-4 mimiciv_dynamic_deephit
+#PBS -N mimiciv_dynamic_deephit
+#PBS -J 1-4
 
 # Output and error files
 #PBS -o /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/mimiciv_dynamic_deephit_^array_index^.out
@@ -47,7 +48,8 @@ echo "Job ID: $PBS_JOBID"
 echo "Job Name: $PBS_JOBNAME"
 echo "Node(s): $PBS_NODEFILE"
 echo "CPUs allocated (NCPUS): ${NCPUS:-unknown}"
-echo "CPUs per node (PBS_NUM_PPN): ${PBS_NUM_PPN:-unknown}"echo "Memory: 64GB"
+echo "CPUs per node (PBS_NUM_PPN): ${PBS_NUM_PPN:-unknown}"
+echo "Memory: 64GB"
 echo "OMP_NUM_THREADS: ${OMP_NUM_THREADS:-unknown}"
 echo "Start time: $(date)"
 echo "Working directory: $(pwd)"

@@ -19,7 +19,7 @@
                 "--model_type", "dynamic_deephit_transformer", 
                 "--prediction_type", "discharge_mortality_tte",
                 "--mode", "single_split", 
-                "--split_num", "0",
+                "--split_num", "1",
                 "--search_variant", "fixed_hyperparameters",
                 "--final_timestep_only", "True",                
                 "--cohort", "all",
@@ -624,7 +624,7 @@
         },
 
         {
-            "name": "choc_conservative_q_learning_random_search",
+            "name": "choc_conservative_q_learning_random_search", at UC Berkeley and UCSF in Computational Precision Health 
             "type": "debugpy",
             "request": "launch",
             "module": "src.scripts.rl.reinforcement_learning",

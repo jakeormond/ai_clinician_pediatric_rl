@@ -1,6 +1,7 @@
 from typing import Dict, List, Tuple
 import numpy as np
 import math
+from scipy import stats
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -372,15 +373,82 @@ class TransformerDeepHitMulti(nn.Module):
         # return the output for the final timestep only, as that's what we use for prediction and evaluation    
         return risk_logits, covariate_pred, output[:, -1, :] # return the final timestep's output for potential use in loss functions
 
+    @torch.no_grad()
+    def get_neuron_stats(self, x: torch.Tensor, padding_mask: torch.Tensor = None):
+        self.eval()
+        stats = {}
 
-def get_grad_norm(model):
-    total_norm = 0
-    for p in model.parameters():
-        if p.grad is not None:
-            param_norm = p.grad.detach().data.norm(2)
-            total_norm += param_norm.item() ** 2
-    total_norm = total_norm ** 0.5
-    return total_norm
+        # 1. Forward pass to get the pooled latent embedding vector (final timestep)
+        # shape: [Batch, d_model]
+        if padding_mask is not None:
+            _, _, latent_features = self(x, padding_mask)
+        else:
+            _, _, latent_features = self(x)
+
+        # 2. Check for Token Uniformity (Is our d_model embedding space alive?)
+        # Calculate variance across the batch for each hidden dimension
+        latent_vars = torch.var(latent_features, dim=0)
+
+        # If variance across the batch is near 0, the transformer is outputting
+        # the exact same embedding for every patient (Representational Collapse)
+        pct_dead_dimensions = (latent_vars < 1e-5).float().mean().item() * 100
+        stats["latent_space_dead_dim_pct"] = pct_dead_dimensions
+
+        # Average variance across the embedding space (higher is generally healthier)
+        stats["latent_space_avg_variance"] = latent_vars.mean().item()
+
+        # 3. Audit the event-specific heads (these DO use ReLU!)
+        for head_idx, head in enumerate(self.heads):
+            head_x = latent_features
+            relu_idx = 0
+            for layer in head:
+                head_x = layer(head_x)
+                if isinstance(layer, nn.ReLU):
+                    # For standard ReLU, being inactive means outputting exactly 0
+                    pct_inactive = (head_x == 0).float().mean().item() * 100
+                    stats[f"head_{head_idx}_relu_{relu_idx}_inactive_pct"] = pct_inactive
+
+                    # Check for dead neurons in the head's dense mapping
+                    layer_vars = torch.var(head_x, dim=0)
+                    pct_dead = (layer_vars < 1e-6).float().mean().item() * 100
+                    stats[f"head_{head_idx}_layer_{relu_idx}_dead_pct"] = pct_dead
+                    relu_idx += 1
+
+        # 4. Audit the covariate predictor, if present (also uses ReLU)
+        if self.covariate_predictor is not None:
+            head_x = latent_features
+            relu_idx = 0
+            for layer in self.covariate_predictor:
+                head_x = layer(head_x)
+                if isinstance(layer, nn.ReLU):
+                    pct_inactive = (head_x == 0).float().mean().item() * 100
+                    stats[f"covariate_predictor_relu_{relu_idx}_inactive_pct"] = pct_inactive
+
+                    layer_vars = torch.var(head_x, dim=0)
+                    pct_dead = (layer_vars < 1e-6).float().mean().item() * 100
+                    stats[f"covariate_predictor_layer_{relu_idx}_dead_pct"] = pct_dead
+                    relu_idx += 1
+
+        return stats
+    
+    def get_grad_norm(self):
+        total_norm = 0
+        for p in self.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.detach().norm(2)
+                total_norm += param_norm.item() ** 2
+        total_norm = total_norm ** 0.5
+        return total_norm
+
+
+# def get_grad_norm(model):
+#     total_norm = 0
+#     for p in model.parameters():
+#         if p.grad is not None:
+#             param_norm = p.grad.detach().data.norm(2)
+#             total_norm += param_norm.item() ** 2
+#     total_norm = total_norm ** 0.5
+#     return total_norm
 
 
 class TransformerDeepHitTrainer:
@@ -404,6 +472,8 @@ class TransformerDeepHitTrainer:
         l1_params: list = [],
         l1_lambda: float = 0.0,
         final_timestep_only: bool = True,
+
+        ema_alpha: float = 0.99,  # Add ema_alpha argument for moving
     ):
         """
         Args:
@@ -431,12 +501,19 @@ class TransformerDeepHitTrainer:
         self.scheduler = scheduler
         self.g_sigma_scheduler = g_sigma_scheduler
         self.verbose = verbose
+
+        self.clip_fraction_ema = 0.0  # Initialize EMA for clipping fraction
+        self.ema_alpha = ema_alpha
+
         self.physiological_feature_type = physiological_feature_type
         self.l1_params = l1_params
         self.l1_lambda = float(l1_lambda)
         self.final_timestep_only = final_timestep_only
 
+        self.total_it = 0
+
     def train(self, batch: TensorBatch, epoch: int):
+        self.total_it += 1
 
         self.model.train() # set model to train mode
 
@@ -516,14 +593,30 @@ class TransformerDeepHitTrainer:
         loss.backward()
 
         # 1. Capture the raw norm for logging
-        raw_grad_norm = get_grad_norm(self.model)
+        # raw_grad_norm = get_grad_norm(self.model)
+        grad_norm = {"raw_grad_norm": self.model.get_grad_norm()}
 
+        # determine whether to clip gradients based on grad_clip value
+        grad_norm['was_clipped'] = 1.0 if (self.grad_clip and grad_norm['raw_grad_norm'] > self.grad_clip) else 0.0
+
+
+        # update the moving average of the clipping binary
+        self.clip_fraction_ema = self.ema_alpha * self.clip_fraction_ema + (1 - self.ema_alpha) * grad_norm['was_clipped']
+        grad_norm['clip_fraction_ema'] = self.clip_fraction_ema
+        
         # Gradient clipping if specified
         if self.grad_clip is not None:
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), 
                 self.grad_clip
             )
+
+        # # Gradient clipping if specified
+        # if self.grad_clip is not None:
+        #     torch.nn.utils.clip_grad_norm_(
+        #         self.model.parameters(), 
+        #         self.grad_clip
+        #     )
 
         # Update weights
         self.optimizer.step()
@@ -540,7 +633,7 @@ class TransformerDeepHitTrainer:
             }
 
         
-        return loss_dict, logits, raw_grad_norm
+        return loss_dict, logits, grad_norm
     
 
     def evaluate(self, batch: TensorBatch, epoch: int):
@@ -586,6 +679,23 @@ class TransformerDeepHitTrainer:
                 final_timestep_only = self.final_timestep_only
                 )
             
+            # calculate c index here for logging if needed
+            if self.final_timestep_only:
+                logits = logits[:, -1:, :, :]  # [B, 1, K, D]
+                time_to_event = time_to_event[:, -1:]  # [B, 1]
+            
+            B, T_cap, K, D = logits.shape
+
+            # reshape logits to [B*T_cap, K, num_time_bins] for c-index calculation
+            logits_c_index = logits.reshape(-1, K, D)
+            tte_c_index = time_to_event.reshape(-1)
+            # expand event_label to [B*T_cap] 
+            event_label_c_index = event_label.unsqueeze(1).expand(-1, T_cap).reshape(-1) - 1   
+
+            c_index_results = calculate_c_index(logits_c_index, tte_c_index, event_label_c_index)
+
+            neuron_stats = self.model.get_neuron_stats(X, padding_mask=None)
+
             if self.final_timestep_only:
                 logits = logits[:, -1:, :, :]  # [B, 1, K, D]
 
@@ -597,10 +707,11 @@ class TransformerDeepHitTrainer:
             "likelihood_loss": lik_loss.item(),
             "classification_loss": class_loss.item(),
             "ranking_loss": rank_loss.item(),
-            "prediction_loss": pred_loss.item()
+            "prediction_loss": pred_loss.item(),
+            "weighted_multi_C": c_index_results['C_weighted_multi'],
             }
 
-        return loss_dict, logits
+        return loss_dict, logits, neuron_stats
 
 
 def get_trainer(

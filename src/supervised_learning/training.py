@@ -239,7 +239,7 @@ def create_buffer(processor, batch_size, config_manager, shuffle=True):
     return buffer, dataset
 
 
-def create_trainer(training_dataset, hyperparams, config_manager):
+def create_trainer(train_processor, training_dataset, hyperparams, config_manager):
 
     # feature_dim = train_processor.dynamic_deephit_dataset["features"].shape[2]
     feature_dim = training_dataset.trajectories.shape[1] 
@@ -260,6 +260,8 @@ def create_trainer(training_dataset, hyperparams, config_manager):
         config_manager,
         feature_dim,
         hyperparams,
+        train_processor,
+        training_dataset,
         num_targets=num_targets
     )
 
@@ -451,7 +453,7 @@ def evaluate_during_training(
             if batch_idx * batch_size >= 50000:  # Limit validation to 5000 samples for speed, make this a variable
                 break
        
-        batch_losses, _, neuron_stats = trainer.evaluate(batch)
+        batch_losses, _, neuron_stats = trainer.evaluate(batch, epoch)
 
         # Create pairs of (incoming_batch_data, target_epoch_container)
         metric_pairs = [
@@ -793,8 +795,8 @@ def train_with_hyperparameters(
     hyperparams['total_steps'] = n_epochs * len(training_buffer)
     
     # create trainer
-    trainer = create_trainer(training_dataset, hyperparams, config_manager)
-        
+    trainer = create_trainer(train_processor, training_dataset, hyperparams, config_manager)
+
     # Early stopping configuration 
     early_stopping = get_early_stopping_config(config_manager)
 

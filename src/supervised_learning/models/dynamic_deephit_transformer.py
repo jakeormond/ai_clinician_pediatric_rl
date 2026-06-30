@@ -467,6 +467,7 @@ class TransformerDeepHitTrainer:
         sigma = None,
         scheduler=None,
         g_sigma_scheduler=None,
+        logit_scale = 15.0,
 
         log_grad_norms_freq = 50,
 
@@ -509,6 +510,9 @@ class TransformerDeepHitTrainer:
         self.sigma = sigma
         self.scheduler = scheduler
         self.g_sigma_scheduler = g_sigma_scheduler
+
+        self.logit_scale = logit_scale
+
         self.verbose = verbose
 
         self.clip_fraction_ema = 0.0  # Initialize EMA for clipping fraction
@@ -587,7 +591,9 @@ class TransformerDeepHitTrainer:
             alpha_rank = self.alpha_rank,
             alpha_pred = self.alpha_pred,
             sigma = self.sigma,
+            alpha_logit_l2 = self.alpha_logit_l2,
             g_sigma_scheduler = self.g_sigma_scheduler,
+            logit_scale = self.logit_scale,
             epoch = epoch,
             predict_covariates=self.model.predict_covariates,
             predict_horizon=self.model.prediction_time_horizon,
@@ -710,8 +716,10 @@ class TransformerDeepHitTrainer:
                 alpha_class = self.alpha_class,
                 alpha_rank = self.alpha_rank,
                 alpha_pred = self.alpha_pred,
+                alpha_logit_l2 = self.alpha_logit_l2,
                 sigma = self.sigma,
                 g_sigma_scheduler = self.g_sigma_scheduler,
+                logit_scale = self.logit_scale,
                 epoch = epoch,
                 predict_covariates=self.model.predict_covariates,
                 predict_horizon=self.model.prediction_time_horizon,
@@ -834,6 +842,7 @@ def get_trainer(
             sigma = hyperparams['sigma'],
             scheduler=scheduler,
             g_sigma_scheduler=g_sigma_scheduler,
+            logit_scale = hyperparams['logit_scale'],
             log_grad_norms_freq = hyperparams['log_grad_norms_freq'],
             verbose=True, 
             physiological_feature_type = train_processor.dynamic_deephit_dataset['physiological_feature_type'],
@@ -865,6 +874,7 @@ def dynamic_deephit_loss(
         mask=None,
         eps=1e-8,
         g_sigma_scheduler=None,
+        logit_scale=15.0,
         epoch=None,
         final_timestep_only = True,
         ):
@@ -933,7 +943,10 @@ def dynamic_deephit_loss(
     # --- 2. Compute DeepHit Component Losses ---
     # Because we filtered, these functions now see a "batch" of size N_valid
     # lik_loss = log_likelihood_loss(v_logits, v_time_to_event, v_event_label, no_censoring)
-    lik_loss = gaussian_log_likelihood_loss(v_logits, v_time_to_event, v_event_label, no_censoring=True, g_sigma_scheduler=g_sigma_scheduler, epoch=epoch)
+    lik_loss = gaussian_log_likelihood_loss(v_logits, v_time_to_event, 
+                                            v_event_label, no_censoring=True, 
+                                            g_sigma_scheduler=g_sigma_scheduler, 
+                                            epoch=epoch, logit_scale=logit_scale)
 
     
     classification_loss = event_classification_loss(v_logits, v_event_label, no_censoring)
@@ -982,7 +995,9 @@ class G_SigmaScheduler:
 
 
 
-def gaussian_log_likelihood_loss(logits, time_to_event, event_label, g_sigma_scheduler=None, epoch=None, no_censoring=True):
+def gaussian_log_likelihood_loss(logits, time_to_event, event_label, 
+                                 g_sigma_scheduler=None, epoch=None, 
+                                 no_censoring=True, logit_scale=15.0):
     """
     logits: (B, K, T) - K event types, T time bins
     time_to_event: (B,) - Long tensor of ground truth bins
@@ -1019,6 +1034,7 @@ def gaussian_log_likelihood_loss(logits, time_to_event, event_label, g_sigma_sch
         full_target[i, event_label[i], :] = target_dist[i]
     
     # 4. Calculate Loss
+    logits = logit_scale * torch.tanh(logits / logit_scale)
     # Flatten both to (B, K*T)
     full_target_flat = full_target.view(B, K * T)
     logp_flat = F.log_softmax(logits.view(B, K * T), dim=1)

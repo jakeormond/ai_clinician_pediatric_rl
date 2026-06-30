@@ -6,7 +6,7 @@ checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save 
 window_length: 72 #168 # Prediction horizon in hours - so 1 month
 device: "cuda"  # Device (cuda or cpu)
 
-tuning: True
+tuning: False
 use_windows_from_memory: False  # Whether to load precomputed windows into memory (only for smaller datasets) - 
 # not necessary for transformer model as windows are already in memory in the self.dynamic_deephit_dataset
 
@@ -30,6 +30,7 @@ loss_metric: "weighted_multi_C" # "combined_loss"  # Which metric to use for ear
 max_val_samples: 5000  # Max samples to use for validation during training
 
 l1_lambda: 8e-06 # 1e-4  # L1 regularization weight for classification head
+logit_scale: 15.0  # Scale for logits in the ranking loss
 
 alpha_class: 0.1
 alpha_rank: 2.0   # Weight for ranking loss

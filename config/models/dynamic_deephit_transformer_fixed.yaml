@@ -38,7 +38,7 @@ sigma: 0.5
 
 # gaussian sigma scheduling parameters
 start_sigma: 2.
-end_sigma: 1. # .7
+end_sigma: 1.5 # .7
 
 alpha_logit_l2: 0.01  # start small; tune up if grad norm / logit scale still grows
  

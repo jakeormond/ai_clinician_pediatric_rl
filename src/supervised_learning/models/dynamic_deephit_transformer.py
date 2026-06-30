@@ -467,10 +467,16 @@ class TransformerDeepHitTrainer:
         sigma = None,
         scheduler=None,
         g_sigma_scheduler=None,
+
+        log_grad_norms_freq = 50,
+
         verbose=True,
         physiological_feature_type = None,
         l1_params: list = [],
         l1_lambda: float = 0.0,
+
+        alpha_logit_l2: float = 0.0,
+
         final_timestep_only: bool = True,
 
         ema_alpha: float = 0.99,  # Add ema_alpha argument for moving
@@ -497,6 +503,9 @@ class TransformerDeepHitTrainer:
         self.alpha_class = alpha_class
         self.alpha_rank = alpha_rank
         self.alpha_pred = alpha_pred
+
+        self.alpha_logit_l2 = alpha_logit_l2
+
         self.sigma = sigma
         self.scheduler = scheduler
         self.g_sigma_scheduler = g_sigma_scheduler
@@ -510,7 +519,32 @@ class TransformerDeepHitTrainer:
         self.l1_lambda = float(l1_lambda)
         self.final_timestep_only = final_timestep_only
 
+        self.log_grad_norms_freq = log_grad_norms_freq  # 0 = off, N = every N steps
+
+
         self.total_it = 0
+
+
+    def _per_loss_grad_norms(self, lik_loss, class_loss, rank_loss, pred_loss):
+        """Computes grad norm contribution of each loss term w.r.t. model parameters,
+        without populating .grad (safe to call before the real backward pass)."""
+        params = [p for p in self.model.parameters() if p.requires_grad]
+        terms = {
+            'lik': lik_loss,
+            'class': self.alpha_class * class_loss,
+            'rank': self.alpha_rank * rank_loss,
+            'pred': self.alpha_pred * pred_loss,
+        }
+        norms = {}
+        for name, term in terms.items():
+            if term.requires_grad:
+                grads = torch.autograd.grad(term, params, retain_graph=True, allow_unused=True)
+                total_norm = sum(g.detach().norm(2).item() ** 2 for g in grads if g is not None) ** 0.5
+                norms[f"{name}_grad_norm"] = total_norm
+            else:
+                norms[f"{name}_grad_norm"] = 0.0
+        return norms
+
 
     def train(self, batch: TensorBatch, epoch: int):
         self.total_it += 1
@@ -543,7 +577,7 @@ class TransformerDeepHitTrainer:
         logits = torch.stack(risk_logits, dim=2) 
 
         # Compute log loss and ranking loss
-        loss, lik_loss, class_loss, rank_loss, pred_loss = self.loss_fn(
+        loss, lik_loss, class_loss, rank_loss, pred_loss, logit_l2_penalty = self.loss_fn(
             logits, 
             covariate_pred, 
             time_to_event,                  
@@ -562,6 +596,10 @@ class TransformerDeepHitTrainer:
             final_timestep_only = self.final_timestep_only
             )
         
+        grad_norm_breakdown = {}
+        if self.log_grad_norms_freq and (self.total_it % self.log_grad_norms_freq == 0):
+            grad_norm_breakdown = self._per_loss_grad_norms(lik_loss, class_loss, rank_loss, pred_loss)
+
         # calculate c index here for logging if needed
         if self.final_timestep_only:
             logits = logits[:, -1:, :, :]  # [B, 1, K, D]
@@ -595,6 +633,8 @@ class TransformerDeepHitTrainer:
         # 1. Capture the raw norm for logging
         # raw_grad_norm = get_grad_norm(self.model)
         grad_norm = {"raw_grad_norm": self.model.get_grad_norm()}
+        if self.log_grad_norms_freq and (self.total_it % self.log_grad_norms_freq == 0):
+            grad_norm.update(grad_norm_breakdown)
 
         # determine whether to clip gradients based on grad_clip value
         grad_norm['was_clipped'] = 1.0 if (self.grad_clip and grad_norm['raw_grad_norm'] > self.grad_clip) else 0.0
@@ -629,6 +669,7 @@ class TransformerDeepHitTrainer:
             "classification_loss": class_loss.item(),
             "ranking_loss": rank_loss.item(),
             "prediction_loss": pred_loss.item(),
+            "logit_l2_penalty": logit_l2_penalty.item(),
             "weighted_multi_C": c_index_results['C_weighted_multi'],
             }
 
@@ -660,7 +701,7 @@ class TransformerDeepHitTrainer:
             logits = torch.stack(risk_logits, dim=2)          
             
             # Compute log loss and ranking loss
-            loss, lik_loss, class_loss, rank_loss, pred_loss = self.loss_fn(
+            loss, lik_loss, class_loss, rank_loss, pred_loss, logit_l2_penalty = self.loss_fn(
                 logits, 
                 covariate_pred, 
                 time_to_event,                  
@@ -708,6 +749,7 @@ class TransformerDeepHitTrainer:
             "classification_loss": class_loss.item(),
             "ranking_loss": rank_loss.item(),
             "prediction_loss": pred_loss.item(),
+            "logit_l2_penalty": logit_l2_penalty.item(),
             "weighted_multi_C": c_index_results['C_weighted_multi'],
             }
 
@@ -788,9 +830,11 @@ def get_trainer(
             alpha_class = hyperparams['alpha_class'], 
             alpha_rank = hyperparams['alpha_rank'],
             alpha_pred = hyperparams['alpha_pred'],
+            alpha_logit_l2 = hyperparams['alpha_logit_l2'],
             sigma = hyperparams['sigma'],
             scheduler=scheduler,
             g_sigma_scheduler=g_sigma_scheduler,
+            log_grad_norms_freq = hyperparams['log_grad_norms_freq'],
             verbose=True, 
             physiological_feature_type = train_processor.dynamic_deephit_dataset['physiological_feature_type'],
             # l1_params=l1_params,          # ← ADD THIS
@@ -816,6 +860,7 @@ def dynamic_deephit_loss(
         alpha_class= None,
         alpha_rank= None, 
         alpha_pred = None,
+        alpha_logit_l2 = 0.0,   
         sigma=None,
         mask=None,
         eps=1e-8,
@@ -882,6 +927,9 @@ def dynamic_deephit_loss(
     v_time_to_event = time_to_event_flat[valid_indices]
     v_event_label = event_label_flat[valid_indices]
 
+    # --- Logit L2 penalty (structural fix for unbounded logit growth as sigma anneals) ---
+    logit_l2_penalty = v_logits.pow(2).mean()
+
     # --- 2. Compute DeepHit Component Losses ---
     # Because we filtered, these functions now see a "batch" of size N_valid
     # lik_loss = log_likelihood_loss(v_logits, v_time_to_event, v_event_label, no_censoring)
@@ -907,9 +955,11 @@ def dynamic_deephit_loss(
         pred_loss = torch.tensor(0.0, device=logits.device)
 
     # --- 4. Combine ---
-    loss = lik_loss + alpha_class * classification_loss + alpha_rank * rank_loss + alpha_pred * pred_loss
+    # loss = lik_loss + alpha_class * classification_loss + alpha_rank * rank_loss + alpha_pred * pred_loss
+    loss = lik_loss + alpha_class * classification_loss + alpha_rank * rank_loss + \
+        alpha_pred * pred_loss + alpha_logit_l2 * logit_l2_penalty
     
-    return loss, lik_loss, classification_loss, rank_loss, pred_loss
+    return loss, lik_loss, classification_loss, rank_loss, pred_loss, logit_l2_penalty
 
 
 class G_SigmaScheduler:

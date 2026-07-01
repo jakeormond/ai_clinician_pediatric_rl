@@ -3,7 +3,7 @@
 
 # Job name
 #PBS -N mimiciv_dynamic_deephit
-#PBS -J 1-4
+#PBS -J 0-4
 
 # Output and error files
 #PBS -o /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs/mimiciv_dynamic_deephit_^array_index^.out
@@ -71,7 +71,7 @@ python -u -m src.scripts.supervised.supervised_learning \
     --mode single_split \
     --split_num $PBS_ARRAY_INDEX \
     --search_variant fixed_hyperparameters \
-    --n_epochs 200 \
+    --n_epochs 300 \
     --final_timestep_only True \
     --start_time $START_TIME 
 

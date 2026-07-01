@@ -35,7 +35,7 @@ logit_scale: 15.0  # Scale for logits in the ranking loss
 alpha_class: 0.1
 alpha_rank: 2.0   # Weight for ranking loss
 alpha_pred: 1.0
-sigma: 0.5
+sigma: 2.0
 
 # gaussian sigma scheduling parameters
 start_sigma: 2.
@@ -52,7 +52,7 @@ patience: 15        # Stop if no improvement for 15 evaluations
 eval_freq: 1       # Evaluate every 20 epochs  
 min_delta: 0.0001   # Minimum improvement threshold
 
-grad_clip: 3.  # Gradient clipping value
+grad_clip: 5.  # Gradient clipping value
 log_grad_norms_freq: 50  # Frequency of logging gradient norms
 
 # for controls

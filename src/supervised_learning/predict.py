@@ -491,7 +491,7 @@ def get_predictions(config_manager, model_type, experiment_dir, set='test', stay
     if os.path.exists(filepath):
         # load existing predictions
         print(f"Loading existing predictions from {filepath}")
-        dynamic_deephit_predictions = ShardProcessor.load_dynamic_deephit_predictions_from_h5(filepath)
+        dynamic_deephit_predictions = ShardProcessor.load_dynamic_deephit_predictions_from_h5(filepath, keys_to_exclude=['compressed_latents'])
     else:
         # create DataLoader for test dataset
         # Create test_processor; note it will throw an error if the normalized test shard is missing.
@@ -1530,7 +1530,7 @@ def plot_health_score_statistics(
     filepath = os.path.join(config_manager.experiment_dir, filename + '.h5')
     # load existing predictions
     print(f"Loading existing predictions from {filepath}")
-    dynamic_deephit_predictions = ShardProcessor.load_dynamic_deephit_predictions_from_h5(filepath)
+    dynamic_deephit_predictions = ShardProcessor.load_dynamic_deephit_predictions_from_h5(filepath, keys_to_exclude=['compressed_latents'])
 
     dataset_filepath = os.path.join(config_manager.get_data_dir, config_manager.data_config['shard_dir'], 
                 f"split_{config_manager.split_num}", "training_set", "test_dynamic_deephit_dataset.h5")    
@@ -1568,9 +1568,10 @@ def plot_health_score_statistics(
     plt.ylabel('Density')
     plt.title('Distribution of Health Scores for Death vs Survival Events')
     plt.legend()
-    plt.show()
+    #plt.show()
     # save plot
     plt.savefig(os.path.join(config_manager.experiment_dir, 'health_score_distribution.png'))
+    plt.close()
 
     # calculate non-parametric t-test (mannwhitneyu) between the two distributions
     stat, p_value = stats.mannwhitneyu(health_scores_death_cat, health_scores_survival_cat, alternative='two-sided')
@@ -1598,9 +1599,10 @@ def plot_health_score_statistics(
     plt.ylabel('Density')
     plt.title('Distribution of Health Score Diffs for Death vs Survival Events')
     plt.legend()
-    plt.show()
+    # plt.show()
     # save plot
     plt.savefig(os.path.join(config_manager.experiment_dir, 'health_score_diff_distribution.png'))
+    plt.close()
 
     stat_diff, p_value_diff = stats.mannwhitneyu(health_score_diffs_death_cat, health_score_diffs_survival_cat, alternative='two-sided')
     print(f"Mann-Whitney U test for health score diffs: statistic: {stat_diff:.3f}, p-value: {p_value_diff:.3e}")
@@ -1624,10 +1626,11 @@ def plot_health_score_statistics(
     plt.ylabel('Density')
     plt.title('Distribution of Overall Health Score Diffs for Death vs Survival Events')
     plt.legend()
-    plt.show()
+    # plt.show()
     # save plot
     plt.savefig(os.path.join(config_manager.experiment_dir, 'health_score_overall_diff_distribution.png'))
-
+    plt.close()
+    
     stat_overall_diff, p_value_overall_diff = stats.mannwhitneyu(health_score_overall_diffs_death, health_score_overall_diffs_survival, alternative='two-sided')
     print(f"Mann-Whitney U test for overall health score diffs: statistic: {stat_overall_diff:.3f}, p-value: {p_value_overall_diff:.3e}")
 
@@ -1654,7 +1657,7 @@ def plot_random_predictions(
     filepath = os.path.join(config_manager.experiment_dir, filename + '.h5')
     # load existing predictions
     print(f"Loading existing predictions from {filepath}")
-    dynamic_deephit_predictions = ShardProcessor.load_dynamic_deephit_predictions_from_h5(filepath)
+    dynamic_deephit_predictions = ShardProcessor.load_dynamic_deephit_predictions_from_h5(filepath, keys_to_exclude=['compressed_latents'])
     
     # loading the dataset to get trajectories
     dataset_filepath = os.path.join(config_manager.get_data_dir, config_manager.data_config['shard_dir'], 

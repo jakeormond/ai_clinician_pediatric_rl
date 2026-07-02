@@ -191,8 +191,8 @@
                 "--prediction_type", "discharge_mortality_tte",
                 "--model_type", "dynamic_deephit_transformer",
                 "--mode", "single_split", 
-                "--split_num", "0",
-                "--model_dir", "vent_models/fio2_peep_tidal_volume",
+                "--split_num", "2",
+                "--model_dir", "sepsis/combined_hourly_iv-vasoactive_inotropic_score",
                 "--experiment_variant", "prediction"
             ],
             "console": "integratedTerminal",
@@ -236,7 +236,7 @@
                 "--prediction_type", "discharge_mortality_tte",
                 "--model_type", "dynamic_deephit_transformer",
                 "--mode", "single_split", 
-                "--split_num", "0",
+                "--split_num", "3",
                 "--model_dir", "sepsis/intake-vis",
                 "--experiment_variant", "prediction"
             ],
@@ -256,7 +256,7 @@
                 "--prediction_type", "discharge_mortality_tte",
                 "--model_type", "dynamic_deephit_transformer",
                 "--mode", "single_split", 
-                "--split_num", "0", "1", "2", "3", "4",
+                "--split_num", "2", "3",
                 "--experiment_variant", "prediction"
             ],
             "console": "integratedTerminal",

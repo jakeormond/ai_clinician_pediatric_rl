@@ -34,6 +34,7 @@ MODEL_MODULES = {
     "basic_q": "src.rl.models.basic_q",
     "td3_bc": "src.rl.models.td3_bc",
     "conservative_q_learning": "src.rl.models.conservative_q_learning",
+    "cql_with_logprobs": "src.rl.models.cql_with_logprobs",
     "cvp": "src.rl.models.cvp",
     "iql": "src.rl.models.iql",
     "iql_with_sarsa": "src.rl.models.iql_with_sarsa",
@@ -851,7 +852,8 @@ def train_with_hyperparameters(
         }
         torch.save(checkpoint, model_path)
     
-    elif config_manager.model_type in ['td3_bc', 'conservative_q_learning']:
+    elif config_manager.model_type in ['td3_bc', 'conservative_q_learning', 
+                                       'cql_with_logprobs']:
         checkpoint = {
             'total_it': trainer.total_it,
             'actor_state_dict': trainer.actor.state_dict(),

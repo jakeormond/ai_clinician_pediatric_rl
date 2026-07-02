@@ -887,6 +887,10 @@ class CQL:
 				"vaso_volume_loss": actor_dict['vaso_volume_loss'].item(),
 				"fluid_mean": pi[:, 0].mean().item(),
 				"vaso_mean": pi[:, 1].mean().item(),
+				"fluid_std": f_std.mean().item(),
+				"vaso_std": v_std.mean().item(),
+				"fluid_std_std": f_std.std().item(),
+				"vaso_std_std": v_std.std().item(),
 				"actor_raw_advantage_mean": raw_advantage.mean().item(),
 				"actor_loss_ent": actor_loss_ent.item()
 			})

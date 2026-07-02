@@ -191,7 +191,7 @@
                 "--prediction_type", "discharge_mortality_tte",
                 "--model_type", "dynamic_deephit_transformer",
                 "--mode", "single_split", 
-                "--split_num", "2",
+                "--split_num", "3",
                 "--model_dir", "sepsis/combined_hourly_iv-vasoactive_inotropic_score",
                 "--experiment_variant", "prediction"
             ],
@@ -624,7 +624,29 @@
         },
 
         {
-            "name": "choc_conservative_q_learning_random_search", at UC Berkeley and UCSF in Computational Precision Health 
+            "name": "choc_cql_with_logprobs_fixed",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.rl.reinforcement_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "reinforcement_learning",
+                "--model_type", "cql_with_logprobs", 
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--model_dir", "sepsis_models/intake_vis",
+                "--search_variant", "fixed_hyperparameters",
+                "--cohort", "sepsis",
+                "--n_epochs", "200",
+                "--action_mode", "continuous_only",            
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
+            "name": "choc_conservative_q_learning_random_search", 
             "type": "debugpy",
             "request": "launch",
             "module": "src.scripts.rl.reinforcement_learning",

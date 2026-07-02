@@ -1,5 +1,5 @@
 #!/bin/bash
-# pbs/train_mimiciv_dynamic_deephit_single_split.pbs
+# pbs/train_choc_conservative_q_learning_single_split.pbs
 
 # Job name
 #PBS -N mimiciv_dynamic_deephit

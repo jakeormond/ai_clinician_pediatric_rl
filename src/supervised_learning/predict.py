@@ -101,9 +101,10 @@ def instantiate_model(
             feature_dim=feature_dim + 1,   # input feature dimension - add 1 for the local time feature we add in the replay buffer
             d_model=hyperparams['d_model'],               # e.g., 128 or 256
             nhead=hyperparams['nhead'],                   # e.g., 4 or 8
-            num_encoder_layers=hyperparams['n_layers'],   # e.g., 3 or 6
+            num_encoder_layers=hyperparams['num_encoder_layers'],   # e.g., 3 or 6
             num_time_bins=n_time_bins,
-            num_risks=num_risks,
+            # num_risks=num_risks,
+            num_targets=2,
             dropout=hyperparams['dropout'],
             ff_factor=hyperparams['ff_factor'],
             max_seq_len=config_manager.training_config['window_length'],
@@ -113,11 +114,19 @@ def instantiate_model(
     # load trained model weights from final_model.pt
     model_path = os.path.join(experiment_dir, 'final_model.pt')
     device = config_manager.training_config['device']
-    dynamic_deephit_model.load_state_dict(torch.load(
-        model_path, 
-        map_location=device,
-        weights_only=True
-    ))
+    
+    
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    state_dict = checkpoint["model_state_dict"] if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint else checkpoint
+
+    dynamic_deephit_model.load_state_dict(state_dict)
+    
+    
+    # dynamic_deephit_model.load_state_dict(torch.load(
+    #     model_path, 
+    #     map_location=device,
+    #     weights_only=True
+    # ))
     dynamic_deephit_model.eval()   
     return dynamic_deephit_model
 
@@ -495,8 +504,10 @@ def get_predictions(config_manager, model_type, experiment_dir, set='test', stay
             os.path.join(experiment_dir, 'results.json'), 'r'
         ) as f:
             results_dict = json.load(f)
-        hyperparams = results_dict['best_hyperparameters']    
-        time_bins = results_dict['time_bins']
+        # hyperparams = results_dict['best_hyperparameters']    
+        hyperparams = results_dict['hyperparameters']    
+        # time_bins = results_dict['time_bins']
+        time_bins = config_manager.time_bins
         n_time_bins = len(time_bins) - 1
 
         dynamic_deephit_model = instantiate_model(

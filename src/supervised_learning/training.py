@@ -246,6 +246,8 @@ def create_trainer(train_processor, training_dataset, hyperparams, config_manage
 
     if config_manager.model_type == 'bc_transformer':
         num_targets = len(hyperparams['actions']) # hardcoded for now
+    elif config_manager.model_type == 'dynamic_deephit' or config_manager.model_type == 'dynamic_deephit_transformer':
+        num_targets = 2 # for discharge and death
     else:
         num_targets = len(config_manager.training_config['actions']) # hardcode for now
 

@@ -60,6 +60,6 @@ shuffle_inputs: False  # Whether to shuffle feature columns to confirm transform
 zero_inputs: False  # Whether to zero out feature columns to confirm transformer not looking ahead
 
 # actions to leave out of last time step for RL setting
-# actions: ['fio2', 'peep_set', 'tidal_volume_set'] # for mimic_iv ventilation
+actions: ['fio2', 'peep_set', 'tidal_volume_set'] # for mimic_iv ventilation
 # actions: ['intake', 'vis'] # for choc sepsis
-actions: ['combined_hourly_iv', 'vasoactive_inotropic_score'] # for mimic sepsis
+# actions: ['combined_hourly_iv', 'vasoactive_inotropic_score'] # for mimic sepsis

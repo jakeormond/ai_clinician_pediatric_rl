@@ -67,14 +67,12 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --model_type cql_with_logprobs \
     --mode single_split \
     --split_num 0 \
-    --model_dir sepsis_models/intake_vis \
-    --experiment_variant standard \
     --search_variant fixed_hyperparameters \
-    --cohort sepsis \
     --n_epochs 200 \
     --action_mode continuous_only \
+    --cohort sepsis \
     --start_time $START_TIME 
-
+    
 exit_code=$?
 
 echo "========================================="

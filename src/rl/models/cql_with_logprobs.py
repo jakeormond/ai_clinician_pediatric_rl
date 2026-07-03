@@ -122,10 +122,10 @@ class Actor(nn.Module):
 
 			# Log-prob with sigmoid change-of-variables correction
 			# log p(a) = log p(u) - sum log sigmoid'(u)
-			f_log_prob = f_dist.log_prob(f_raw) + torch.log(
+			f_log_prob = f_dist.log_prob(f_raw) - torch.log(
 				f_action * (1 - f_action) + 1e-6
 			)
-			v_log_prob = v_dist.log_prob(v_raw) + torch.log(
+			v_log_prob = v_dist.log_prob(v_raw) - torch.log(
 				v_action * (1 - v_action) + 1e-6
 			)
 
@@ -174,8 +174,8 @@ class Actor(nn.Module):
 		v_dist = torch.distributions.Normal(torch.logit(v_mean), v_std)
 
 		# Sigmoid-Jacobian correction, evaluated at the GIVEN action
-		f_log_prob = f_dist.log_prob(f_raw) + torch.log(f_action * (1 - f_action) + 1e-6)
-		v_log_prob = v_dist.log_prob(v_raw) + torch.log(v_action * (1 - v_action) + 1e-6)
+		f_log_prob = f_dist.log_prob(f_raw) - torch.log(f_action * (1 - f_action) + 1e-6)
+		v_log_prob = v_dist.log_prob(v_raw) - torch.log(v_action * (1 - v_action) + 1e-6)
 
 		return (f_log_prob + v_log_prob).squeeze(-1)
 
@@ -202,8 +202,8 @@ class Actor(nn.Module):
 		v_action = torch.sigmoid(v_raw)
 
 		# Sigmoid-Jacobian correction, evaluated at the GIVEN action
-		f_log_prob = f_dist.log_prob(f_raw) + torch.log(f_action * (1 - f_action) + 1e-6)
-		v_log_prob = v_dist.log_prob(v_raw) + torch.log(v_action * (1 - v_action) + 1e-6)
+		f_log_prob = f_dist.log_prob(f_raw) - torch.log(f_action * (1 - f_action) + 1e-6)
+		v_log_prob = v_dist.log_prob(v_raw) - torch.log(v_action * (1 - v_action) + 1e-6)
 
 		return (f_log_prob + v_log_prob).squeeze(-1).mean()
 

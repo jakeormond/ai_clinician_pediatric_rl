@@ -38,63 +38,66 @@ class Actor(nn.Module):
 		self.log_std_min = log_std_min
 		self.log_std_max = log_std_max
 
-		# Shared trunk — learns a joint patient representation
-		self.trunk = nn.Sequential(
+		# mean trunk — learns a joint patient representation
+		self.mean_trunk = nn.Sequential(
 			nn.Linear(state_dim, hidden_dim),
 			nn.LayerNorm(hidden_dim),
 			nn.ReLU(),
-			# nn.Linear(hidden_dim, hidden_dim),
-			# nn.LayerNorm(hidden_dim),
-			# nn.ReLU(),
+			nn.Linear(hidden_dim, hidden_dim),
+			nn.ReLU(),
+			nn.LayerNorm(hidden_dim), 
 		)
-
-		# Separate heads — each action has its own mean/log_std stream
-		# This prevents the high-gradient fluid head from swamping vasopressors
-		self.fluid_mean    = nn.Linear(hidden_dim, 1)
-		self.fluid_log_std = nn.Linear(hidden_dim, 1)
-
+		self.fluid_mean    = nn.Linear(hidden_dim, 1)		
 		self.vaso_mean    = nn.Linear(hidden_dim, 1)
+		
+		# Completely separate std network — shaped ONLY by entropy loss
+        # (or whatever uncertainty-relevant loss you add later). No shared
+        # parameters with the mean pathway at all, so there is no channel,
+        # direct or indirect, for the Q-loss to reach it.
+		self.std_trunk = nn.Sequential(
+			nn.Linear(state_dim, hidden_dim),
+			nn.LayerNorm(hidden_dim),
+			nn.ReLU(),
+			nn.Linear(hidden_dim, hidden_dim),
+			nn.ReLU(),
+			nn.LayerNorm(hidden_dim), 
+		)
+		self.fluid_log_std = nn.Linear(hidden_dim, 1)
 		self.vaso_log_std = nn.Linear(hidden_dim, 1)
 
 		self._init_weights()
 
 
 	def _init_weights(self):
-		for m in self.trunk:
+		for m in self.mean_trunk:
 			if isinstance(m, nn.Linear):
 				nn.init.orthogonal_(m.weight, gain=1.0)
 				nn.init.zeros_(m.bias)
 
-		# Fluid head — initialise near 0.4 (your observed mean)
-		# sigmoid(0.4) ≈ 0.6, so bias = logit(0.4) ≈ -0.405
+		for m in self.std_trunk:
+			if isinstance(m, nn.Linear):
+				nn.init.orthogonal_(m.weight, gain=1.0)
+				nn.init.zeros_(m.bias)
+
 		nn.init.zeros_(self.fluid_mean.weight)
 		self.fluid_mean.bias.data.fill_(-0.405)
 
-		# Vasopressor head — initialise near 0.02 (sparse baseline)
-		# logit(0.02) ≈ -3.89; pull mean toward near-zero actions
 		nn.init.zeros_(self.vaso_mean.weight)
 		self.vaso_mean.bias.data.fill_(-3.89)
 
 		for layer in [self.fluid_log_std, self.vaso_log_std]:
 			nn.init.zeros_(layer.weight)
-			layer.bias.data.fill_(-2.25)  # moderate initial std
+			layer.bias.data.fill_(-2.25)
 
 
 	def forward(self, state: torch.Tensor, deterministic: bool = False, return_dist=False):
-		z = self.trunk(state)
-
+		z_mean = self.mean_trunk(state)
 		# --- Fluid ---
-		f_mean = torch.sigmoid(self.fluid_mean(z))          # (0, 1)
+		f_mean = torch.sigmoid(self.fluid_mean(z_mean))          # (0, 1)
 		# --- Vasopressor ---
-		v_mean = torch.sigmoid(self.vaso_mean(z))            # (0, 1)
-		
-		# Detach z for the std heads specifically — this is the key protection.
-		# The mean heads still receive the full Q-maximization gradient through z;
-		# the std heads only ever see gradient from whatever loss is explicitly
-		# applied to them (e.g. an entropy term), never from Q. This prevents the
-		# actor from learning to shrink variance to make its OWN sampled actions
-		# look more confident to the critic — the original entropy-collapse failure.
-		z_std = z.detach()
+		v_mean = torch.sigmoid(self.vaso_mean(z_mean))            # (0, 1)
+
+		z_std = self.std_trunk(state)
 		f_log_std = torch.clamp(self.fluid_log_std(z_std), self.log_std_min, self.log_std_max)
 		v_log_std = torch.clamp(self.vaso_log_std(z_std), self.log_std_min, self.log_std_max)
 
@@ -146,12 +149,6 @@ class Actor(nn.Module):
 		action and returns its own log-prob. Needed for importance-sampling-based
 		evaluation (WIS) and as a building block for entropy_loss().
 
-		Uses the FULL (non-detached) computation graph — unlike entropy_loss(),
-		which deliberately isolates gradients for training stability, this method
-		is meant for evaluation/inference (e.g. computing importance ratios on a
-		frozen, trained policy), so there's no need to restrict gradient flow here.
-		If called during training for some other purpose, wrap the call site in
-		torch.no_grad() as appropriate.
 		"""
 		z = self.trunk(state)
 
@@ -204,6 +201,7 @@ class Actor(nn.Module):
 		f_action = torch.sigmoid(f_raw)
 		v_action = torch.sigmoid(v_raw)
 
+		# Sigmoid-Jacobian correction, evaluated at the GIVEN action
 		f_log_prob = f_dist.log_prob(f_raw) + torch.log(f_action * (1 - f_action) + 1e-6)
 		v_log_prob = v_dist.log_prob(v_raw) + torch.log(v_action * (1 - v_action) + 1e-6)
 

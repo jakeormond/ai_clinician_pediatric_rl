@@ -857,7 +857,8 @@ class CQL:
 			# v_ent = self.actor.vaso_log_std.clamp(self.actor.log_std_min, self.actor.log_std_max)
 			# actor_loss_ent = -(f_ent + v_ent)				
 			
-			actor_loss_ent = self.actor.entropy_loss_from_dist(f_mean, v_mean, f_std, v_std)
+			# actor_loss_ent = self.actor.entropy_loss_from_dist(f_mean, v_mean, f_std, v_std)
+			actor_loss_ent = log_prob.mean() 
 
 			# actor_loss_ent = -(f_log_std.mean() + v_log_std.mean())
 

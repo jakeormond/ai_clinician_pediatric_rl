@@ -181,7 +181,7 @@
         },
 
         {
-            "name": "mimic_iv_prediction_single_split",
+            "name": "mimic_iv_prediction_single_split_sepsis",
             "type": "debugpy",
             "request": "launch",
             "module": "src.scripts.supervised.supervised_learning",
@@ -191,8 +191,28 @@
                 "--prediction_type", "discharge_mortality_tte",
                 "--model_type", "dynamic_deephit_transformer",
                 "--mode", "single_split", 
-                "--split_num", "3",
+                "--split_num", "4",
                 "--model_dir", "sepsis/combined_hourly_iv-vasoactive_inotropic_score",
+                "--experiment_variant", "prediction"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
+            "name": "mimic_iv_prediction_single_split_vent",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "mimic_iv", 
+                "--experiment_type", "supervised_learning",
+                "--prediction_type", "discharge_mortality_tte",
+                "--model_type", "dynamic_deephit_transformer",
+                "--mode", "single_split", 
+                "--split_num", "4",
+                "--model_dir", "vent_models/fio2_peep_tidal_volume",
                 "--experiment_variant", "prediction"
             ],
             "console": "integratedTerminal",

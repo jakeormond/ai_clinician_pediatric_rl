@@ -90,7 +90,7 @@ class Actor(nn.Module):
 			layer.bias.data.fill_(-2.25)
 
 
-	def forward(self, state: torch.Tensor, deterministic: bool = False, return_dist=False):
+	def forward(self, state: torch.Tensor, deterministic: bool = False, return_dist=False, sigmoid_correction=False):
 		z_mean = self.mean_trunk(state)
 		# --- Fluid ---
 		f_mean = torch.sigmoid(self.fluid_mean(z_mean))          # (0, 1)
@@ -120,14 +120,18 @@ class Actor(nn.Module):
 			f_action = torch.sigmoid(f_raw)
 			v_action = torch.sigmoid(v_raw)
 
-			# Log-prob with sigmoid change-of-variables correction
-			# log p(a) = log p(u) - sum log sigmoid'(u)
-			f_log_prob = f_dist.log_prob(f_raw) - torch.log(
-				f_action * (1 - f_action) + 1e-6
-			)
-			v_log_prob = v_dist.log_prob(v_raw) - torch.log(
-				v_action * (1 - v_action) + 1e-6
-			)
+			if sigmoid_correction:
+				# Log-prob with sigmoid change-of-variables correction
+				f_log_prob = f_dist.log_prob(f_raw) - torch.log(
+					f_action * (1 - f_action) + 1e-6
+				)
+				v_log_prob = v_dist.log_prob(v_raw) - torch.log(
+					v_action * (1 - v_action) + 1e-6
+				)
+
+			else:
+				f_log_prob = f_dist.log_prob(f_raw)
+				v_log_prob = v_dist.log_prob(v_raw) 
 
 			log_prob    = (f_log_prob + v_log_prob).squeeze(-1)
 			actions     = torch.cat([f_action, v_action], dim=-1)
@@ -178,34 +182,6 @@ class Actor(nn.Module):
 		v_log_prob = v_dist.log_prob(v_raw) - torch.log(v_action * (1 - v_action) + 1e-6)
 
 		return (f_log_prob + v_log_prob).squeeze(-1)
-
-
-	def entropy_loss_from_dist(self, f_mean, v_mean, f_std, v_std):
-		"""
-		Entropy loss computed from an already-completed forward pass's
-		distribution parameters, avoiding a second trunk pass. Internally 
-		detaches f_mean/v_mean regardless of whether the caller
-		already detached them, so calling forward()'s un-detached outputs here
-		is safe.
-		"""
-		f_mean_d = f_mean.detach().clamp(1e-6, 1 - 1e-6)
-		v_mean_d = v_mean.detach().clamp(1e-6, 1 - 1e-6)
-		# f_std, v_std were already computed from a detached trunk in forward(),
-		# so they arrive here already correctly gradient-isolated from Q
-
-		f_dist = torch.distributions.Normal(torch.logit(f_mean_d), f_std)
-		v_dist = torch.distributions.Normal(torch.logit(v_mean_d), v_std)
-
-		f_raw = f_dist.rsample()
-		v_raw = v_dist.rsample()
-		f_action = torch.sigmoid(f_raw)
-		v_action = torch.sigmoid(v_raw)
-
-		# Sigmoid-Jacobian correction, evaluated at the GIVEN action
-		f_log_prob = f_dist.log_prob(f_raw) - torch.log(f_action * (1 - f_action) + 1e-6)
-		v_log_prob = v_dist.log_prob(v_raw) - torch.log(v_action * (1 - v_action) + 1e-6)
-
-		return (f_log_prob + v_log_prob).squeeze(-1).mean()
 
 
 class Critic(nn.Module):
@@ -709,18 +685,6 @@ class CQL:
 		q_gap = (q_gap1 + q_gap2) / 2.0
 			
 		# 3. CONSTRUCT THE CQL PENALTY (LogSumExp)
-		# We concatenate the Q-values of all sampled actions
-		# cat_q1 = torch.cat([
-		# 	q1_rand, 
-		# 	q1_curr - curr_log_probs, 
-		# 	q1_next - next_log_probs
-		# ], dim=1)
-		# cat_q2 = torch.cat([
-		# 	q2_rand, 
-		# 	q2_curr - curr_log_probs, 
-		# 	q2_next - next_log_probs
-		# ], dim=1)
-
 		cat_q1 = torch.cat([
 			q1_rand, 
 			q1_curr, 
@@ -747,15 +711,7 @@ class CQL:
 		# 4. COMBINED CRITIC LOSS
 		bellman_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
 		cql_loss = cql_loss1 + cql_loss2
-		# # dynamic warm up for cql_alpha
-		# if self.total_it < 1000:
-		# 	current_alpha = 0.0
-		# elif 1000 <= self.total_it < 2000:
-		# 	# Linearly scale alpha from 0.0 to your target_alpha over 10,000 steps
-		# 	progress = (self.total_it - 1000) / 1000.0
-		# 	current_alpha = progress * self.cql_alpha
-		# else:
-		# 	current_alpha = self.cql_alpha
+	
 		current_alpha = self.cql_alpha  # Use the fixed cql_alpha value for now
 
 		critic_loss = bellman_loss + current_alpha * cql_loss			
@@ -816,7 +772,9 @@ class CQL:
 			self.actor.train() # Dropout ACTIVE for the network we are updating
 			
 			# Sample actions from the stochastic actor
-			pi, log_prob, (f_mean, v_mean, f_std, v_std) = self.actor(state, return_dist=True)
+			pi, log_prob, (f_mean, v_mean, f_std, v_std) = self.actor(
+				state, deterministic=False, return_dist=True, sigmoid_correction=False
+			)
 			Q1_pi, Q2_pi = self.critic(state, pi)
 			Q_pi = torch.min(Q1_pi, Q2_pi)
 
@@ -848,27 +806,13 @@ class CQL:
 			actor_dict = self.compute_actor_loss(pi, action, exp_weights)
 			actor_loss_bc = actor_dict['total_bc_loss'] # this is the combined BC loss that includes both the weighted MSE and the sparsity penalty
 			losses.update(actor_dict) # add the actor_dict components to the losses dict for logging
-
-			# add a small entropy bonus
-			# ent_alpha = 0.0001
-			# actor_loss_ent = ent_alpha * log_prob.mean() if log_prob is not None else 0.0
-
-			# f_ent = self.actor.fluid_log_std.clamp(self.actor.log_std_min, self.actor.log_std_max)
-			# v_ent = self.actor.vaso_log_std.clamp(self.actor.log_std_min, self.actor.log_std_max)
-			# actor_loss_ent = -(f_ent + v_ent)				
 			
-			# actor_loss_ent = self.actor.entropy_loss_from_dist(f_mean, v_mean, f_std, v_std)
 			actor_loss_ent = log_prob.mean() 
-
-			# actor_loss_ent = -(f_log_std.mean() + v_log_std.mean())
 
 			actor_loss = self.actor_loss_bc_scale * actor_loss_bc + \
 				self.actor_loss_q_scale * actor_loss_q + \
 					self.actor_loss_entropy_scale * actor_loss_ent  # combine the losses with a large weight on the Q loss to encourage improvement over the current policy
-			# actor_loss = actor_loss_bc 
-			# actor_loss = actor_loss_q 
-			# ctor_loss = 100*actor_loss_q + self.beta * actor_loss_bc + actor_loss_ent # i think CQL doesn't normally include a BC 
-			# component, but gemini says keep if for medical, probably use a very small beta
+			
 
 			# every 500 iterations, logg actor_loss_q, actor_loss_bc, and actor_loss_ent separately to see how they are contributing to the total loss
 			if self.total_it % 500 == 0:
@@ -1162,37 +1106,3 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 	)
 
 	return trainer
-
-
-# def load_trained_actor(state_dim, action_dim, config_manager = None, model_path = None):
-# 	"""
-# 	used to load a trained actor for train of Fitted Q Evaluation (FQE) or for deployment. 
-# 	"""
-# 	if model_path is None and config_manager is not None:
-# 		model_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.model_type, 
-# 						f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions, "final_model")
-
-# 		# get folder inside model_path
-# 		model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
-# 		model_path = os.path.join(model_path, model_folder)
-
-# 	final_model_path = os.path.join(model_path, "final_model.pt")
-
-# 	# load results.json from model_folder, which has state_dim 
-# 	results_path = os.path.join(model_path, "results.json")
-# 	if os.path.exists(results_path):
-# 		with open(results_path, "r") as f:
-# 			results = json.load(f)
-# 			hidden_dim = results["hyperparameters"]["hidden_dim"]
-# 			dropout = results["hyperparameters"]["dropout"]
-
-# 	actor = Actor(
-# 		state_dim = state_dim, 
-# 		action_dim = action_dim, 
-# 		hidden_dim = hidden_dim
-# 	).to(config_manager.training_config['device'])
-
-# 	actor.load_state_dict(torch.load(final_model_path, weights_only=True))
-# 	actor.eval()
-
-# 	return actor

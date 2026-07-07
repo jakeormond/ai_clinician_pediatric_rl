@@ -53,7 +53,7 @@
 
     actor_loss_bc_scale: 0.1
     actor_loss_q_scale: 10.
-    actor_loss_entropy_scale: 0.001
+    actor_loss_entropy_scale: 1.e-5
 
     # health score reward shaping parameters
     health_score_hourly_change_clip: 100. # health score is 0 to 100, clip prevents large spikes in reward

@@ -1,5 +1,5 @@
 #!/bin/bash
-# pbs/train_choc_cql_with_logprobs_single_split_fixed.pbs
+# pbs/train_choc_cql_with_logprobs_single_split.pbs
 
 # Job name
 #PBS -N mimiciv_dynamic_deephit

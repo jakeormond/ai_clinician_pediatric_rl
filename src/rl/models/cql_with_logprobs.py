@@ -430,7 +430,6 @@ class CQL:
 		policy_noise: float = 0.2,
 		noise_clip: float = 0.05,
 		policy_freq: int = 2,
-		beta: float = 1.0,
 
 		cql_alpha: float = 2.0,  # Use the alpha arg as the CQL conservative weight
 		temp: float = 1.0,         # Temperature for the LogSumExp
@@ -467,7 +466,6 @@ class CQL:
 		self.policy_noise = policy_noise
 		self.noise_clip = noise_clip
 		self.policy_freq = policy_freq
-		self.beta = beta
 
 		self.cql_alpha = cql_alpha  # Add cql_alpha as an argument and assign it to the instance variable
 		self.temp = temp         # Add temp as an argument and assign it to the instance variable
@@ -1089,7 +1087,7 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		noise_clip=hyperparams['noise_clip'],
 		grad_clip=hyperparams['grad_clip'],
 		policy_freq=hyperparams['policy_freq'],
-		beta=hyperparams['beta'],
+
 		cql_alpha=hyperparams['cql_alpha'],
 		temp=hyperparams['temp'],
 

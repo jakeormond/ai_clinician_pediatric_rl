@@ -807,11 +807,13 @@ class CQL:
 			
 			actor_loss_ent = log_prob.mean() 
 
-			actor_loss = self.actor_loss_bc_scale * actor_loss_bc + \
-				self.actor_loss_q_scale * actor_loss_q + \
+			# actor_loss = self.actor_loss_bc_scale * actor_loss_bc + \
+			# 	self.actor_loss_q_scale * actor_loss_q + \
+			# 		self.actor_loss_entropy_scale * actor_loss_ent  # combine the losses with a large weight on the Q loss to encourage improvement over the current policy
+			
+			actor_loss = self.actor_loss_q_scale * actor_loss_q + \
 					self.actor_loss_entropy_scale * actor_loss_ent  # combine the losses with a large weight on the Q loss to encourage improvement over the current policy
 			
-
 			# every 500 iterations, logg actor_loss_q, actor_loss_bc, and actor_loss_ent separately to see how they are contributing to the total loss
 			if self.total_it % 500 == 0:
 				logging.info(

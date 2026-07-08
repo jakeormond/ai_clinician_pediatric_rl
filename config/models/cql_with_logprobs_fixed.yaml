@@ -23,7 +23,7 @@
     noise_clip: 0.5 # Range to clip target policy noise
     policy_freq: 2 # Frequency of delayed policy updates
 
-    cql_alpha: 0.1 # 0.001 # 0.01 # 0.001 #.001 # Weighting for CQL penalty term
+    cql_alpha: 0. # 0.1 # 0.001 # 0.01 # 0.001 #.001 # Weighting for CQL penalty term
     temp: 1.0 # Temperature for CQL penalty term
     num_samples: 10 # Number of samples for CQL penalty term
 

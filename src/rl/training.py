@@ -38,6 +38,7 @@ MODEL_MODULES = {
     "cvp": "src.rl.models.cvp",
     "iql": "src.rl.models.iql",
     "iql_with_sarsa": "src.rl.models.iql_with_sarsa",
+    "bc_with_logprobs": "src.rl.models.bc_with_logprobs",
 }
 
 DISTRIBUTIONS = {
@@ -345,11 +346,17 @@ def evaluate_during_training(
             advantages = None        
                 
         # Create pairs of (incoming_batch_data, target_epoch_container)
-        metric_pairs = [
-            (batch_losses, val_losses),
-            (q_stats, val_q_stats),
-            (neuron_stats, val_neuron_stats),
-        ]
+        if q_stats is not None:
+            metric_pairs = [
+                (batch_losses, val_losses),
+                (q_stats, val_q_stats),
+                (neuron_stats, val_neuron_stats),
+            ]
+        else:
+            metric_pairs = [
+                (batch_losses, val_losses),
+                (neuron_stats, val_neuron_stats),
+            ]
 
         # Dynamically add advantages to the processing list if it exists
         if advantages is not None:
@@ -367,7 +374,11 @@ def evaluate_during_training(
                 epoch_dict[new_key].append(value)
 
     # A list of your actual dictionary variables to process in place
-    val_containers = [val_losses, val_q_stats, val_neuron_stats]
+    if q_stats is not None:
+        val_containers = [val_losses, val_q_stats, val_neuron_stats]
+    else:
+        val_containers = [val_losses, val_neuron_stats]        
+    
     if advantages is not None:
         val_containers.append(val_advantages)
 
@@ -665,11 +676,17 @@ def train_with_hyperparameters(
 
             # 2. Process and map your dictionaries into the payload and your aggregators
             # Pairing (incoming_batch_dict, target_epoch_aggregator)
-            metric_pairs = [
-                (batch_losses, epoch_training_losses),
-                (q_stats, epoch_training_q_stats),
-                (grad_norm, epoch_grad_norm),
-            ]
+            if q_stats is not None:
+                metric_pairs = [
+                    (batch_losses, epoch_training_losses),
+                    (q_stats, epoch_training_q_stats),
+                    (grad_norm, epoch_grad_norm),
+                ]
+            else:
+                metric_pairs = [
+                    (batch_losses, epoch_training_losses),
+                    (grad_norm, epoch_grad_norm),
+                ]
 
             for batch_dict, epoch_container in metric_pairs:
                 for key, value in batch_dict.items():
@@ -847,6 +864,16 @@ def train_with_hyperparameters(
             'total_it': trainer.total_it,
             'critic_state_dict': trainer.critic.state_dict(),
             'critic_optimizer_state_dict': trainer.critic_optimizer.state_dict(),
+            'hyperparameters': hyperparams,
+            'training_config': config_manager.training_config,
+        }
+        torch.save(checkpoint, model_path)
+
+    elif config_manager.model_type in ['bc_with_logprobs']:
+        checkpoint = {
+            'total_it': trainer.total_it,
+            'actor_state_dict': trainer.actor.state_dict(),
+            'actor_optimizer_state_dict': trainer.actor_optimizer.state_dict(),
             'hyperparameters': hyperparams,
             'training_config': config_manager.training_config,
         }

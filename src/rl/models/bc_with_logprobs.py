@@ -70,8 +70,8 @@ class Actor(nn.Module):
 
 		for layer in [self.fluid_log_std, self.vaso_log_std]:
 			nn.init.zeros_(layer.weight)
-			layer.bias.data.fill_(-2.25)
-
+			layer.bias.data.fill_(-1.) # this has to be within the range of log_std_min and log_std_max, 
+			# otherwise gradients are zero and it will be stuck there forever (according to claude)
 
 	def forward(self, state: torch.Tensor, deterministic: bool = False, 
 			 return_dist=False, sigmoid_correction=True):

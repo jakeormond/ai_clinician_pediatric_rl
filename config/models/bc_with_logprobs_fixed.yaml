@@ -31,7 +31,7 @@
     loss_metric: "actor_loss"  # Which metric to use for validation loss
 
     # gradient clipping
-    grad_clip: 1.0
+    grad_clip: 5.0
 
     # health score reward shaping parameters
     health_score_hourly_change_clip: 100. # health score is 0 to 100, clip prevents large spikes in reward

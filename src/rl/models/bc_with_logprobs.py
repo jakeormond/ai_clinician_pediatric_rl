@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 """
 Gemini is suggesting training only the Actor for first 1000 steps, claims this can allow can prevent the policy
 from "overreacting" to initial, noisy Critic estimates. 
+
+Claude: 
 """
 
 

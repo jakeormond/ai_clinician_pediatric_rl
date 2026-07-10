@@ -20,7 +20,19 @@ logger = logging.getLogger(__name__)
 Gemini is suggesting training only the Actor for first 1000 steps, claims this can allow can prevent the policy
 from "overreacting" to initial, noisy Critic estimates. 
 
-Claude: 
+Claude: Hurdle-model changes to Actor + BC.
+ 
+Core idea: instead of one squashed Gaussian per action trying to represent
+both "P(dose=0)" and "how much, given dose>0" at once, split each action
+into:
+  1. a Bernoulli GATE head:      P(dose > 0 | state)
+  2. a magnitude head (as before): Normal-in-logit-space, but its loss is
+     now only evaluated/backpropagated on timesteps where dose > 0.
+ 
+This stops the ~96%-zero vaso targets (and ~55%-zero fluid targets) from
+dragging the magnitude mean/std toward the zero cluster. It also fixes the
+std-floor bug: the old log_std bias (-2.25) sat outside the clamp range
+[-2, 1], so torch.clamp zeroed its gradient from step 0. Fixed below.
 """
 
 
@@ -32,29 +44,35 @@ class Actor(nn.Module):
 		state_dim: int,
 		hidden_dim: int = 64,
 		log_std_min: float = -2,
-		log_std_max: float = 1., # -1.5, # 0.
+		log_std_max: float = 1.,
 		action_dim: int = 2,
-		dropout: float = 0.1
+		dropout: float = 0.1,
+		zero_threshold: float = 1e-4,   # doses below this are treated as "no dose"
 	):
 		super().__init__()
 		self.log_std_min = log_std_min
 		self.log_std_max = log_std_max
-
-		# trunk — learns a joint patient representation
+		self.zero_threshold = zero_threshold
+ 
 		self.trunk = nn.Sequential(
 			nn.Linear(state_dim, hidden_dim),
 			nn.LayerNorm(hidden_dim),
 			nn.ReLU(),
 			nn.Linear(hidden_dim, hidden_dim),
 			nn.ReLU(),
-			nn.LayerNorm(hidden_dim), 
+			nn.LayerNorm(hidden_dim),
 		)
-		self.fluid_mean    = nn.Linear(hidden_dim, 1)		
-		self.vaso_mean    = nn.Linear(hidden_dim, 1)
-	
+ 
+		# --- magnitude heads (same shape as before) ---
+		self.fluid_mean = nn.Linear(hidden_dim, 1)
+		self.vaso_mean = nn.Linear(hidden_dim, 1)
 		self.fluid_log_std = nn.Linear(hidden_dim, 1)
 		self.vaso_log_std = nn.Linear(hidden_dim, 1)
-
+ 
+		# --- NEW: gate heads, P(dose > 0 | state) ---
+		self.fluid_gate = nn.Linear(hidden_dim, 1)
+		self.vaso_gate = nn.Linear(hidden_dim, 1)
+ 
 		self._init_weights()
 
 
@@ -65,119 +83,156 @@ class Actor(nn.Module):
 				nn.init.zeros_(m.bias)
 
 		nn.init.zeros_(self.fluid_mean.weight)
-		self.fluid_mean.bias.data.fill_(-0.405)
+		self.fluid_mean.bias.data.fill_(0.0)  # start with mean=0, so sigmoid(mean)=0.5
 
 		nn.init.zeros_(self.vaso_mean.weight)
-		self.vaso_mean.bias.data.fill_(-3.89)
+		self.vaso_mean.bias.data.fill_(0.0)  # start with mean=0, so sigmoid(mean)=0.5
 
+		# FIX: bias must sit strictly INSIDE (log_std_min, log_std_max) or
+		# clamp() zeroes its gradient forever. Old value (-2.25) was outside.
 		for layer in [self.fluid_log_std, self.vaso_log_std]:
 			nn.init.zeros_(layer.weight)
-			layer.bias.data.fill_(-1.) # this has to be within the range of log_std_min and log_std_max, 
-			# otherwise gradients are zero and it will be stuck there forever (according to claude)
+			layer.bias.data.fill_(-1.) 
+
+		# gate init: match your known base rates so the model isn't fighting
+		# a bad prior for the first N steps. logit(p) = log(p/(1-p)).
+		nn.init.zeros_(self.fluid_gate.weight)
+		self.fluid_gate.bias.data.fill_(0.78)   # sigmoid(0.78) ≈ 0.686 (fluid nonzero rate)
+		nn.init.zeros_(self.vaso_gate.weight)
+		self.vaso_gate.bias.data.fill_(-2.98)     # sigmoid(-2.98)  ≈ 0.048 (vaso nonzero rate)
+
+
+	def _magnitude_dist(self, z):
+		f_raw_mean = self.fluid_mean(z)
+		v_raw_mean = self.vaso_mean(z)
+		f_log_std = torch.clamp(self.fluid_log_std(z), self.log_std_min, self.log_std_max)
+		v_log_std = torch.clamp(self.vaso_log_std(z), self.log_std_min, self.log_std_max)
+		f_std = f_log_std.exp()
+		v_std = v_log_std.exp()
+		return f_raw_mean, v_raw_mean, f_std, v_std
+	
 
 	def forward(self, state: torch.Tensor, deterministic: bool = False, 
 			 return_dist=False, sigmoid_correction=True):
 		z = self.trunk(state)
-		# --- Fluid ---
-		# f_mean = torch.sigmoid(self.fluid_mean(z))          # (0, 1)
-		f_raw_mean = self.fluid_mean(z)       # (0, 1)
-		# --- Vasopressor ---
-		# v_mean = torch.sigmoid(self.vaso_mean(z))            # (0, 1)
-		v_raw_mean = self.vaso_mean(z)            # (0, 1)
-
-		f_log_std = torch.clamp(self.fluid_log_std(z), self.log_std_min, self.log_std_max)
-		v_log_std = torch.clamp(self.vaso_log_std(z), self.log_std_min, self.log_std_max)
-
-		f_std = f_log_std.exp()
-		v_std = v_log_std.exp()
-
+ 
+		f_gate_logit = self.fluid_gate(z)
+		v_gate_logit = self.vaso_gate(z)
+		f_p = torch.sigmoid(f_gate_logit)
+		v_p = torch.sigmoid(v_gate_logit)
+ 
+		f_raw_mean, v_raw_mean, f_std, v_std = self._magnitude_dist(z)
 	
 		if not deterministic:
-			# Sample in unconstrained space, then squash with sigmoid
-			# f_dist = torch.distributions.Normal(
-			# 	torch.logit(f_mean.clamp(1e-6, 1 - 1e-6)), f_std
-			# )
+			# sample gate ~ Bernoulli(p) via reparameterizable relaxation is
+			# unnecessary here since we don't need gradients through the
+			# sampled action for BC — straight sampling is fine.
+			f_fire = torch.bernoulli(f_p)
+			v_fire = torch.bernoulli(v_p)
+ 
 			f_dist = torch.distributions.Normal(f_raw_mean, f_std)
-
-			# v_dist = torch.distributions.Normal(
-			# 	torch.logit(v_mean.clamp(1e-6, 1 - 1e-6)), v_std
-			# )
 			v_dist = torch.distributions.Normal(v_raw_mean, v_std)
-
 			f_raw = f_dist.rsample()
 			v_raw = v_dist.rsample()
-
-			f_action = torch.sigmoid(f_raw)
-			v_action = torch.sigmoid(v_raw)
+			f_mag = torch.sigmoid(f_raw)
+			v_mag = torch.sigmoid(v_raw)
+ 
+			f_action = f_fire * f_mag
+			v_action = v_fire * v_mag
+			actions = torch.cat([f_action, v_action], dim=-1)
+ 
+			# log_prob of the SAMPLED action under this same generative
+			# process (gate log-prob + magnitude log-prob, only where fired)
+			f_gate_lp = f_fire * torch.log(f_p + 1e-8) + (1 - f_fire) * torch.log(1 - f_p + 1e-8)
+			v_gate_lp = v_fire * torch.log(v_p + 1e-8) + (1 - v_fire) * torch.log(1 - v_p + 1e-8)
 
 			if sigmoid_correction:
-				# Log-prob with sigmoid change-of-variables correction
-				f_log_prob = f_dist.log_prob(f_raw) - torch.log(
-					f_action * (1 - f_action) + 1e-6
-				)
-				v_log_prob = v_dist.log_prob(v_raw) - torch.log(
-					v_action * (1 - v_action) + 1e-6
-				)
-
+				f_mag_lp = f_dist.log_prob(f_raw) - torch.log(f_mag * (1 - f_mag) + 1e-6)
+				v_mag_lp = v_dist.log_prob(v_raw) - torch.log(v_mag * (1 - v_mag) + 1e-6)
 			else:
-				f_log_prob = f_dist.log_prob(f_raw)
-				v_log_prob = v_dist.log_prob(v_raw) 
-
-			log_prob    = (f_log_prob + v_log_prob).squeeze(-1)
-			actions     = torch.cat([f_action, v_action], dim=-1)
-			# mean_actions = torch.cat([f_mean, v_mean], dim=-1)
-		else:
-			f_mean = torch.sigmoid(f_raw_mean)
-			v_mean = torch.sigmoid(v_raw_mean)
-			actions = torch.cat([f_mean, v_mean], dim=-1)
-			log_prob = None
+				f_mag_lp = f_dist.log_prob(f_raw)
+				v_mag_lp = v_dist.log_prob(v_raw)
+ 
+			log_prob = (f_gate_lp + f_fire * f_mag_lp + v_gate_lp + v_fire * v_mag_lp).squeeze(-1)
 		
+		else:
+			f_mean_mag = torch.sigmoid(f_raw_mean)
+			v_mean_mag = torch.sigmoid(v_raw_mean)
+			# deterministic policy: gate on p>0.5, report expected dose
+			# (use hard gate for actual dosing decisions; swap to f_p * f_mean_mag
+			# if you want the smooth expectation instead)
+			f_action = (f_p > 0.5).float() * f_mean_mag
+			v_action = (v_p > 0.5).float() * v_mean_mag
+			actions = torch.cat([f_action, v_action], dim=-1)
+			log_prob = None
+ 
 		if return_dist:
-			return actions, log_prob, (f_mean, v_mean, f_std, v_std)
-
+			return actions, log_prob, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std)
+ 
 		return actions, log_prob
 
 
-	def log_prob_of_action(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-		"""
-		Evaluate the log-density of a GIVEN action under the current policy,
-		as opposed to forward()'s stochastic branch, which samples a fresh
-		action and returns its own log-prob. Needed for importance-sampling-based
-		evaluation (WIS) and as a building block for entropy_loss().
 
+
+	def log_prob_of_action(self, state: torch.Tensor, action: torch.Tensor, return_components=False) -> torch.Tensor:
+		"""
+		Hurdle log-likelihood of a GIVEN action:
+		  log P(a) = log P(gate=fired) + [fired] * log p(magnitude | fired)
+ 
+		Zero timesteps only train the gate head. Nonzero timesteps train the
+		gate head AND the magnitude head. This is the key fix: magnitude
+		mean/std no longer see the zero-dose examples at all.
 		"""
 		z = self.trunk(state)
-
-		# f_mean = torch.sigmoid(self.fluid_mean(z)).clamp(1e-6, 1 - 1e-6)
-		# v_mean = torch.sigmoid(self.vaso_mean(z)).clamp(1e-6, 1 - 1e-6)
-
-		f_raw_mean = self.fluid_mean(z)          
-		v_raw_mean = self.vaso_mean(z)  
-
-		f_log_std = torch.clamp(self.fluid_log_std(z), self.log_std_min, self.log_std_max)
-		v_log_std = torch.clamp(self.vaso_log_std(z), self.log_std_min, self.log_std_max)
-		f_std = f_log_std.exp()
-		v_std = v_log_std.exp()
-
-		# Clamp the GIVEN action away from exactly 0/1 before inverting the
-		# sigmoid — logit(0) and logit(1) are -inf/+inf, and real clinical
-		# doses can legitimately be exactly 0 (e.g. no vasopressor given)
-		a = action.clamp(1e-6, 1 - 1e-6)
-		f_action = a[:, 0:1]
-		v_action = a[:, 1:2]
-
-		f_raw = torch.logit(f_action)
-		v_raw = torch.logit(v_action)
-
+ 
+		f_gate_logit = self.fluid_gate(z)
+		v_gate_logit = self.vaso_gate(z)
+ 
+		f_raw_mean, v_raw_mean, f_std, v_std = self._magnitude_dist(z)
+ 
+		f_dose = action[:, 0:1]
+		v_dose = action[:, 1:2]
+ 
+		f_fired = (f_dose > self.zero_threshold).float()
+		v_fired = (v_dose > self.zero_threshold).float()
+ 
+		# --- gate loss (standard BCE-with-logits, on ALL timesteps) ---
+		f_gate_lp = -F.binary_cross_entropy_with_logits(f_gate_logit, f_fired, reduction='none')
+		v_gate_lp = -F.binary_cross_entropy_with_logits(v_gate_logit, v_fired, reduction='none')
+ 
+		# --- magnitude loss (only where fired; clamp avoids logit(0)) ---
+		f_a = f_dose.clamp(1e-4, 1 - 1e-4)
+		v_a = v_dose.clamp(1e-4, 1 - 1e-4)
+		f_raw = torch.logit(f_a)
+		v_raw = torch.logit(v_a)
+ 
 		f_dist = torch.distributions.Normal(f_raw_mean, f_std)
 		v_dist = torch.distributions.Normal(v_raw_mean, v_std)
+ 
+		f_mag_lp = f_dist.log_prob(f_raw) - torch.log(f_a * (1 - f_a) + 1e-6)
+		v_mag_lp = v_dist.log_prob(v_raw) - torch.log(v_a * (1 - v_a) + 1e-6)
+ 
+		# mask out magnitude term where dose==0 — this is the critical line,
+		# it's what stops the zero mass from contaminating mean/std.
+		total_lp = (
+			f_gate_lp + f_fired * f_mag_lp
+			+ v_gate_lp + v_fired * v_mag_lp
+		)
+		total_lp = total_lp.squeeze(-1)
 
-		# Sigmoid-Jacobian correction, evaluated at the GIVEN action
-		f_log_prob = f_dist.log_prob(f_raw) - torch.log(f_action * (1 - f_action) + 1e-6)
-		v_log_prob = v_dist.log_prob(v_raw) - torch.log(v_action * (1 - v_action) + 1e-6)
+		if return_components:
+			components = {
+				"fluid_gate_lp": f_gate_lp.squeeze(-1),
+				"vaso_gate_lp": v_gate_lp.squeeze(-1),
+				"fluid_mag_lp": f_mag_lp.squeeze(-1),
+				"vaso_mag_lp": v_mag_lp.squeeze(-1),
+				"fluid_fired": f_fired.squeeze(-1),
+				"vaso_fired": v_fired.squeeze(-1),
+			}
+			return total_lp, components
 
-		return (f_log_prob + v_log_prob).squeeze(-1)
-	
+		return total_lp
+
 	@torch.no_grad()
 	def get_neuron_stats(self, state):
 		self.eval()
@@ -202,88 +257,6 @@ class Actor(nn.Module):
 
 		_ = trace_sequential_block(self.trunk, state, "trunk")
 		return stats
-
-
-def get_q_stats(current_Q1, current_Q2, actor_Q, mortality):
-	
-	# create current_Q as the mean of current_Q1 and current_Q2
-	current_Q_mean = (current_Q1 + current_Q2) / 2.0
-	current_Q_min = torch.min(current_Q1, current_Q2)
-	mean_Q = current_Q_mean.mean().item()
-	variance_Q = current_Q_mean.var().item()
-	batch_n = current_Q_mean.shape[0]
-	uncertainty_Q = F.mse_loss(current_Q1, current_Q2).item() # simple measure of uncertainty based on disagreement between the two critics
-
-	# masks and counts
-	survival_mask = (mortality == 0)
-	non_survival_mask = (mortality == 1)
-
-	survival_n = survival_mask.sum().item()
-	non_survival_n = non_survival_mask.sum().item()
-	
-	# only compute subgroup mean/variance together when n > 2
-	if survival_n > 2:
-		survival_vals = current_Q_mean[survival_mask]
-		survival_Q = survival_vals.mean().item()
-		survival_variance_Q = survival_vals.var().item()
-	else:
-		survival_Q = float('nan')
-		survival_variance_Q = float('nan')
-		survival_n = 0
-
-	if non_survival_n > 2:
-		non_survival_vals = current_Q_mean[non_survival_mask]
-		non_survival_Q = non_survival_vals.mean().item()
-		non_survival_variance_Q = non_survival_vals.var().item()
-	else:
-		non_survival_Q = float('nan')
-		non_survival_variance_Q = float('nan')
-		non_survival_n = 0
-
-	if survival_n >= 2 and non_survival_n >= 2:
-		# calculate signal to noise ratio of the difference between survival and non-survival Q values
-		signal = abs(survival_Q - non_survival_Q)
-		pooled_variance = (survival_variance_Q + non_survival_variance_Q) / 2.0
-		noise = pooled_variance ** 0.5
-		signal_to_noise = signal / noise if noise > 0 else float('inf')
-
-		# also calculate AUC of using Q value to predict mortality, as an alternative measure of signal to noise
-		auc_Q = roc_auc_score(1-mortality.detach().cpu().numpy(), current_Q_mean.detach().cpu().numpy())
-
-	else:
-		signal_to_noise = float('nan')
-		auc_Q = float('nan')
-
-	q_stats = {
-		"batch_n": batch_n,
-		"mean_Q": mean_Q,
-		"variance_Q": variance_Q,
-		"uncertainty_Q": uncertainty_Q,                
-		"survival_n": survival_n,
-		"survival_Q": survival_Q,
-		"survival_variance_Q": survival_variance_Q,
-		"non_survival_n": non_survival_n,
-		"non_survival_Q": non_survival_Q,
-		"non_survival_variance_Q": non_survival_variance_Q,
-		"signal_to_noise": signal_to_noise,
-		"auc_Q": auc_Q
-	}
-
-	
-
-	if actor_Q is not None:
-		advantage_Q = actor_Q - current_Q_min # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
-		advantage_Q_mean = (actor_Q - current_Q_min).mean().item() # how much better the actor's action is compared to the current Q estimate, on average. This can help us understand if the policy is improving over time.
-		survival_advantage_Q = advantage_Q[survival_mask].mean().item() if survival_n > 0 else float('nan')
-		non_survival_advantage_Q = advantage_Q[non_survival_mask].mean().item() if non_survival_n > 0 else float('nan')
-		
-		q_stats.update({
-			"advantage_Q_mean": advantage_Q_mean,
-			"survival_advantage_Q": survival_advantage_Q,
-			"non_survival_advantage_Q": non_survival_advantage_Q
-		})	
-				
-	return q_stats
 
 
 
@@ -362,7 +335,7 @@ class BC:
 		self.actor.train() # Dropout ACTIVE for the network we are updating
 		
 		# Sample actions from the stochastic actor
-		log_prob = self.actor.log_prob_of_action(state, action) # log probability of the action taken by the doctor under the current policy
+		log_prob, components = self.actor.log_prob_of_action(state, action, return_components=True) # log probability of the action taken by the doctor under the current policy
 		
 		actor_loss = -log_prob.mean() # negative log likelihood of the action taken by the doctor under the current policy
 		losses = {
@@ -397,20 +370,68 @@ class BC:
 		
 		self.actor.eval()
 		with torch.no_grad():
-			_, _, (f_mean, v_mean, f_std, v_std) = self.actor(
-				state, deterministic=True, return_dist=True, 
-				sigmoid_correction=True
+			_, _, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std) = self.actor(
+				state, deterministic=True, return_dist=True
 			)
-			
-			fluid_mse = F.mse_loss(f_mean, action[:, 0:1]).item()
-			vaso_mse = F.mse_loss(v_mean, action[:, 1:2]).item()
+			f_mag = torch.sigmoid(f_raw_mean)
+			v_mag = torch.sigmoid(v_raw_mean)
 
-		losses["fluid_mean_pred"] = f_mean.mean().item()
-		losses["vaso_mean_pred"] = v_mean.mean().item()
+		# fired refers to clinician dose binary
+		f_fired_flat, v_fired_flat = components["fluid_fired"], components["vaso_fired"]  # (batch,)
+		f_fired, v_fired = f_fired_flat.unsqueeze(-1), v_fired_flat.unsqueeze(-1)          # (batch,1), for MSE only
+
+		# f_p is the gate logits (<0.5 = no dose, >0.5 = dose)
+		# gate accuracy — did we predict "dose given" correctly?
+		fluid_gate_acc = ((f_p > 0.5).float() == f_fired).float().mean().item()
+		vaso_gate_acc  = ((v_p > 0.5).float() == v_fired).float().mean().item()
+
+		# magnitude MSE computed ONLY on the subset that actually got a dose —
+		# this is now the honest number, since previously mixing in the zeros
+		# made the "mse" mostly measure how well you predicted zero.
+		if f_fired_flat.sum() > 0:
+			fluid_mse = (F.mse_loss(f_mag, action[:, 0:1], reduction='none') * f_fired).sum() / f_fired.sum()
+			fluid_mag_loss = -(f_fired_flat * components["fluid_mag_lp"]).sum().item() / f_fired.sum().item()
+			fluid_bias = ((f_mag - action[:, 0:1]) * f_fired).sum() / f_fired.sum()
+			fluid_mag_pred_nonzero = (f_mag * f_fired).sum() / f_fired.sum()
+			fluid_mag_pred_all = (f_mag * f_fired).mean()  # mean over all samples, including zeros
+		else:
+			fluid_mse = torch.tensor(float('nan'))
+			fluid_mag_loss = torch.tensor(float('nan'))
+			fluid_bias = torch.tensor(float('nan'))
+			fluid_mag_pred_nonzero = torch.tensor(float('nan'))
+			fluid_mag_pred_all = torch.tensor(float('nan'))
+
+		if v_fired_flat.sum() > 0:
+			vaso_mse = (F.mse_loss(v_mag, action[:, 1:2], reduction='none') * v_fired).sum() / v_fired.sum()
+			vaso_mag_loss = -(v_fired_flat * components["vaso_mag_lp"]).sum().item() / v_fired.sum().item()
+			vaso_bias = ((v_mag - action[:, 1:2]) * v_fired).sum() / v_fired.sum()
+			vaso_mag_pred_nonzero = (v_mag * v_fired).sum() / v_fired.sum()
+			vaso_mag_pred_all = (v_mag * v_fired).mean()  # mean over all samples, including zeros
+		else:
+			vaso_mse = torch.tensor(float('nan'))
+			vaso_mag_loss = torch.tensor(float('nan'))
+			vaso_bias = torch.tensor(float('nan'))
+			vaso_mag_pred_nonzero = torch.tensor(float('nan'))
+			vaso_mag_pred_all = torch.tensor(float('nan'))
+
+		losses["fluid_gate_acc"] = fluid_gate_acc
+		losses["vaso_gate_acc"] = vaso_gate_acc
+		losses["fluid_mag_pred_nonzero"] = fluid_mag_pred_nonzero.item()
+		losses["vaso_mag_pred_nonzero"] = vaso_mag_pred_nonzero.item()
+		losses["fluid_mag_pred_all"] = fluid_mag_pred_all.item()
+		losses["vaso_mag_pred_all"] = vaso_mag_pred_all.item()
 		losses["fluid_std_mean"] = f_std.mean().item()
 		losses["vaso_std_mean"] = v_std.mean().item()
-		losses["fluid_mse"] = fluid_mse
-		losses["vaso_mse"] = vaso_mse
+		losses["fluid_mse_nonzero"] = fluid_mse.item()
+		losses["vaso_mse_nonzero"] = vaso_mse.item()	
+		losses["fluid_mag_loss"] = fluid_mag_loss if isinstance(fluid_mag_loss, float) else fluid_mag_loss.item()
+		losses["vaso_mag_loss"] = vaso_mag_loss if isinstance(vaso_mag_loss, float) else vaso_mag_loss.item()
+		losses["fluid_bias_nonzero"] = fluid_bias.item()
+		losses["vaso_bias_nonzero"] = vaso_bias.item()
+		# diagnostics — don't affect the gradient, just logging
+		losses["fluid_gate_loss"] = -components["fluid_gate_lp"].mean().item()
+		losses["vaso_gate_loss"] = -components["vaso_gate_lp"].mean().item()
+
 
 		# return log_dict, grad_norm
 		return losses, _, grad_norm
@@ -442,7 +463,7 @@ class BC:
 		
 		with torch.no_grad():
 			# Sample actions from the stochastic actor
-			log_prob = self.actor.log_prob_of_action(state, action) # log probability of the action taken by the doctor under the current policy
+			log_prob, components = self.actor.log_prob_of_action(state, action, return_components=True) # log probability of the action taken by the doctor under the current policy
 			
 			actor_loss = -log_prob.mean() # negative log likelihood of the action taken by the doctor under the current policy
 			losses = {
@@ -452,21 +473,66 @@ class BC:
 			# ADD THIS LINE:
 			neuron_stats = self.actor.get_neuron_stats(state)
 	
-			_, _, (f_mean, v_mean, f_std, v_std) = self.actor(
-				state, deterministic=True, return_dist=True, 
-				sigmoid_correction=True
+			_, _, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std) = self.actor(
+				state, deterministic=True, return_dist=True
 			)
+			f_mag = torch.sigmoid(f_raw_mean)
+			v_mag = torch.sigmoid(v_raw_mean)
 
-			fluid_mse = F.mse_loss(f_mean, action[:, 0:1]).item()
-			vaso_mse = F.mse_loss(v_mean, action[:, 1:2]).item()
-	
-			losses["fluid_mean_pred"] = f_mean.mean().item()
-			losses["vaso_mean_pred"] = v_mean.mean().item()
+			f_fired_flat, v_fired_flat = components["fluid_fired"], components["vaso_fired"]  # (batch,)
+			f_fired, v_fired = f_fired_flat.unsqueeze(-1), v_fired_flat.unsqueeze(-1)          # (batch,1), for MSE only
+
+			# gate accuracy — did we predict "dose given" correctly?
+			fluid_gate_acc = ((f_p > 0.5).float() == f_fired).float().mean().item()
+			vaso_gate_acc  = ((v_p > 0.5).float() == v_fired).float().mean().item()
+
+			# magnitude MSE computed ONLY on the subset that actually got a dose —
+			# this is now the honest number, since previously mixing in the zeros
+			# made the "mse" mostly measure how well you predicted zero.
+			if f_fired_flat.sum() > 0:
+				fluid_mse = (F.mse_loss(f_mag, action[:, 0:1], reduction='none') * f_fired).sum() / f_fired.sum()
+				fluid_mag_loss = -(f_fired_flat * components["fluid_mag_lp"]).sum().item() / f_fired.sum().item()
+				fluid_bias = ((f_mag - action[:, 0:1]) * f_fired).sum() / f_fired.sum()
+				fluid_mag_pred_nonzero = (f_mag * f_fired).sum() / f_fired.sum()
+				fluid_mag_pred_all = (f_mag * f_fired).mean()
+			else:
+				fluid_mse = torch.tensor(float('nan'))
+				fluid_mag_loss = torch.tensor(float('nan'))
+				fluid_bias = torch.tensor(float('nan'))
+				fluid_mag_pred_nonzero = torch.tensor(float('nan'))
+				fluid_mag_pred_all = torch.tensor(float('nan'))
+
+			if v_fired_flat.sum() > 0:
+				vaso_mse = (F.mse_loss(v_mag, action[:, 1:2], reduction='none') * v_fired).sum() / v_fired.sum()
+				vaso_mag_loss = -(v_fired_flat * components["vaso_mag_lp"]).sum().item() / v_fired.sum().item()
+				vaso_bias = ((v_mag - action[:, 1:2]) * v_fired).sum() / v_fired.sum()
+				vaso_mag_pred_nonzero = (v_mag * v_fired).sum() / v_fired.sum()
+				vaso_mag_pred_all = (v_mag * v_fired).mean()
+			else:
+				vaso_mse = torch.tensor(float('nan'))
+				vaso_mag_loss = torch.tensor(float('nan'))
+				vaso_bias = torch.tensor(float('nan'))
+				vaso_mag_pred_nonzero = torch.tensor(float('nan'))
+				vaso_mag_pred_all = torch.tensor(float('nan'))
+
+			losses["fluid_gate_acc"] = fluid_gate_acc
+			losses["vaso_gate_acc"] = vaso_gate_acc
+			losses["fluid_mag_pred_nonzero"] = fluid_mag_pred_nonzero.item()
+			losses["vaso_mag_pred_nonzero"] = vaso_mag_pred_nonzero.item()
+			losses["fluid_mag_pred_all"] = fluid_mag_pred_all.item()
+			losses["vaso_mag_pred_all"] = vaso_mag_pred_all.item()
 			losses["fluid_std_mean"] = f_std.mean().item()
 			losses["vaso_std_mean"] = v_std.mean().item()
-			losses["fluid_mse"] = fluid_mse
-			losses["vaso_mse"] = vaso_mse
-
+			losses["fluid_mse_nonzero"] = fluid_mse.item()
+			losses["vaso_mse_nonzero"] = vaso_mse.item()	
+			losses["fluid_mag_loss"] = fluid_mag_loss if isinstance(fluid_mag_loss, float) else fluid_mag_loss.item()
+			losses["vaso_mag_loss"] = vaso_mag_loss if isinstance(vaso_mag_loss, float) else vaso_mag_loss.item()
+			losses["fluid_bias_nonzero"] = fluid_bias.item()
+			losses["vaso_bias_nonzero"] = vaso_bias.item() 
+			# diagnostics — don't affect the gradient, just logging
+			losses["fluid_gate_loss"] = -components["fluid_gate_lp"].mean().item()
+			losses["vaso_gate_loss"] = -components["vaso_gate_lp"].mean().item()
+		
 		# return log_dict, action, pi
 		return losses, _, neuron_stats
 

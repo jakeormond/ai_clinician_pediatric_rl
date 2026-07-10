@@ -20,19 +20,7 @@ logger = logging.getLogger(__name__)
 Gemini is suggesting training only the Actor for first 1000 steps, claims this can allow can prevent the policy
 from "overreacting" to initial, noisy Critic estimates. 
 
-Claude: Hurdle-model changes to Actor + BC.
- 
-Core idea: instead of one squashed Gaussian per action trying to represent
-both "P(dose=0)" and "how much, given dose>0" at once, split each action
-into:
-  1. a Bernoulli GATE head:      P(dose > 0 | state)
-  2. a magnitude head (as before): Normal-in-logit-space, but its loss is
-     now only evaluated/backpropagated on timesteps where dose > 0.
- 
-This stops the ~96%-zero vaso targets (and ~55%-zero fluid targets) from
-dragging the magnitude mean/std toward the zero cluster. It also fixes the
-std-floor bug: the old log_std bias (-2.25) sat outside the clamp range
-[-2, 1], so torch.clamp zeroed its gradient from step 0. Fixed below.
+Claude: 
 """
 
 
@@ -44,35 +32,29 @@ class Actor(nn.Module):
 		state_dim: int,
 		hidden_dim: int = 64,
 		log_std_min: float = -2,
-		log_std_max: float = 1.,
+		log_std_max: float = 1., # -1.5, # 0.
 		action_dim: int = 2,
-		dropout: float = 0.1,
-		zero_threshold: float = 1e-4,   # doses below this are treated as "no dose"
+		dropout: float = 0.1
 	):
 		super().__init__()
 		self.log_std_min = log_std_min
 		self.log_std_max = log_std_max
-		self.zero_threshold = zero_threshold
- 
+
+		# trunk — learns a joint patient representation
 		self.trunk = nn.Sequential(
 			nn.Linear(state_dim, hidden_dim),
 			nn.LayerNorm(hidden_dim),
 			nn.ReLU(),
 			nn.Linear(hidden_dim, hidden_dim),
 			nn.ReLU(),
-			nn.LayerNorm(hidden_dim),
+			nn.LayerNorm(hidden_dim), 
 		)
- 
-		# --- magnitude heads (same shape as before) ---
-		self.fluid_mean = nn.Linear(hidden_dim, 1)
-		self.vaso_mean = nn.Linear(hidden_dim, 1)
+		self.fluid_mean    = nn.Linear(hidden_dim, 1)		
+		self.vaso_mean    = nn.Linear(hidden_dim, 1)
+	
 		self.fluid_log_std = nn.Linear(hidden_dim, 1)
 		self.vaso_log_std = nn.Linear(hidden_dim, 1)
- 
-		# --- NEW: gate heads, P(dose > 0 | state) ---
-		self.fluid_gate = nn.Linear(hidden_dim, 1)
-		self.vaso_gate = nn.Linear(hidden_dim, 1)
- 
+
 		self._init_weights()
 
 
@@ -83,23 +65,15 @@ class Actor(nn.Module):
 				nn.init.zeros_(m.bias)
 
 		nn.init.zeros_(self.fluid_mean.weight)
-		self.fluid_mean.bias.data.fill_(0.0)  # start with mean=0, so sigmoid(mean)=0.5
+		self.fluid_mean.bias.data.fill_(-0.405)
 
 		nn.init.zeros_(self.vaso_mean.weight)
-		self.vaso_mean.bias.data.fill_(0.0)  # start with mean=0, so sigmoid(mean)=0.5
+		self.vaso_mean.bias.data.fill_(-3.89)
 
-		# FIX: bias must sit strictly INSIDE (log_std_min, log_std_max) or
-		# clamp() zeroes its gradient forever. Old value (-2.25) was outside.
 		for layer in [self.fluid_log_std, self.vaso_log_std]:
 			nn.init.zeros_(layer.weight)
-			layer.bias.data.fill_(-1.) 
-
-		# gate init: match your known base rates so the model isn't fighting
-		# a bad prior for the first N steps. logit(p) = log(p/(1-p)).
-		nn.init.zeros_(self.fluid_gate.weight)
-		self.fluid_gate.bias.data.fill_(0.78)   # sigmoid(0.78) ≈ 0.686 (fluid nonzero rate)
-		nn.init.zeros_(self.vaso_gate.weight)
-		self.vaso_gate.bias.data.fill_(-2.98)     # sigmoid(-2.98)  ≈ 0.048 (vaso nonzero rate)
+			layer.bias.data.fill_(-1.) # this has to be within the range of log_std_min and log_std_max, 
+			# otherwise gradients are zero and it will be stuck there forever (according to claude)
 
 	def forward(self, state: torch.Tensor, deterministic: bool = False, 
 			 return_dist=False, sigmoid_correction=True):

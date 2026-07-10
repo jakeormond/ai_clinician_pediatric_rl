@@ -53,6 +53,8 @@ class Actor(nn.Module):
 		self.log_std_min = log_std_min
 		self.log_std_max = log_std_max
 		self.zero_threshold = zero_threshold
+
+		self.gate_smooth = 0.02 # tune this
  
 		self.trunk = nn.Sequential(
 			nn.Linear(state_dim, hidden_dim),
@@ -198,10 +200,15 @@ class Actor(nn.Module):
  
 		f_fired = (f_dose > self.zero_threshold).float()
 		v_fired = (v_dose > self.zero_threshold).float()
+
+		f_fired_smooth = f_fired * (1 - 2 * self.gate_smooth) + self.gate_smooth
+		v_fired_smooth = v_fired * (1 - 2 * self.gate_smooth) + self.gate_smooth
  
 		# --- gate loss (standard BCE-with-logits, on ALL timesteps) ---
-		f_gate_lp = -F.binary_cross_entropy_with_logits(f_gate_logit, f_fired, reduction='none')
-		v_gate_lp = -F.binary_cross_entropy_with_logits(v_gate_logit, v_fired, reduction='none')
+		# f_gate_lp = -F.binary_cross_entropy_with_logits(f_gate_logit, f_fired, reduction='none')
+		# v_gate_lp = -F.binary_cross_entropy_with_logits(v_gate_logit, v_fired, reduction='none')
+		f_gate_lp = -F.binary_cross_entropy_with_logits(f_gate_logit, f_fired_smooth, reduction='none')
+		v_gate_lp = -F.binary_cross_entropy_with_logits(v_gate_logit, v_fired_smooth, reduction='none')
  
 		# --- magnitude loss (only where fired; clamp avoids logit(0)) ---
 		f_a = f_dose.clamp(1e-4, 1 - 1e-4)

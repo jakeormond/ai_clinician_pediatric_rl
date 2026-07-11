@@ -705,7 +705,7 @@
                 "--search_variant", "fixed_hyperparameters",
                 "--cohort", "sepsis",
                 "--n_epochs", "400",
-                "--action_mode", "continuous_only", 
+                "--action_mode", "continuous_only",
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

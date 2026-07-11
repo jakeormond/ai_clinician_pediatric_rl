@@ -12,18 +12,18 @@
     discount: 0.975 # 0.95 # 0.999  # Discount factor
 
     device: "cuda"  # Device (cuda or cpu)
-    learning_rate_actor: 1e-4  # "loguniform(1e-4, 1e-3)"   
-    dropout: 0.3 # 0.05 # "uniform(0.0, 0.5)"
-    weight_decay: 2.e-2 #1e-4 # L2 regularization strength
+    learning_rate_actor: [1.e-3, 1e-4, 1e-5]  # "loguniform(1e-4, 1e-3)"   
+    dropout: [0.15, 0.3, 0.45] # 0.05 # "uniform(0.0, 0.5)"
+    weight_decay: [1.e-3, 1.e-2, 1.e-1] #1e-4 # L2 regularization strength
 
     policy_freq: 1 # Frequency of delayed policy updates
     
     batch_size: 1024 # [256, 512, 1024]  # Batch size for all networks
-    hidden_dim: 64 # 256 # [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
+    hidden_dim: [32, 64] # 256 # [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
 
     # Early stopping parameters (fixed for all combinations)
-    early_stopping_flag: False  # Whether to use early stopping
-    patience: 3        # Stop if no improvement for 15 evaluations
+    early_stopping_flag: True  # Whether to use early stopping
+    patience: 5        # Stop if no improvement for n evaluations
     eval_freq: 1       # Evaluate every 20 epochs  
     min_delta: 0.0001   # Minimum improvement threshold
 
@@ -31,7 +31,7 @@
     loss_metric: "actor_loss"  # Which metric to use for validation loss
 
     # gradient clipping
-    grad_clip: 5.0
+    grad_clip: 2.0
 
     # health score reward shaping parameters
     health_score_hourly_change_clip: 100. # health score is 0 to 100, clip prevents large spikes in reward

@@ -581,7 +581,7 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 	actor = Actor(
 		state_dim=state_dim, 
 		action_dim=action_dim, 
-		# hidden_dim=hyperparams['hidden_dim'], 
+		hidden_dim=hyperparams['hidden_dim'], 
 		dropout=hyperparams['dropout']
 	).to(config_manager.training_config['device'])
 	

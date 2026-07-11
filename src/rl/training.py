@@ -398,10 +398,6 @@ def evaluate_during_training(
     
     return val_losses, val_q_stats, val_neuron_stats, val_advantages
 
-
-
-
-
 def check_improvement(best_val_loss, current_val_loss, early_stopping):
     improvement = best_val_loss - current_val_loss
     if improvement > early_stopping['min_delta']:
@@ -418,12 +414,26 @@ def check_improvement(best_val_loss, current_val_loss, early_stopping):
 def copy_model_parameters(trainer, config_manager):
     if config_manager.model_type in ['basic_q']:
         return trainer.critic.state_dict().copy()
+    elif config_manager.model_type in ['iql', 'iql_with_sarsa']:
+        return {
+            'critic': trainer.critic.state_dict().copy(),
+            'v_net': trainer.v_net.state_dict().copy()
+        }
+    elif config_manager.model_type in ['bc_with_logprobs']:
+        return {
+            'actor': trainer.actor.state_dict().copy()
+        }
     else:
         return trainer.actor.state_dict().copy()
     
 def restore_model_parameters(trainer, best_model_state, config_manager):
     if config_manager.model_type in ['basic_q']:
         trainer.critic.load_state_dict(best_model_state)
+    elif config_manager.model_type in ['iql', 'iql_with_sarsa']:
+        trainer.critic.load_state_dict(best_model_state['critic'])
+        trainer.v_net.load_state_dict(best_model_state['v_net'])
+    elif config_manager.model_type in ['bc_with_logprobs']:
+        trainer.actor.load_state_dict(best_model_state['actor'])
     else:
         trainer.actor.load_state_dict(best_model_state) # for td3-bc I imagine we need both models!!!!!! SO FIX!!!!!!
     
@@ -651,8 +661,9 @@ def train_with_hyperparameters(
     ############################### Training loop #################################
     testing = getattr(config_manager, 'testing', False)
     if testing:
-        logger.info(" Testing mode enabled: will limit training to 10 epochs and 100 batches per epoch.")
-        n_epochs = min(n_epochs, 20)
+        n_epochs_testing = 100
+        logger.info(f" Testing mode enabled: will limit training to {n_epochs_testing} epochs and 100 batches per epoch.")
+        n_epochs = min(n_epochs, n_epochs_testing)
     
     torch.cuda.empty_cache()
 

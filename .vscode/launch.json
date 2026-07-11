@@ -712,6 +712,30 @@
             "envFile": "${workspaceFolder}/.env"
         },
 
+        {
+            "name": "choc_bc_with_logprobs_random_search",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.rl.reinforcement_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "reinforcement_learning",
+                "--model_type", "bc_with_logprobs", 
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--model_dir", "sepsis_models/intake_vis",
+                "--search_variant", "random_search",
+                "--n_search_iterations", "1",
+                "--cohort", "sepsis",
+                "--n_epochs", "400",
+                "--action_mode", "continuous_only",
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+
 
 
         {

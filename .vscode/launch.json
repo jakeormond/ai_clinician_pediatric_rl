@@ -725,7 +725,7 @@
                 "--split_num", "0",
                 "--model_dir", "sepsis_models/intake_vis",
                 "--search_variant", "random_search",
-                "--n_search_iterations", "1",
+                "--n_search_iterations", "3",
                 "--cohort", "sepsis",
                 "--n_epochs", "400",
                 "--action_mode", "continuous_only",

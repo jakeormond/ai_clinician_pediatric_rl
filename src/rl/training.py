@@ -18,7 +18,7 @@ from ..data.data_processor import DataProcessor
 from ..data.data_processor_for_shards import ShardProcessor
 from .replay_buffer import RLDataset
 from .models.behavioural_cloning import keep_best_trajectories, keep_positive_trajectories
-from ..supervised_learning.training import get_hyperparameter_space, select_hyperparameters_randomly, get_fixed_hyperparameters, to_json_safe
+from ..supervised_learning.training import get_hyperparameter_space, select_hyperparameters_randomly, get_fixed_hyperparameters, to_json_safe, train_with_hyperparameters
 from .models.td3_bc import TD3_BC
 from ..utils.utilities import set_seed
 from .plotting import plot_results
@@ -279,7 +279,10 @@ def save_results(
     training_q_stats = {key: values[-1] for key, values in training_metrics.epoch_training_q_stats.items()}
     training_scores = {**training_losses, **training_q_stats}
 
-    val_scores = {**training_metrics.final_val_losses, **training_metrics.final_val_q_stats, **training_metrics.final_val_advantages, **training_metrics.final_val_neuron_stats}
+    val_scores = {
+        **training_metrics.final_val_losses, **training_metrics.final_val_q_stats, 
+        **training_metrics.final_val_advantages, **training_metrics.final_val_neuron_stats,
+    }
     
     # create a dictionary to save the scores
     all_scores = {
@@ -464,15 +467,21 @@ def single_split_training(config_manager):
         normalize=True
         )
 
+    early_stopping = get_early_stopping_config(config_manager)
     if config_manager.search_variant == 'random_search':
         logger.info(" Hyperparameter tuning mode enabled.")
 
         # hyperparameter optimization
-        optimize_hyperparameters(
+        best_val_loss = optimize_hyperparameters(
             train_processor, 
             val_processor, 
             config_manager
         )
+
+        if best_val_loss is not None:
+             # save best_val_loss to a csv file in the experiment directory
+            best_val_loss_path = config_manager.experiment_dir / "best_val_loss.csv"
+            best_val_loss.to_csv(best_val_loss_path, index=False)
 
     else:
         logger.info(" Fixed hyperparameter training mode enabled.")
@@ -492,6 +501,11 @@ def single_split_training(config_manager):
 def optimize_hyperparameters(train_processor, val_processor, config_manager):
     """for hyperparameter optimization."""
     
+    early_stopping = get_early_stopping_config(config_manager)
+    if early_stopping['flag']:
+        # create dictionary for best vall
+        best_loss = []
+
     # create hyperparameter space
     hyperparameter_space = get_hyperparameter_space(config_manager)
 
@@ -511,14 +525,39 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
         )       
         logger.info(f"Testing hyperparameters {i+1}/{config_manager.n_search_iterations}: {current_params}")
 
-        ################# Train with current hyperparameters #################       
-        train_with_hyperparameters(
-            train_processor, 
-            val_processor, 
-            config_manager, 
-            current_params,
-            search_iteration=i
-        )
+        ################# Train with current hyperparameters #################      
+        if early_stopping['flag']:
+            all_scores, model_dir, best_val_loss = train_with_hyperparameters(
+                train_processor, 
+                val_processor, 
+                config_manager, 
+                current_params,
+                search_iteration=i
+            )
+            best_val_loss['model_dir'] = str(model_dir) 
+            best_loss.append(best_val_loss)
+        
+        else:
+            all_scores, model_dir = train_with_hyperparameters(
+                train_processor, 
+                val_processor, 
+                config_manager, 
+                current_params,
+                search_iteration=i
+            )
+    
+    if len(best_loss) > 0:
+        # val_loss = {'loss_type': config_manager.training_config['loss_metric']}
+        # for loss_dict in best_loss:
+        #     val_loss[loss_dict['model_dir']] = loss_dict[val_loss['loss_type']]
+        # create a dataframe from best_loss and sort by the loss_type, with columns ordered model_dir, config_manager.training_config['loss_metric']
+        best_loss_df = pd.DataFrame(best_loss)
+        best_loss_df = best_loss_df.sort_values(by=config_manager.training_config['loss_metric'])
+        best_loss_df = best_loss_df[['model_dir', config_manager.training_config['loss_metric']]]
+
+        return best_loss_df
+    else:
+        return None   
         
 
 def has_reached_minimum(loss_history, loss_type="critic_loss", split="val", patience=5, min_delta=0.0):
@@ -620,7 +659,6 @@ def train_with_hyperparameters(
         evaluator = create_evaluator(config_manager, train_processor)
     else:
         evaluator = None
-
     
         
     # Early stopping configuration 
@@ -840,6 +878,9 @@ def train_with_hyperparameters(
         if best_model_state is not None:
             restore_model_parameters(trainer, best_model_state, config_manager)
             logger.info(f"    Restored best model (val_loss={best_val_loss:.4f})")   
+
+            ######### ADD BEST VAL_LOSS TO TRAINING METRICS #########
+            training_metrics.best_val_loss = {loss_metric: best_val_loss}
     
     # model dir
     model_dir = config_manager.experiment_dir / hyperparams['wandb_id']
@@ -960,5 +1001,14 @@ def train_with_hyperparameters(
         model_dir,
         config_manager
     )
+
+    if early_stopping['flag']:
+        logger.info(f" Best validation loss: {best_val_loss:.4f}")
+        best_val_loss = training_metrics.best_val_loss
+
+        return all_scores, model_dir, best_val_loss
+        
+    else:
+        return all_scores, model_dir
 
     

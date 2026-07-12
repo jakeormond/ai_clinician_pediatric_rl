@@ -29,159 +29,214 @@ class Actor(nn.Module):
 		self,
 		state_dim: int,
 		hidden_dim: int = 64,
-		log_std_min: float = -3,
-		log_std_max: float = 1., # -1.5, # 0.
+		log_std_min: float = -2,
+		log_std_max: float = 1.,
 		action_dim: int = 2,
-		dropout: float = 0.1
+		dropout: float = 0.1,
+		zero_threshold: float = 1e-4,
+		gate_temperature: float = 1.0,   # relaxation temperature for differentiable gate sampling
 	):
 		super().__init__()
 		self.log_std_min = log_std_min
 		self.log_std_max = log_std_max
-
-		# mean trunk — learns a joint patient representation
-		self.mean_trunk = nn.Sequential(
+		self.zero_threshold = zero_threshold
+		self.gate_smooth = 0.02
+		self.gate_temperature = gate_temperature
+ 
+		# --- single shared trunk (matches BC actor) ---
+		self.trunk = nn.Sequential(
 			nn.Linear(state_dim, hidden_dim),
 			nn.LayerNorm(hidden_dim),
 			nn.ReLU(),
+			nn.Dropout(dropout),
 			nn.Linear(hidden_dim, hidden_dim),
-			nn.ReLU(),
-			nn.LayerNorm(hidden_dim), 
-		)
-		self.fluid_mean    = nn.Linear(hidden_dim, 1)		
-		self.vaso_mean    = nn.Linear(hidden_dim, 1)
-		
-		# Completely separate std network — shaped ONLY by entropy loss
-        # (or whatever uncertainty-relevant loss you add later). No shared
-        # parameters with the mean pathway at all, so there is no channel,
-        # direct or indirect, for the Q-loss to reach it.
-		self.std_trunk = nn.Sequential(
-			nn.Linear(state_dim, hidden_dim),
 			nn.LayerNorm(hidden_dim),
 			nn.ReLU(),
-			nn.Linear(hidden_dim, hidden_dim),
-			nn.ReLU(),
-			nn.LayerNorm(hidden_dim), 
+			nn.Dropout(dropout),
 		)
+		self.fluid_mean = nn.Linear(hidden_dim, 1)
+		self.vaso_mean = nn.Linear(hidden_dim, 1)
+		self.fluid_gate = nn.Linear(hidden_dim, 1)
+		self.vaso_gate = nn.Linear(hidden_dim, 1)
 		self.fluid_log_std = nn.Linear(hidden_dim, 1)
 		self.vaso_log_std = nn.Linear(hidden_dim, 1)
-
+ 
 		self._init_weights()
 
 
 	def _init_weights(self):
-		for m in self.mean_trunk:
+		for m in self.trunk:
 			if isinstance(m, nn.Linear):
 				nn.init.orthogonal_(m.weight, gain=1.0)
 				nn.init.zeros_(m.bias)
-
-		for m in self.std_trunk:
-			if isinstance(m, nn.Linear):
-				nn.init.orthogonal_(m.weight, gain=1.0)
-				nn.init.zeros_(m.bias)
-
+ 
 		nn.init.zeros_(self.fluid_mean.weight)
-		self.fluid_mean.bias.data.fill_(-0.405)
-
+		self.fluid_mean.bias.data.fill_(0.0)
 		nn.init.zeros_(self.vaso_mean.weight)
-		self.vaso_mean.bias.data.fill_(-3.89)
-
+		self.vaso_mean.bias.data.fill_(0.0)
+ 
 		for layer in [self.fluid_log_std, self.vaso_log_std]:
 			nn.init.zeros_(layer.weight)
-			layer.bias.data.fill_(-2.25)
+			layer.bias.data.fill_(-1.0)   # inside (log_std_min, log_std_max), unlike the original -2.25 bug
+ 
+		# match known base rates — same values as the BC actor
+		nn.init.zeros_(self.fluid_gate.weight)
+		self.fluid_gate.bias.data.fill_(0.78)    # sigmoid(0.78) ≈ 0.686 fluid nonzero rate
+		nn.init.zeros_(self.vaso_gate.weight)
+		self.vaso_gate.bias.data.fill_(-2.98)    # sigmoid(-2.98) ≈ 0.048 vaso nonzero rate
+ 
 
-
-	def forward(self, state: torch.Tensor, deterministic: bool = False, return_dist=False, sigmoid_correction=False):
-		z_mean = self.mean_trunk(state)
-		# --- Fluid ---
-		f_mean = torch.sigmoid(self.fluid_mean(z_mean))          # (0, 1)
-		# --- Vasopressor ---
-		v_mean = torch.sigmoid(self.vaso_mean(z_mean))            # (0, 1)
-
-		z_std = self.std_trunk(state)
-		f_log_std = torch.clamp(self.fluid_log_std(z_std), self.log_std_min, self.log_std_max)
-		v_log_std = torch.clamp(self.vaso_log_std(z_std), self.log_std_min, self.log_std_max)
-
-		f_std = f_log_std.exp()
-		v_std = v_log_std.exp()
-
-	
-		if not deterministic:
-			# Sample in unconstrained space, then squash with sigmoid
-			f_dist = torch.distributions.Normal(
-				torch.logit(f_mean.clamp(1e-6, 1 - 1e-6)), f_std
-			)
-			v_dist = torch.distributions.Normal(
-				torch.logit(v_mean.clamp(1e-6, 1 - 1e-6)), v_std
-			)
-
-			f_raw = f_dist.rsample()
-			v_raw = v_dist.rsample()
-
-			f_action = torch.sigmoid(f_raw)
-			v_action = torch.sigmoid(v_raw)
-
-			if sigmoid_correction:
-				# Log-prob with sigmoid change-of-variables correction
-				f_log_prob = f_dist.log_prob(f_raw) - torch.log(
-					f_action * (1 - f_action) + 1e-6
-				)
-				v_log_prob = v_dist.log_prob(v_raw) - torch.log(
-					v_action * (1 - v_action) + 1e-6
-				)
-
-			else:
-				f_log_prob = f_dist.log_prob(f_raw)
-				v_log_prob = v_dist.log_prob(v_raw) 
-
-			log_prob    = (f_log_prob + v_log_prob).squeeze(-1)
-			actions     = torch.cat([f_action, v_action], dim=-1)
-			# mean_actions = torch.cat([f_mean, v_mean], dim=-1)
-		else:
-			actions = torch.cat([f_mean, v_mean], dim=-1)
-			log_prob = None
-		
-		if return_dist:
-			return actions, log_prob, (f_mean, v_mean, f_std, v_std)
-
-		return actions, log_prob
-
-
-	def log_prob_of_action(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-		"""
-		Evaluate the log-density of a GIVEN action under the current policy,
-		as opposed to forward()'s stochastic branch, which samples a fresh
-		action and returns its own log-prob. Needed for importance-sampling-based
-		evaluation (WIS) and as a building block for entropy_loss().
-
-		"""
+	def _dists(self, state):
 		z = self.trunk(state)
 
-		f_mean = torch.sigmoid(self.fluid_mean(z)).clamp(1e-6, 1 - 1e-6)
-		v_mean = torch.sigmoid(self.vaso_mean(z)).clamp(1e-6, 1 - 1e-6)
+		f_gate_logit = self.fluid_gate(z)
+		v_gate_logit = self.vaso_gate(z)
+
+		f_raw_mean = self.fluid_mean(z)
+		v_raw_mean = self.vaso_mean(z)
 
 		f_log_std = torch.clamp(self.fluid_log_std(z), self.log_std_min, self.log_std_max)
 		v_log_std = torch.clamp(self.vaso_log_std(z), self.log_std_min, self.log_std_max)
 		f_std = f_log_std.exp()
 		v_std = v_log_std.exp()
 
-		# Clamp the GIVEN action away from exactly 0/1 before inverting the
-		# sigmoid — logit(0) and logit(1) are -inf/+inf, and real clinical
-		# doses can legitimately be exactly 0 (e.g. no vasopressor given)
-		a = action.clamp(1e-6, 1 - 1e-6)
-		f_action = a[:, 0:1]
-		v_action = a[:, 1:2]
+		return f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std
+	
 
-		f_raw = torch.logit(f_action)
-		v_raw = torch.logit(v_action)
+	def _relaxed_gate_sample(self, gate_logit, hard=False):
+		"""
+		Differentiable Bernoulli sample via Gumbel-sigmoid (binary Concrete
+		distribution). Gradient flows into gate_logit through this sample.
+ 
+		hard=True applies a straight-through estimator: forward pass uses a
+		hard 0/1 value, but gradient flows as if it were the soft/relaxed
+		sample (standard straight-through trick). Use hard=False during
+		normal training so downstream Q(s,a) sees the true continuous
+		relaxation; hard=True if you specifically need a binary-valued
+		action while still training through it (e.g. matching a hard
+		zero_threshold in the critic's expected input distribution).
+		"""
+		u = torch.rand_like(gate_logit).clamp(1e-6, 1 - 1e-6)
+		gumbel_noise = torch.log(u) - torch.log(1 - u)
+		soft = torch.sigmoid((gate_logit + gumbel_noise) / self.gate_temperature)
+ 
+		if not hard:
+			return soft
+ 
+		hard_sample = (soft > 0.5).float()
+		# straight-through: forward uses hard_sample, backward uses soft's gradient
+		return hard_sample + soft - soft.detach()
+	
 
-		f_dist = torch.distributions.Normal(torch.logit(f_mean), f_std)
-		v_dist = torch.distributions.Normal(torch.logit(v_mean), v_std)
 
-		# Sigmoid-Jacobian correction, evaluated at the GIVEN action
-		f_log_prob = f_dist.log_prob(f_raw) - torch.log(f_action * (1 - f_action) + 1e-6)
-		v_log_prob = v_dist.log_prob(v_raw) - torch.log(v_action * (1 - v_action) + 1e-6)
+	def forward(self, state: torch.Tensor, deterministic: bool = False,
+			 return_dist=False, sigmoid_correction=True, hard_gate: bool = False):
+		f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std = self._dists(state)
+		f_p = torch.sigmoid(f_gate_logit)
+		v_p = torch.sigmoid(v_gate_logit)
+ 
+		if not deterministic:
+			# differentiable gate sample — gradient flows into fluid_gate/vaso_gate
+			f_fire = self._relaxed_gate_sample(f_gate_logit, hard=hard_gate)
+			v_fire = self._relaxed_gate_sample(v_gate_logit, hard=hard_gate)
+ 
+			f_dist = torch.distributions.Normal(f_raw_mean, f_std)
+			v_dist = torch.distributions.Normal(v_raw_mean, v_std)
+			f_raw = f_dist.rsample()
+			v_raw = v_dist.rsample()
+			f_mag = torch.sigmoid(f_raw)
+			v_mag = torch.sigmoid(v_raw)
+ 
+			f_action = f_fire * f_mag
+			v_action = v_fire * v_mag
+			actions = torch.cat([f_action, v_action], dim=-1)
+ 
+			# entropy term: use the *soft* probability (not the relaxed sample)
+			# for a stable log-prob estimate of the gate component — this is
+			# the standard choice for the concrete-distribution entropy proxy
+			f_gate_lp = f_fire * torch.log(f_p + 1e-8) + (1 - f_fire) * torch.log(1 - f_p + 1e-8)
+			v_gate_lp = v_fire * torch.log(v_p + 1e-8) + (1 - v_fire) * torch.log(1 - v_p + 1e-8)
+ 
+			if sigmoid_correction:
+				f_mag_lp = f_dist.log_prob(f_raw) - torch.log(f_mag * (1 - f_mag) + 1e-6)
+				v_mag_lp = v_dist.log_prob(v_raw) - torch.log(v_mag * (1 - v_mag) + 1e-6)
+			else:
+				f_mag_lp = f_dist.log_prob(f_raw)
+				v_mag_lp = v_dist.log_prob(v_raw)
+ 
+			# note: f_fire is now continuous-valued (soft gate), so this
+			# naturally down-weights the magnitude log-prob's contribution
+			# in proportion to how "off" the gate currently is — a soft
+			# analogue of the hard mask used in BC.
+			log_prob = (f_gate_lp + f_fire * f_mag_lp + v_gate_lp + v_fire * v_mag_lp).squeeze(-1)
+		else:
+			f_mean_mag = torch.sigmoid(f_raw_mean)
+			v_mean_mag = torch.sigmoid(v_raw_mean)
+			# deterministic (eval / target network) path: no gradient needed,
+			# hard threshold is fine and matches BC's convention.
+			f_action = (f_p > 0.5).float() * f_mean_mag
+			v_action = (v_p > 0.5).float() * v_mean_mag
+			actions = torch.cat([f_action, v_action], dim=-1)
+			log_prob = None
+ 
+		if return_dist:
+			return actions, log_prob, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std)
+ 
+		return actions, log_prob
 
-		return (f_log_prob + v_log_prob).squeeze(-1)
+
+
+
+	def log_prob_of_action(self, state: torch.Tensor, action: torch.Tensor, return_components=False) -> torch.Tensor:
+		"""
+		Hurdle log-likelihood of a GIVEN (dataset) action. Used for WIS eval
+		and/or a CQL+BC regularization term. (The original version of this
+		actor referenced a nonexistent self.trunk here — fixed now that
+		there's a single real trunk to call.)
+		"""
+		f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std = self._dists(state)
+ 
+		f_dose = action[:, 0:1]
+		v_dose = action[:, 1:2]
+ 
+		f_fired = (f_dose > self.zero_threshold).float()
+		v_fired = (v_dose > self.zero_threshold).float()
+ 
+		f_fired_smooth = f_fired * (1 - 2 * self.gate_smooth) + self.gate_smooth
+		v_fired_smooth = v_fired * (1 - 2 * self.gate_smooth) + self.gate_smooth
+ 
+		f_gate_lp = -F.binary_cross_entropy_with_logits(f_gate_logit, f_fired_smooth, reduction='none')
+		v_gate_lp = -F.binary_cross_entropy_with_logits(v_gate_logit, v_fired_smooth, reduction='none')
+ 
+		f_a = f_dose.clamp(1e-4, 1 - 1e-4)
+		v_a = v_dose.clamp(1e-4, 1 - 1e-4)
+		f_raw = torch.logit(f_a)
+		v_raw = torch.logit(v_a)
+ 
+		f_dist = torch.distributions.Normal(f_raw_mean, f_std)
+		v_dist = torch.distributions.Normal(v_raw_mean, v_std)
+ 
+		f_mag_lp = f_dist.log_prob(f_raw) - torch.log(f_a * (1 - f_a) + 1e-6)
+		v_mag_lp = v_dist.log_prob(v_raw) - torch.log(v_a * (1 - v_a) + 1e-6)
+ 
+		total_lp = (
+			f_gate_lp + f_fired * f_mag_lp
+			+ v_gate_lp + v_fired * v_mag_lp
+		)
+		total_lp = total_lp.squeeze(-1)
+ 
+		if return_components:
+			components = {
+				"fluid_gate_lp": f_gate_lp.squeeze(-1),
+				"vaso_gate_lp": v_gate_lp.squeeze(-1),
+				"fluid_mag_lp": f_mag_lp.squeeze(-1),
+				"vaso_mag_lp": v_mag_lp.squeeze(-1),
+				"fluid_fired": f_fired.squeeze(-1),
+				"vaso_fired": v_fired.squeeze(-1),
+			}
+			return total_lp, components
+ 
+		return total_lp
 
 
 class Critic(nn.Module):
@@ -449,7 +504,11 @@ class CQL:
 		reward_scaling: float = 1.0,
 		use_monte_carlo_terminal_returns: bool = False,
 
-		ratio_of_fluid_to_vaso: float = 1.0  # Add ratio_of_fluid_to_vaso argument
+		ratio_of_fluid_to_vaso: float = 1.0,  # Add ratio_of_fluid_to_vaso argument
+
+		gate_temp_start: float = 1.0,   # e.g. 1.0
+		gate_temp_end: float = 0.3,       # e.g. 0.3
+		gate_temp_anneal_steps: int = 100000
 
 	):
 		
@@ -505,6 +564,12 @@ class CQL:
 		self.critic_target = copy.deepcopy(self.critic)
 		self.critic_target.eval()  # Target networks start in eval mode to disable Dropout
 
+		# gate temp
+		# in CQL.__init__, alongside other hyperparams
+		self.gate_temp_start = gate_temp_start   # e.g. 1.0
+		self.gate_temp_end = gate_temp_end       # e.g. 0.3
+		self.gate_temp_anneal_steps = gate_temp_anneal_steps  # e.g. total_steps // 2
+
 
 	def select_action(self, state):
 		state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
@@ -520,40 +585,6 @@ class CQL:
 		fluid_volume_loss = (pi[:, 0].mean() - action[:, 0].mean()) ** 2
 		vaso_volume_loss  = (pi[:, 1].mean()  - action[:, 1].mean()) ** 2		
 		vaso_volume_loss_weight = self.ratio_of_fluid_to_vaso
-		
-		# ########### MICRO LOSS ###########
-		# # 1. Compute raw squared errors
-		# squared_errors = (pi - action) ** 2 # [B, T, 2]
-		
-		# # 2. Define your weights
-		# fluid_loss_weight = 1.0
-		# vaso_loss_weight = 5.0  # Scale up the entire vasopressor channel        
-		# active_multiplier = 1.0 # 10.0 # Heavily punish missing a true active dose
-		
-		# # 3. Construct the weight matrix
-		# weights = torch.ones_like(action)
-		# weights[:, 0] = fluid_loss_weight
-		# weights[:, 1] = vaso_loss_weight
-
-		# # Apply the extra multiplier ONLY where the true fluid dose is > 0
-		# true_fluid = action[:, 0]
-		# weights[:, 0] = torch.where(true_fluid > 0, fluid_loss_weight * active_multiplier, fluid_loss_weight)
-
-		# # Apply the extra multiplier ONLY where the true vasopressor dose is > 0
-		# true_vaso = action[:, 1]
-		# weights[:, 1] = torch.where(true_vaso > 0, vaso_loss_weight * active_multiplier, vaso_loss_weight)
-		
-		# # 4. Apply weights and mask out padding steps
-		# micro_fluid_loss = ((squared_errors[:, 0] * weights[:, 0])* exp_weights.squeeze()).mean()
-		# micro_vaso_loss = ((squared_errors[:, 1] * weights[:, 1])* exp_weights.squeeze()).mean()
-		
-		# # macro and micro weight
-		# lambda_macro = 10.0
-		# lambda_micro = 5.0
-
-		# fluid_loss = lambda_macro * fluid_volume_loss + lambda_micro * micro_fluid_loss
-		# vaso_volume_loss = vaso_volume_loss * vaso_volume_loss_weight # we can scale up the macro vaso loss separately if we want to encourage better matching of overall vaso usage, which is clinically important
-		# vaso_loss = lambda_macro * vaso_volume_loss + lambda_micro * micro_vaso_loss		
 		
 		total_loss = fluid_volume_loss + vaso_volume_loss_weight*vaso_volume_loss
 		actor_dict = {
@@ -649,14 +680,14 @@ class CQL:
 			# Sample current actions from our Stochastic Actor
 			# We sample multiple times to get a good estimate of the current policy's Q-values
 			curr_actions, curr_log_probs = self.actor(
-				state.repeat_interleave(self.num_samples, dim=0)
+				state.repeat_interleave(self.num_samples, dim=0), hard_gate=True
 			)
 			curr_actions = curr_actions.view(batch_size, self.num_samples, -1)
 			curr_log_probs = curr_log_probs.view(batch_size, self.num_samples).clamp(min=-10, max=0)
 
 			# sample next_actions from the actor for the next states
 			next_actions, next_log_probs = self.actor(
-				next_state.repeat_interleave(self.num_samples, dim=0)
+				next_state.repeat_interleave(self.num_samples, dim=0), hard_gate=True
 			)
 			next_actions = next_actions.view(batch_size, self.num_samples, -1)
 			next_log_probs = next_log_probs.view(batch_size, self.num_samples).clamp(min=-10, max=0)
@@ -770,8 +801,9 @@ class CQL:
 			self.actor.train() # Dropout ACTIVE for the network we are updating
 			
 			# Sample actions from the stochastic actor
-			pi, log_prob, (f_mean, v_mean, f_std, v_std) = self.actor(
-				state, deterministic=False, return_dist=True, sigmoid_correction=False
+			pi, log_prob, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std) = self.actor(
+				state, deterministic=False, return_dist=True, sigmoid_correction=False,
+				hard_gate=True
 			)
 			Q1_pi, Q2_pi = self.critic(state, pi)
 			Q_pi = torch.min(Q1_pi, Q2_pi)
@@ -826,6 +858,8 @@ class CQL:
 				"actor_loss_total": actor_loss.item(),
 				"actor_loss_q": actor_loss_q.item(),
 				"actor_loss_bc": actor_loss_bc.item(),
+				"fluid_fire_prob_mean": f_p.mean().item(),
+    			"vaso_fire_prob_mean": v_p.mean().item(),
 				"fluid_volume_loss": actor_dict['fluid_volume_loss'].item(),
 				"vaso_volume_loss": actor_dict['vaso_volume_loss'].item(),
 				"fluid_mean": pi[:, 0].mean().item(),
@@ -953,7 +987,9 @@ class CQL:
 
 			# 3. Actor Actions and their Critic Values
             # We use deterministic=True to see the "best" action the model recommends
-			pi, _ = self.actor(state, deterministic=True)
+			pi, _, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std) = self.actor(
+				state, deterministic=True, return_dist=True
+			)
 			Q_pi_1, Q_pi_2 = self.critic(state, pi)
 			Q_pi = torch.min(Q_pi_1, Q_pi_2)
 					

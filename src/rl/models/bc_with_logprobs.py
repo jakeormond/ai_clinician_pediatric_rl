@@ -64,7 +64,6 @@ class Actor(nn.Module):
 			nn.Linear(hidden_dim, hidden_dim),
 			nn.LayerNorm(hidden_dim),
 			nn.ReLU(),
-			# nn.LayerNorm(hidden_dim),
 			nn.Dropout(dropout),
 		)
  

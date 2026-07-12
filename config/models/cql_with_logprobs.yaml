@@ -70,3 +70,6 @@
     use_compressed_latents: False  # Whether to use compressed latents as states instead of raw features or transformer output - specific to basic Q model, not used for TD3-BC or CQL
 
     # get temp
+    gate_temp_start: 1.0,   # e.g. 1.0
+    gate_temp_end: 0.3,       # e.g. 0.3
+    gate_temp_anneal_steps: 100000

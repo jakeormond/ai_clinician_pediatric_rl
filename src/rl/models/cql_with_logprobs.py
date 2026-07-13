@@ -508,7 +508,7 @@ class CQL:
 
 		gate_temp_start: float = 1.0,   # e.g. 1.0
 		gate_temp_end: float = 0.3,       # e.g. 0.3
-		gate_temp_anneal_steps: int = 100000
+		total_steps: int = 100000
 
 	):
 		
@@ -568,8 +568,16 @@ class CQL:
 		# in CQL.__init__, alongside other hyperparams
 		self.gate_temp_start = gate_temp_start   # e.g. 1.0
 		self.gate_temp_end = gate_temp_end       # e.g. 0.3
-		self.gate_temp_anneal_steps = gate_temp_anneal_steps  # e.g. total_steps // 2
+		self.gate_temp_anneal_steps = total_steps //  2  # e.g. total_steps // 2
 
+
+	def _update_gate_temperature(self):
+		frac = min(1.0, self.total_it / self.gate_temp_anneal_steps)
+		# exponential decay is the more standard choice for Gumbel-softmax schedules
+		new_temp = self.gate_temp_start * (self.gate_temp_end / self.gate_temp_start) ** frac
+		self.actor.gate_temperature = new_temp
+		self.actor_target.gate_temperature = new_temp   # keep target actor consistent too
+		return new_temp
 
 	def select_action(self, state):
 		state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
@@ -619,6 +627,7 @@ class CQL:
 
 	def train(self, batch: TensorBatch) -> Tuple[Dict[str, float], Dict[str, float]]:
 		self.total_it += 1
+		current_gate_temp = self._update_gate_temperature()
 
 		# Sample replay buffer 
 		state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
@@ -869,7 +878,8 @@ class CQL:
 				"fluid_std_std": f_std.std().item(),
 				"vaso_std_std": v_std.std().item(),
 				"actor_raw_advantage_mean": raw_advantage.mean().item(),
-				"actor_loss_ent": actor_loss_ent.item()
+				"actor_loss_ent": actor_loss_ent.item(),
+				"gate_temperature": current_gate_temp
 			})
 						
 			# Final combined update
@@ -1138,7 +1148,11 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		num_samples=hyperparams['num_samples'],
 		use_monte_carlo_terminal_returns=hyperparams['monte_carlo_terminal_returns'], 
 
-		ratio_of_fluid_to_vaso=config_manager.training_config['ratio_of_fluid_to_vaso']
+		ratio_of_fluid_to_vaso=config_manager.training_config['ratio_of_fluid_to_vaso'],
+
+		gate_temp_start=hyperparams['gate_temp_start'],
+		gate_temp_end=hyperparams['gate_temp_end'],
+		total_steps=hyperparams['total_steps']
 	)
 
 	return trainer

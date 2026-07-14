@@ -482,6 +482,9 @@ def single_split_training(config_manager):
              # save best_val_loss to a csv file in the experiment directory
             best_val_loss_path = config_manager.experiment_dir / "best_val_loss.csv"
             best_val_loss.to_csv(best_val_loss_path, index=False)
+            logger.info(f"Best validation losses saved to {best_val_loss_path}")
+        else:
+            logger.warning("No valid validation losses were recorded during hyperparameter optimization.")
 
     else:
         logger.info(" Fixed hyperparameter training mode enabled.")

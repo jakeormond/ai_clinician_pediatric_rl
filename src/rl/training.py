@@ -549,18 +549,21 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
                 search_iteration=i
             )
     
-    if len(best_loss) > 0:
-        # val_loss = {'loss_type': config_manager.training_config['loss_metric']}
-        # for loss_dict in best_loss:
-        #     val_loss[loss_dict['model_dir']] = loss_dict[val_loss['loss_type']]
-        # create a dataframe from best_loss and sort by the loss_type, with columns ordered model_dir, config_manager.training_config['loss_metric']
-        best_loss_df = pd.DataFrame(best_loss)
-        best_loss_df = best_loss_df.sort_values(by=config_manager.training_config['loss_metric'])
-        best_loss_df = best_loss_df[['model_dir', config_manager.training_config['loss_metric']]]
+    if early_stopping['flag']:
+        if len(best_loss) > 0:
+            # val_loss = {'loss_type': config_manager.training_config['loss_metric']}
+            # for loss_dict in best_loss:
+            #     val_loss[loss_dict['model_dir']] = loss_dict[val_loss['loss_type']]
+            # create a dataframe from best_loss and sort by the loss_type, with columns ordered model_dir, config_manager.training_config['loss_metric']
+            best_loss_df = pd.DataFrame(best_loss)
+            best_loss_df = best_loss_df.sort_values(by=config_manager.training_config['loss_metric'])
+            best_loss_df = best_loss_df[['model_dir', config_manager.training_config['loss_metric']]]
 
-        return best_loss_df
+            return best_loss_df
+        else:
+            return None   
     else:
-        return None   
+        return None
         
 
 def has_reached_minimum(loss_history, loss_type="critic_loss", split="val", patience=5, min_delta=0.0):

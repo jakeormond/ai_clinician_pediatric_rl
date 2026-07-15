@@ -506,7 +506,7 @@
         },
 
         {
-            "name": "weighted_importance_sampling_choc",
+            "name": "weighted_importance_sampling",
             "type": "debugpy",
             "request": "launch",
             "module": "src.rl.weighted_importance_sampling",

@@ -25,7 +25,7 @@ from scipy import stats
 from ..setup_environment import load_paths
 
 
-# rl_models_path = "/home/jake/Documents/AI_Clinician/rl_models/" 
+rl_models_path = "/home/jake/Documents/AI_Clinician/rl_models/" 
 
 
 def load_configuration(config_manager_path):
@@ -1144,7 +1144,7 @@ def evaluate(
     run_decile_statistics(advantage_sarsa_real, q_clin_sarsa)
     return sarsa_advantage_results, rl_advantage_results
 
-def evaluate_multiple_models(rl_model_dir=None):
+def wis_multiple_models():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # parse arguments
@@ -1152,13 +1152,27 @@ def evaluate_multiple_models(rl_model_dir=None):
 
     # create configuration
     config_manager = ConfigManager(args)
-
+   
+    # get the path to the model_type model (i.e. bc_with_log_probs)
+    bc_model_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.model_type,
+                    f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions,
+                    config_manager.reward_type, f"discount_{config_manager.discount}", "final_model")
+    # get the folder inside bc_model_path
+    bc_folders = [f for f in os.listdir(bc_model_path) if os.path.isdir(os.path.join(bc_model_path, f))]
+    if len(bc_folders) != 1:
+        raise ValueError(f"Expected exactly one folder in {bc_model_path}, but found {len(bc_folders)}: {bc_folders}")
+    bc_model_folder = os.path.join(bc_model_path, bc_folders[0])
+    # load results.json from bc_model_folder
+    with open(os.path.join(bc_model_folder, "results.json"), "r") as f:
+        bc_results = json.load(f)
+    hyperparams = bc_results["hyperparameters"]
+       
     # load the data
-    train_processor, _, test_processor = create_processor_from_shards(sarsa_configuration, normalize=True, set_to_return='all')
+    train_processor, _, test_processor = create_processor_from_shards(config_manager, normalize=True, set_to_return='all')
 
     # process the reward
-    health_score_median = train_processor.process_reward(config_manager, sarsa_hyperparams)
-    test_processor.process_reward(config_manager, sarsa_hyperparams, health_score_median=health_score_median)
+    health_score_median = train_processor.process_reward(config_manager, reward_processing_dict)
+    test_processor.process_reward(config_manager, reward_processing_dict, health_score_median=health_score_median)
     
     # create rl dataset
     batch_size = 1024
@@ -1216,7 +1230,7 @@ def evaluate_multiple_models(rl_model_dir=None):
 
 def main():
     
-    evaluate_multiple_models(rl_model_dir="local_504db0af")  # Set to None to evaluate all models, or specify a model directory name
+    wis_multiple_models()  # Set to None to evaluate all models, or specify a model directory name
 
 
 if __name__ == "__main__":

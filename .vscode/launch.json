@@ -512,9 +512,9 @@
             "module": "src.rl.weighted_importance_sampling",
             "args": [
                 "--hospital", "choc", 
-                "--rl_type", "conservative_q_learning",
+                "--rl_type", "cql_with_log_probs",
                 "--experiment_type", "model_evaluation",
-                "--model_type", "basic_q", 
+                "--model_type", "bc_with_log_probs", 
                 "--mode", "single_split",
                 "--split_num", "0",
                 "--cohort", "sepsis",

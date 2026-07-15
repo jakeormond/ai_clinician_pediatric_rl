@@ -165,7 +165,8 @@ def parse_args():
 
     # Keyword Arguments (Match your launch.json)
     parser.add_argument("--hospital", type=str, default="choc")
-    parser.add_argument("--rl_type", type=str, choices=["td3_bc", "conservative_q_learning", "bc", "implicit_q_learning"], required=True)
+    parser.add_argument("--rl_type", type=str, choices=["td3_bc", 
+        "conservative_q_learning", "bc", "implicit_q_learning", "cql_with_log_probs"], required=True)
     parser.add_argument("--experiment_type", type=str, default="model_evaluation")
     parser.add_argument("--model_type", type=str, default="basic_q")
     parser.add_argument("--mode", type=str, default="single_split")
@@ -1151,10 +1152,6 @@ def evaluate_multiple_models(rl_model_dir=None):
 
     # create configuration
     config_manager = ConfigManager(args)
-
-    # 1. Load the "Jury" (SARSA Critic)
-    # Using the exact same architecture as your training
-    sarsa_critic, sarsa_configuration, sarsa_hyperparams = load_sarsa_critic(config_manager)
 
     # load the data
     train_processor, _, test_processor = create_processor_from_shards(sarsa_configuration, normalize=True, set_to_return='all')

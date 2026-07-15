@@ -88,9 +88,11 @@ class ConfigManager:
                             self.experiment_dir = Path(results_dir)
 
             elif self.experiment_type == "hyperparameter_search_evaluation" or self.experiment_type == "model_evaluation":
+                #### THIS NEEDS FIXING!!!!!!!!!!!!! ##############
+                
                 results_dir = os.path.join(
                     self.paths["rl_models_dir"], self.rl_type,
-                    f"split_{self.split_num}", self.cohort, self.actions
+                    f"split_{self.split_num}", self.cohort, self.actions,
                 )
                 self.results_dir = results_dir
                     # find the directory within result_dir

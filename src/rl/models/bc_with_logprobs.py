@@ -176,8 +176,6 @@ class Actor(nn.Module):
 		return actions, log_prob
 
 
-
-
 	def log_prob_of_action(self, state: torch.Tensor, action: torch.Tensor, return_components=False) -> torch.Tensor:
 		"""
 		Hurdle log-likelihood of a GIVEN action:
@@ -241,6 +239,46 @@ class Actor(nn.Module):
 			return total_lp, components
 
 		return total_lp
+
+
+	@torch.no_grad()
+	def log_prob_for_wis(self, state, action, bc_actor: nn.Module):
+		"""
+		Constructs an evaluation density around the CQL policy's DETERMINISTIC
+		action (mean, hard-gated), using BC's per-state fitted std as the
+		bandwidth. This is purely for WIS — never used in training. The std
+		values are borrowed from BC (already a well-calibrated MLE fit to real
+		doctor variability), not re-derived from CQL's own training dynamics,
+		which is exactly the decoupling we want.
+		"""
+		f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, _, _ = self._dists(state)
+		f_p = torch.sigmoid(f_gate_logit)
+		v_p = torch.sigmoid(v_gate_logit)
+
+		# pull BC's per-state std for this same batch of states
+		_, _, (_, _, _, _, bc_f_std, bc_v_std) = bc_actor(
+			state, deterministic=True, return_dist=True
+		)
+
+		f_dose, v_dose = action[:, 0:1], action[:, 1:2]
+		f_fired_actual = (f_dose > self.zero_threshold).float()
+		v_fired_actual = (v_dose > self.zero_threshold).float()
+
+		f_gate_lp = f_fired_actual * torch.log(f_p + 1e-8) + (1 - f_fired_actual) * torch.log(1 - f_p + 1e-8)
+		v_gate_lp = v_fired_actual * torch.log(v_p + 1e-8) + (1 - v_fired_actual) * torch.log(1 - v_p + 1e-8)
+
+		f_a = f_dose.clamp(1e-4, 1 - 1e-4)
+		v_a = v_dose.clamp(1e-4, 1 - 1e-4)
+
+		f_dist = torch.distributions.Normal(f_raw_mean, bc_f_std)
+		v_dist = torch.distributions.Normal(v_raw_mean, bc_v_std)
+
+		f_mag_lp = f_dist.log_prob(torch.logit(f_a)) - torch.log(f_a * (1 - f_a) + 1e-6)
+		v_mag_lp = v_dist.log_prob(torch.logit(v_a)) - torch.log(v_a * (1 - v_a) + 1e-6)
+
+		total_lp = f_gate_lp + f_fired_actual * f_mag_lp + v_gate_lp + v_fired_actual * v_mag_lp
+		return total_lp.squeeze(-1)
+
 
 	@torch.no_grad()
 	def get_neuron_stats(self, state):

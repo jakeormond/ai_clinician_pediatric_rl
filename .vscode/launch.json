@@ -506,6 +506,28 @@
         },
 
         {
+            "name": "weighted_importance_sampling_choc",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.rl.weighted_importance_sampling",
+            "args": [
+                "--hospital", "choc", 
+                "--rl_type", "conservative_q_learning",
+                "--experiment_type", "model_evaluation",
+                "--model_type", "basic_q", 
+                "--mode", "single_split",
+                "--split_num", "0",
+                "--cohort", "sepsis",
+                "--actions", "intake-vis", 
+                "--reward_type", "health_score_change_only",
+                "--discount", "0.975"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
             "name": "basic_q_fixed_choc",
             "type": "debugpy",
             "request": "launch",

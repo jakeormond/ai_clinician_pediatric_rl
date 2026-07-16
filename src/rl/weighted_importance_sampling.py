@@ -14,6 +14,7 @@ from .models.basic_q import Critic
 from .models.td3_bc import Actor as TD3Actor
 from .models.conservative_q_learning import Actor as CQLActor
 from .models.conservative_q_learning import Critic as CQLCritic
+from .models.cql_with_logprobs import Actor as CQL_with_logprobs_Actor
 from .models.iql import Actor as IQLActor
 from .models.iql import Critic as IQLCritic
 from .models.iql import ValueNetwork as IQLValue
@@ -107,7 +108,10 @@ def load_actor(config_manager, model_path=None, load_critic=True):
         actor = IQLActor(512, hyperparams["hidden_dim"]).to(device)
     elif actor_configuration.model_type == "bc_with_logprobs":
         actor = BCActor(512).to(device)
-
+    elif actor_configuration.model_type == "cql_with_logprobs":
+        actor = CQL_with_logprobs_Actor(512, hidden_dim=hyperparams["hidden_dim"]).to(device)
+    else:
+        raise ValueError(f"Unknown model type: {actor_configuration.model_type}")
 
     checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
     actor.load_state_dict(checkpoint['actor_state_dict'])
@@ -236,6 +240,7 @@ def calculate_wis(test_processor, logprobs_rl, logprobs_bc, config_manager):
     # per-timestep, for all transitions in the dataset
     log_rho = logprobs_rl - logprobs_bc                                     # shape (N,)
 
+    unclipped_w_tau = []
     w_tau = []
     G_tau = []
     for stay_id in stay_ids:
@@ -244,14 +249,115 @@ def calculate_wis(test_processor, logprobs_rl, logprobs_bc, config_manager):
 
         log_rho_traj = log_rho[indices]  # shape (T,)
         log_w_tau = np.sum(log_rho_traj)  # sum in log space
-        w_tau.append(np.exp(log_w_tau))  # exponentiate ONCE, at the end
+        clipped_log_w_tau = np.clip(log_w_tau, a_min=-20, a_max=20)  # clip to avoid overflow
+        w_tau.append(np.exp(clipped_log_w_tau))  # exponentiate ONCE, at the end
+        unclipped_w_tau.append(np.exp(log_w_tau))
         G_tau.append(np.sum([config_manager.discount**t * rewards[t] for t in range(len(rewards))]))
 
-    V_wis = np.sum([w * G for w, G in zip(w_tau, G_tau)]) / np.sum(w_tau)
+    
+    wis_results = bootstrap_wis_vs_behavior(w_tau, G_tau, n_bootstrap=2000, seed=0)
 
-    ess = (np.array(w_tau).sum() ** 2) / (np.array(w_tau) ** 2).sum()
+    # V_wis = np.sum([w * G for w, G in zip(w_tau, G_tau)]) / np.sum(w_tau)
+    # V_behaviour = np.mean(G_tau)    
+    # print(f"V_wis: {V_wis:.4f}, V_behaviour: {V_behaviour:.4f}")
+    # ess = (np.array(w_tau).sum() ** 2) / (np.array(w_tau) ** 2).sum()
 
-    return V_wis, ess
+    # calculate the mean and std of unclipped_w_tau
+    unclipped_w_tau_mean = np.mean(unclipped_w_tau)
+    unclipped_w_tau_std = np.std(unclipped_w_tau) 
+    unclipped_w_tau_median = np.median(unclipped_w_tau)
+    unclipped_w_tau_min = np.min(unclipped_w_tau)
+    unclipped_w_tau_max = np.max(unclipped_w_tau)  
+    print(f"Unclipped w_tau mean: {unclipped_w_tau_mean:.4f}, std: {unclipped_w_tau_std:.4f}")
+    print(f"Unclipped w_tau median: {unclipped_w_tau_median:.4f}, min: {unclipped_w_tau_min:.4f}, max: {unclipped_w_tau_max:.4f}")
+
+    # return V_wis, V_behaviour, ess
+    return wis_results
+
+
+def bootstrap_wis_vs_behavior(w_tau, G_tau, n_bootstrap=2000, seed=0):
+    """
+    Paired bootstrap over trajectories to test whether V_wis differs
+    significantly from V_behavior (plain average of G_tau).
+    w_tau, G_tau: same-length lists/arrays, one entry per trajectory,
+    already computed as in calculate_wis().
+    """
+    rng = np.random.default_rng(seed)
+    w_tau = np.array(w_tau)
+    G_tau = np.array(G_tau)
+    n = len(G_tau)
+
+    diffs = np.zeros(n_bootstrap)
+    wis_samples = np.zeros(n_bootstrap)
+    behavior_samples = np.zeros(n_bootstrap)
+
+    for b in range(n_bootstrap):
+        idx = rng.integers(0, n, size=n)  # resample trajectory indices with replacement
+        w_b = w_tau[idx]
+        G_b = G_tau[idx]
+
+        v_wis_b = np.sum(w_b * G_b) / np.sum(w_b)
+        v_behavior_b = np.mean(G_b)
+
+        wis_samples[b] = v_wis_b
+        behavior_samples[b] = v_behavior_b
+        diffs[b] = v_wis_b - v_behavior_b
+
+    # point estimates (from the actual, unresampled data)
+    v_wis_point = np.sum(w_tau * G_tau) / np.sum(w_tau)
+    v_behavior_point = np.mean(G_tau)
+    diff_point = v_wis_point - v_behavior_point
+
+    # 95% percentile CI on the difference
+    ci_low, ci_high = np.percentile(diffs, [2.5, 97.5])
+
+    # two-sided bootstrap p-value: proportion of bootstrap diffs on the 
+    # opposite side of 0 from the point estimate, doubled
+    if diff_point >= 0:
+        p_value = 2 * np.mean(diffs <= 0)
+    else:
+        p_value = 2 * np.mean(diffs >= 0)
+    p_value = min(p_value, 1.0)
+
+    return {
+        "v_wis": v_wis_point,
+        "v_behavior": v_behavior_point,
+        "diff": diff_point,
+        "ci_95_low": ci_low,
+        "ci_95_high": ci_high,
+        "p_value": p_value,
+        "significant_at_05": not (ci_low <= 0 <= ci_high),
+    }
+
+def plot_action_distributions(actions, model_path):
+    # 2 subplots: one for each action dimension
+    fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+    fluids = actions[:, 0].numpy()
+    # remove zeros
+    fluids_nonzero = fluids[fluids != 0]
+    print(f"min fluids: {np.min(fluids_nonzero)}, max fluids: {np.max(fluids_nonzero)}")
+
+    # plot histogram of non-zero fluids
+    axs[0].hist(fluids_nonzero, bins=1000, alpha=0.7, color='blue', edgecolor='black')
+    axs[0].set_title('Action Dimension 1 Distribution (Non-zero Fluids)')
+    axs[0].set_xlabel('Action Value')
+    axs[0].set_ylabel('Frequency')
+
+    
+    vasopressors = actions[:, 1].numpy()
+    # remove zeros
+    vasopressors_nonzero = vasopressors[vasopressors != 0]
+    print(f"min vasopressors: {np.min(vasopressors_nonzero)}, max vasopressors: {np.max(vasopressors_nonzero)}")
+
+    # plot histogram of non-zero vasopressors
+    axs[1].hist(vasopressors_nonzero, bins=1000, alpha=0.7, color='red', edgecolor='black')
+    axs[1].set_title('Action Dimension 2 Distribution (Non-zero Vasopressors)')
+    axs[1].set_xlabel('Action Value')
+    axs[1].set_ylabel('Frequency')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(model_path, "action_distributions.png"))
+    plt.close()
 
 
 
@@ -290,6 +396,11 @@ def wis_multiple_models():
     batch_size = 1024
     train_processor, test_processor, _ = create_test_rl_dataset(train_processor, test_processor, config_manager, hyperparams)
 
+    # plot action distributions
+    plot_action_distributions(train_processor.rl_dataset['actions'], bc_model_path)
+    
+    
+    
     # load the BC model
     bc_model, _, bc_configuration, bc_hyperparams, bc_model_folder = load_actor(
         config_manager, model_path=bc_model_path, load_critic=False
@@ -300,7 +411,7 @@ def wis_multiple_models():
         test_processor, 
         batch_size=batch_size, 
         actor=bc_model
-    ).cpu().numpy()
+    ).cpu().detach().numpy()
         
     
     # get the RL model directories
@@ -339,11 +450,10 @@ def wis_multiple_models():
                 batch_size=batch_size, 
                 actor=rl_model,
                 bc_model=bc_model
-            ).cpu().numpy()
+            ).cpu().detach().numpy()
 
-            calculate_wis(logprobs_rl, logprobs_bc, model_subfolder_path)
+            calculate_wis(test_processor, logprobs_rl, logprobs_bc, config_manager)
 
-            logprobs_rho = logprobs_rl - logprobs_bc
 
 
 

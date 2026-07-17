@@ -538,6 +538,7 @@ class CQL:
 		# actor_loss_entropy_scale: float = 0.1, # Weight for the entropy loss in the actor update
 		actor_loss_gate_entropy_scale: float = 0.02, # Weight for the entropy loss in the actor update
 		actor_loss_mag_entropy_scale: float = 5.e-4, # Weight for the entropy loss in the actor update
+		vaso_mean_reg_scale: float = 0.05,  # Weight for the vaso mean regularization term
 
 		device: str = "CUDA" if torch.cuda.is_available() else "CPU",
 		action_mode: str = "continuous",
@@ -579,6 +580,7 @@ class CQL:
 		self.actor_loss_q_scale = actor_loss_q_scale
 		self.actor_loss_gate_entropy_scale = actor_loss_gate_entropy_scale
 		self.actor_loss_mag_entropy_scale = actor_loss_mag_entropy_scale
+		self.vaso_mean_reg_scale = vaso_mean_reg_scale
 
 		self.device = device
 		self.action_mode = action_mode
@@ -903,10 +905,15 @@ class CQL:
 			# actor_loss = self.actor_loss_q_scale * actor_loss_q + \
 			# 		self.actor_loss_entropy_scale * actor_loss_ent  # combine the losses with a large weight on the Q loss to encourage improvement over the current policy
 			
+			v_gate_uncertainty_weight = (0.5 - (v_p - 0.5).abs()).clamp(min=0)
+			v_mean_saturation_penalty = (v_gate_uncertainty_weight * v_raw_mean.pow(2)).mean()
+
+
 			actor_loss = (
 				self.actor_loss_q_scale * actor_loss_q + 
 				+ self.actor_loss_gate_entropy_scale * actor_loss_gate_ent 
     			+ self.actor_loss_mag_entropy_scale * actor_loss_mag_ent
+				+ self.vaso_mean_reg_scale * v_mean_saturation_penalty
 			)
 
 
@@ -1259,6 +1266,8 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		# actor_loss_entropy_scale=hyperparams['actor_loss_entropy_scale'],
 		actor_loss_gate_entropy_scale=hyperparams['actor_loss_gate_entropy_scale'],
 		actor_loss_mag_entropy_scale=hyperparams['actor_loss_mag_entropy_scale'],
+
+		vaso_mean_reg_scale=hyperparams['vaso_mean_reg_scale'],
 
 		num_samples=hyperparams['num_samples'],
 		use_monte_carlo_terminal_returns=hyperparams['monte_carlo_terminal_returns'], 

@@ -655,7 +655,7 @@ class CQL:
 	def target_q(self, action, next_state, reward, not_done, noise=True):
 		with torch.no_grad():
 			# Select action according to policy and add clipped noise
-			next_action, _ = self.actor_target(next_state, deterministic=True)
+			next_action, _, _ = self.actor_target(next_state, deterministic=True)
 		
 			if noise:
 				noise = (torch.randn_like(next_action) * self.policy_noise).clamp(-self.noise_clip, self.noise_clip)
@@ -1021,12 +1021,58 @@ class CQL:
 
 		return v0_mean, v0_sem
 
+
+	@torch.no_grad()
+	def _gate_incentive_diagnostic(self, state, action, tiny_dose=0.0001):
+		"""
+		Compares Q(action with dose forced to exactly 0) vs Q(action with dose
+		forced to a tiny nonzero value), holding the OTHER dose fixed at its
+		real observed value. Computed only on states where the doctor's actual
+		action for that dose was ~0, since that's the population where a
+		spurious "always fire a little" incentive would show up.
+
+		Positive gap (Q_zero - Q_tiny > 0) = critic correctly prefers true zero.
+		Negative gap = critic prefers a tiny dose over zero — the incentive
+		that would push the actor's gate toward saturation.
+		"""
+		results = {}
+
+		for dose_idx, name in [(0, "fluid"), (1, "vaso")]:
+			near_zero_mask = action[:, dose_idx] < self.actor.zero_threshold
+			if near_zero_mask.sum() < 2:
+				results[f"{name}_gate_incentive_gap"] = float('nan')
+				results[f"{name}_gate_incentive_n"] = 0
+				continue
+
+			s = state[near_zero_mask]
+			a_real = action[near_zero_mask]
+
+			a_zero = a_real.clone()
+			a_zero[:, dose_idx] = 0.0
+
+			a_tiny = a_real.clone()
+			a_tiny[:, dose_idx] = tiny_dose
+
+			q1_zero, q2_zero = self.critic(s, a_zero)
+			q1_tiny, q2_tiny = self.critic(s, a_tiny)
+
+			q_zero = torch.min(q1_zero, q2_zero)
+			q_tiny = torch.min(q1_tiny, q2_tiny)
+
+			gap = (q_zero - q_tiny).mean().item()
+
+			results[f"{name}_gate_incentive_gap"] = gap
+			results[f"{name}_gate_incentive_n"] = int(near_zero_mask.sum().item())
+
+		return results
+
+
 	def evaluate(self, batch: TensorBatch) -> Dict[str, float]:
 		self.actor.eval()  # This is correct and important!
 		self.critic.eval()  # Ensure critic is also in eval mode
 		
 		state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
-		
+
 		reward = reward * self.reward_scaling
 
 		# compute the target Q value
@@ -1052,6 +1098,9 @@ class CQL:
 			losses = {
 				"bellman_loss": bellman_loss.item(),
 			}
+
+			gate_incentive = self._gate_incentive_diagnostic(state, action)
+			losses.update(gate_incentive)
 
 			# 3. Actor Actions and their Critic Values
             # We use deterministic=True to see the "best" action the model recommends

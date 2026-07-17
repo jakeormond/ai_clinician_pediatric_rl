@@ -23,7 +23,7 @@
     noise_clip: 0.5 # Range to clip target policy noise
     policy_freq: 2 # Frequency of delayed policy updates
 
-    cql_alpha: 0.05 # 0.1 # 0.001 # 0.01 # 0.001 #.001 # Weighting for CQL penalty term
+    cql_alpha: 0.01 # 0.1 # 0.001 # 0.01 # 0.001 #.001 # Weighting for CQL penalty term
     temp: 1.0 # Temperature for CQL penalty term
     num_samples: 10 # Number of samples for CQL penalty term
 
@@ -53,7 +53,9 @@
 
     actor_loss_bc_scale: 0.
     actor_loss_q_scale: 10.
-    actor_loss_entropy_scale: 5.e-4
+    # actor_loss_entropy_scale: 0.02 # 5.e-4
+    actor_loss_gate_entropy_scale: 0.02 # 5.e-4
+    actor_loss_mag_entropy_scale: 5.e-4
 
     # health score reward shaping parameters
     health_score_hourly_change_clip: 100. # health score is 0 to 100, clip prevents large spikes in reward

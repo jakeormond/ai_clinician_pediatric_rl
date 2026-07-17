@@ -168,6 +168,8 @@ class Actor(nn.Module):
 			# naturally down-weights the magnitude log-prob's contribution
 			# in proportion to how "off" the gate currently is — a soft
 			# analogue of the hard mask used in BC.
+			gate_lp = (f_gate_lp + v_gate_lp).squeeze(-1)
+			mag_lp = (f_fire * f_mag_lp + v_fire * v_mag_lp).squeeze(-1)
 			log_prob = (f_gate_lp + f_fire * f_mag_lp + v_gate_lp + v_fire * v_mag_lp).squeeze(-1)
 		else:
 			f_mean_mag = torch.sigmoid(f_raw_mean)
@@ -177,12 +179,14 @@ class Actor(nn.Module):
 			f_action = (f_p > 0.5).float() * f_mean_mag
 			v_action = (v_p > 0.5).float() * v_mean_mag
 			actions = torch.cat([f_action, v_action], dim=-1)
+			gate_lp = None
+			mag_lp = None
 			log_prob = None
  
 		if return_dist:
-			return actions, log_prob, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std)
+			return actions, log_prob, (gate_lp, mag_lp), (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std)
  
-		return actions, log_prob
+		return actions, log_prob, (gate_lp, mag_lp)
 
 
 	def log_prob_of_action(self, state: torch.Tensor, action: torch.Tensor, return_components=False) -> torch.Tensor:
@@ -531,7 +535,9 @@ class CQL:
 
 		actor_loss_bc_scale: float = 2.0,  # Weight for the BC loss in the actor update
 		actor_loss_q_scale: float = 50.0,   # Weight for the Q loss in the actor update
-		actor_loss_entropy_scale: float = 0.1, # Weight for the entropy loss in the actor update
+		# actor_loss_entropy_scale: float = 0.1, # Weight for the entropy loss in the actor update
+		actor_loss_gate_entropy_scale: float = 0.02, # Weight for the entropy loss in the actor update
+		actor_loss_mag_entropy_scale: float = 5.e-4, # Weight for the entropy loss in the actor update
 
 		device: str = "CUDA" if torch.cuda.is_available() else "CPU",
 		action_mode: str = "continuous",
@@ -571,7 +577,8 @@ class CQL:
 	
 		self.actor_loss_bc_scale = actor_loss_bc_scale
 		self.actor_loss_q_scale = actor_loss_q_scale
-		self.actor_loss_entropy_scale = actor_loss_entropy_scale
+		self.actor_loss_gate_entropy_scale = actor_loss_gate_entropy_scale
+		self.actor_loss_mag_entropy_scale = actor_loss_mag_entropy_scale
 
 		self.device = device
 		self.action_mode = action_mode
@@ -618,10 +625,10 @@ class CQL:
 		self.actor_target.gate_temperature = new_temp   # keep target actor consistent too
 		return new_temp
 
-	def select_action(self, state):
-		state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
-		actions, _ = self.actor(state, deterministic=True)
-		return actions.cpu().data.numpy().flatten()
+	# def select_action(self, state):
+	# 	state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
+	# 	actions, _ = self.actor(state, deterministic=True)
+	# 	return actions.cpu().data.numpy().flatten()
 
 
 	def compute_actor_loss(self,pi: torch.Tensor, action: torch.Tensor, exp_weights: torch.Tensor) -> torch.Tensor:
@@ -727,14 +734,14 @@ class CQL:
 
 			# Sample current actions from our Stochastic Actor
 			# We sample multiple times to get a good estimate of the current policy's Q-values
-			curr_actions, curr_log_probs = self.actor(
+			curr_actions, curr_log_probs, _ = self.actor(
 				state.repeat_interleave(self.num_samples, dim=0), hard_gate=True
 			)
 			curr_actions = curr_actions.view(batch_size, self.num_samples, -1)
 			curr_log_probs = curr_log_probs.view(batch_size, self.num_samples).clamp(min=-10, max=0)
 
 			# sample next_actions from the actor for the next states
-			next_actions, next_log_probs = self.actor(
+			next_actions, next_log_probs, _ = self.actor(
 				next_state.repeat_interleave(self.num_samples, dim=0), hard_gate=True
 			)
 			next_actions = next_actions.view(batch_size, self.num_samples, -1)
@@ -839,7 +846,7 @@ class CQL:
 		if self.total_it % self.policy_freq != 0:
 			self.actor.eval() # Dropout INACTIVE for the network we are evaluating
 			with torch.no_grad():
-				pi, _ = self.actor(state, deterministic=True)
+				pi, _, _ = self.actor(state, deterministic=True)
 				Q1_pi, Q2_pi = self.critic(state, pi)
 			Q_pi = torch.min(Q1_pi, Q2_pi)
 			q_stats = get_q_stats(current_Q1, current_Q2, Q_pi, mortality)			
@@ -849,7 +856,7 @@ class CQL:
 			self.actor.train() # Dropout ACTIVE for the network we are updating
 			
 			# Sample actions from the stochastic actor
-			pi, log_prob, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std) = self.actor(
+			pi, log_prob, (gate_lp, mag_lp), (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std) = self.actor(
 				state, deterministic=False, return_dist=True, sigmoid_correction=False,
 				hard_gate=True
 			)
@@ -881,43 +888,55 @@ class CQL:
 			exp_weights = torch.clamp(exp_weights, min=0.01, max=10.0)
 			
 			# BC Loss - compute actor loss using TrainerUtils function - the "anchor"
-			actor_dict = self.compute_actor_loss(pi, action, exp_weights)
-			actor_loss_bc = actor_dict['total_bc_loss'] # this is the combined BC loss that includes both the weighted MSE and the sparsity penalty
-			losses.update(actor_dict) # add the actor_dict components to the losses dict for logging
+			# actor_dict = self.compute_actor_loss(pi, action, exp_weights)
+			# actor_loss_bc = actor_dict['total_bc_loss'] # this is the combined BC loss that includes both the weighted MSE and the sparsity penalty
+			# losses.update(actor_dict) # add the actor_dict components to the losses dict for logging
 			
-			actor_loss_ent = log_prob.mean() 
+			actor_loss_gate_ent = gate_lp.mean()
+			actor_loss_mag_ent = mag_lp.mean()
+			# actor_loss_ent = log_prob.mean() 
 
 			# actor_loss = self.actor_loss_bc_scale * actor_loss_bc + \
 			# 	self.actor_loss_q_scale * actor_loss_q + \
 			# 		self.actor_loss_entropy_scale * actor_loss_ent  # combine the losses with a large weight on the Q loss to encourage improvement over the current policy
 			
-			actor_loss = self.actor_loss_q_scale * actor_loss_q + \
-					self.actor_loss_entropy_scale * actor_loss_ent  # combine the losses with a large weight on the Q loss to encourage improvement over the current policy
+			# actor_loss = self.actor_loss_q_scale * actor_loss_q + \
+			# 		self.actor_loss_entropy_scale * actor_loss_ent  # combine the losses with a large weight on the Q loss to encourage improvement over the current policy
 			
+			actor_loss = (
+				self.actor_loss_q_scale * actor_loss_q + 
+				+ self.actor_loss_gate_entropy_scale * actor_loss_gate_ent 
+    			+ self.actor_loss_mag_entropy_scale * actor_loss_mag_ent
+			)
+
+
 			# every 500 iterations, logg actor_loss_q, actor_loss_bc, and actor_loss_ent separately to see how they are contributing to the total loss
 			if self.total_it % 500 == 0:
 				logging.info(
 					f"Iteration {self.total_it}: actor_loss_q={actor_loss_q.item():.4f}, \
-					actor_loss_bc={actor_loss_bc.item():.4f}, \
-					actor_loss_ent={actor_loss_ent.item():.4f}, \
+					actor_loss_gate_ent={actor_loss_gate_ent.item():.4f}, \
+					actor_loss_mag_ent={actor_loss_mag_ent.item():.4f}, \
 					raw_advantage_mean={raw_advantage.mean().item():.4f}")		 
 
 			losses.update({
 				"actor_loss_total": actor_loss.item(),
 				"actor_loss_q": actor_loss_q.item(),
-				"actor_loss_bc": actor_loss_bc.item(),
+				# "actor_loss_bc": actor_loss_bc.item(),
 				"fluid_fire_prob_mean": f_p.mean().item(),
     			"vaso_fire_prob_mean": v_p.mean().item(),
-				"fluid_volume_loss": actor_dict['fluid_volume_loss'].item(),
-				"vaso_volume_loss": actor_dict['vaso_volume_loss'].item(),
+				# "fluid_volume_loss": actor_dict['fluid_volume_loss'].item(),
+				# "vaso_volume_loss": actor_dict['vaso_volume_loss'].item(),
 				"fluid_mean": pi[:, 0].mean().item(),
+				"fluid_non_zero_mean": pi[pi[:, 0] > 0, 0].mean().item() if (pi[:, 0] > 0).any() else float('nan'),
 				"vaso_mean": pi[:, 1].mean().item(),
+				"vaso_non_zero_mean": pi[pi[:, 1] > 0, 1].mean().item() if (pi[:, 1] > 0).any() else float('nan'),
 				"fluid_std": f_std.mean().item(),
 				"vaso_std": v_std.mean().item(),
 				"fluid_std_std": f_std.std().item(),
 				"vaso_std_std": v_std.std().item(),
 				"actor_raw_advantage_mean": raw_advantage.mean().item(),
-				"actor_loss_ent": actor_loss_ent.item(),
+				"actor_loss_gate_ent": actor_loss_gate_ent.item(),
+				"actor_loss_mag_ent": actor_loss_mag_ent.item(),
 				"gate_temperature": current_gate_temp
 			})
 						
@@ -965,7 +984,7 @@ class CQL:
 
 		self.actor.eval()  # Set actor to eval mode to disable Dropout
 		with torch.no_grad():
-			new_actions, _ = self.actor(state, deterministic=True)  # Get the "best" action without noise or log probabilities
+			new_actions, _, _ = self.actor(state, deterministic=True)  # Get the "best" action without noise or log probabilities
 		
 		return new_actions
 
@@ -991,7 +1010,7 @@ class CQL:
 		q_values = []
 		for i in range(0, len(start_states), batch_size):
 			batch_states = start_states[i:i+batch_size]
-			actions, _ = self.actor(batch_states, deterministic=True)
+			actions, _, _ = self.actor(batch_states, deterministic=True)
 			q1, q2 = self.critic(batch_states, actions)
 			q_batch = torch.min(q1, q2)
 			q_values.append(q_batch.detach().cpu().numpy())
@@ -1036,7 +1055,7 @@ class CQL:
 
 			# 3. Actor Actions and their Critic Values
             # We use deterministic=True to see the "best" action the model recommends
-			pi, _, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std) = self.actor(
+			pi, _, _, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std) = self.actor(
 				state, deterministic=True, return_dist=True
 			)
 			Q_pi_1, Q_pi_2 = self.critic(state, pi)
@@ -1060,9 +1079,9 @@ class CQL:
 			exp_weights = torch.clamp(exp_weights, min=0.01, max=10.0)
 			
 			# BC Loss - compute actor loss using TrainerUtils function - the "anchor"
-			actor_dict = self.compute_actor_loss(pi, action, exp_weights)
-			actor_loss_bc = actor_dict['total_bc_loss'] # this is the combined BC loss that includes both the weighted MSE and the sparsity penalty
-			losses.update(actor_dict) # add the actor_dict components to the losses dict for logging
+			# actor_dict = self.compute_actor_loss(pi, action, exp_weights)
+			# actor_loss_bc = actor_dict['total_bc_loss'] # this is the combined BC loss that includes both the weighted MSE and the sparsity penalty
+			# losses.update(actor_dict) # add the actor_dict components to the losses dict for logging
 
 				
 			# ADD THIS LINE:
@@ -1074,8 +1093,14 @@ class CQL:
 			losses.update({
 				"actor_loss_q": actor_loss_q.item(),
 				"actor_raw_advantage_mean": raw_advantage.mean().item(),
-				"actor_loss_bc": actor_loss_bc.item(),})
-			   
+				# "actor_loss_bc": actor_loss_bc.item(), 
+				"fluid_fire_prob_mean": f_p.mean().item(),
+    			"vaso_fire_prob_mean": v_p.mean().item(),
+				"fluid_mean": pi[:, 0].mean().item(),
+				"fluid_non_zero_mean": pi[pi[:, 0] > 0, 0].mean().item() if (pi[:, 0] > 0).any() else float('nan'),
+				"vaso_mean": pi[:, 1].mean().item(),
+				"vaso_non_zero_mean": pi[pi[:, 1] > 0, 1].mean().item() if (pi[:, 1] > 0).any() else float('nan'),
+			})
 		# return log_dict, action, pi
 		return losses, q_stats, neuron_stats
 
@@ -1182,7 +1207,9 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 
 		actor_loss_bc_scale=hyperparams['actor_loss_bc_scale'],
 		actor_loss_q_scale=hyperparams['actor_loss_q_scale'],
-		actor_loss_entropy_scale=hyperparams['actor_loss_entropy_scale'],
+		# actor_loss_entropy_scale=hyperparams['actor_loss_entropy_scale'],
+		actor_loss_gate_entropy_scale=hyperparams['actor_loss_gate_entropy_scale'],
+		actor_loss_mag_entropy_scale=hyperparams['actor_loss_mag_entropy_scale'],
 
 		num_samples=hyperparams['num_samples'],
 		use_monte_carlo_terminal_returns=hyperparams['monte_carlo_terminal_returns'], 

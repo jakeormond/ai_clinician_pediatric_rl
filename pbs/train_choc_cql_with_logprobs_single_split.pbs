@@ -69,7 +69,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --split_num 0 \
     --search_variant random_search \
     --n_search_iterations 5 \
-    --n_epochs 400 \
+    --n_epochs 600 \
     --action_mode continuous_only \
     --cohort sepsis \
     --start_time $START_TIME 

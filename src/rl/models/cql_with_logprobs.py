@@ -675,11 +675,14 @@ class CQL:
 
 	def train(self, batch: TensorBatch) -> Tuple[Dict[str, float], Dict[str, float]]:
 		self.total_it += 1
+
+		# this is for logging, gate temp is used in the actor's forward pass to sample the gates
 		current_gate_temp = self._update_gate_temperature()
 
 		# Sample replay buffer 
 		state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
 		
+		# not currently using smoothing
 		if self.use_smoothing is True:
 			with torch.no_grad():
 				# add noise to states
@@ -695,38 +698,38 @@ class CQL:
 				smoothed_actions = torch.where(is_zero_dose, torch.zeros_like(smoothed_actions), smoothed_actions)			
 				smoothed_actions = smoothed_actions.clamp(0, 1.0) # Ensure actions remain in valid range after smoothing
 
+		# scaling is just 1 for now, no need to adjust
 		reward = reward * self.reward_scaling
 		
 		# compute the target Q value
-		treat_survival_as_truncated = True
+		treat_survival_as_truncated = True # i.e. survival is not terminal. 
 		if treat_survival_as_truncated:
 			# make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
-			done = done * mortality
-		
+			done = done * mortality		
 		not_done = 1 - done
 
 		self.critic.train()          # Dropout ACTIVE for the network we are updating
 		
+		# get target Q for bellman loss
 		with torch.no_grad(): # uses target actor for next action
-			if self.use_monte_carlo_terminal_returns:
+			if self.use_monte_carlo_terminal_returns: # this should only be used for terminal rewards
 				# is 1 where mortality is 1, else 0. 
 				target_Q = -(mortality - 1).float()
 			else:
 				target_Q = self.target_q(action, next_state, reward, not_done, noise=True)
 
-		# Get current Q estimates>
+		# Get current Q estimates - for bellman loss and cql loss
 		# current_Q1, current_Q2 = self.critic(state, action)
-		if self.use_smoothing is True:
+		if self.use_smoothing is True: # not currently used
 			current_Q1, current_Q2 = self.critic(smoothed_states, smoothed_actions)
 		else:
 			current_Q1, current_Q2 = self.critic(state, action)
 
-		# 2. CQL CONSERVATIVE LOSS
-        # We need to sample random actions to penalize them
+		# 2. CQL CONSERVATIVE LOSS - sample random actions to penalize them
 		batch_size = state.shape[0]
 
 		with torch.no_grad():
-			
+			# NOT USING UNIFORM RANDOM ACTIONS FOR NOW, USING SHUFFLED BATCH ACTIONS INSTEAD
 			# Sample random actions uniformly [0, 1]
 			# random_actions = torch.FloatTensor(batch_size, self.num_samples, self.dose_actions).uniform_(0, 1).to(self.device)
 			
@@ -1175,7 +1178,9 @@ class CQL:
 				"actor_raw_advantage_mean": raw_advantage.mean().item(),
 				# "actor_loss_bc": actor_loss_bc.item(), 
 				"fluid_fire_prob_mean": f_p.mean().item(),
+				"fluid_hard_fire_rate": (f_p > 0.5).float().mean().item(),
     			"vaso_fire_prob_mean": v_p.mean().item(),
+				"vaso_hard_fire_rate": (v_p > 0.5).float().mean().item(),
 				"fluid_mean": pi[:, 0].mean().item(),
 				"fluid_non_zero_mean": pi[pi[:, 0] > 0, 0].mean().item() if (pi[:, 0] > 0).any() else float('nan'),
 				"vaso_mean": pi[:, 1].mean().item(),

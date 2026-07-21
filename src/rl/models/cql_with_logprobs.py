@@ -752,6 +752,13 @@ class CQL:
 			next_actions = next_actions.view(batch_size, self.num_samples, -1)
 			next_log_probs = next_log_probs.view(batch_size, self.num_samples).clamp(min=-10, max=0)
 
+			# create actions with vasopressor dose sampled from a uniform distribution between 0.01 and 1,
+			# with fluid dose equal to 0. This is because vaso never given without fluid.
+			zero_fluid_actions = torch.zeros(batch_size, self.num_samples, 1, device=self.device)
+			vaso_uniform_actions = torch.FloatTensor(batch_size, self.num_samples, 1).uniform_(0.01, 1.0).to(self.device)
+			vaso_only_actions = torch.cat([zero_fluid_actions, vaso_uniform_actions], dim=-1)
+
+
 		# Evaluate these actions in the Critic
 		# (Using a helper or flattening/unflattening)
 		def get_q_for_samples(s, a_samples, critic_net):
@@ -764,6 +771,7 @@ class CQL:
 		q1_rand, q2_rand = get_q_for_samples(state, random_actions, self.critic)
 		q1_curr, q2_curr = get_q_for_samples(state, curr_actions, self.critic)
 		q1_next, q2_next = get_q_for_samples(next_state, next_actions, self.critic) 
+		q1_vaso_only, q2_vaso_only = get_q_for_samples(state, vaso_only_actions, self.critic)
 
 		# Inside the training loop, after calculating q1_rand, q1_curr, etc.
 		with torch.no_grad():
@@ -777,12 +785,14 @@ class CQL:
 		cat_q1 = torch.cat([
 			q1_rand, 
 			q1_curr, 
-			q1_next
+			q1_next,
+			q1_vaso_only
 		], dim=1)
 		cat_q2 = torch.cat([
 			q2_rand, 
 			q2_curr, 
-			q2_next
+			q2_next,
+			q2_vaso_only
 		], dim=1)
 
 		num_samples = cat_q1.shape[1]

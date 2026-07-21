@@ -397,7 +397,8 @@ def evaluate_during_training(
         epoch_dict["epoch"] = epoch
         
         # 3. Log it immediately to W&B
-        wandb.log(epoch_dict)
+        if wandb.run is not None:
+            wandb.log(epoch_dict)
     
     return val_losses, val_q_stats, val_neuron_stats, val_advantages
 
@@ -625,7 +626,7 @@ def train_with_hyperparameters(
     # initialize wandb for this training run
     run = wandb_init(hyperparams, job_id)
 
-    hyperparams['wandb_id'] = run.id if run is not None else None
+    hyperparams['wandb_id'] = run.id if run is not None else f"{job_id}_no_wandb"
     print(f"W&B run initialized with ID: {hyperparams['wandb_id']}")
 
     # Create replay buffers

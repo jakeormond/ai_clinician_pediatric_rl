@@ -5,6 +5,7 @@ import numpy as np
 import os
 import hashlib
 import socket
+import time
 
 
 def can_reach_wandb(timeout=3):
@@ -61,15 +62,49 @@ def wandb_init(hyperparams: dict, job_id: str) -> None:
     name = hyperparams['name']
     mode = hyperparams['wandb_mode']
 
-    run = wandb.init(
-        project=project,
-        group=group,
-        name=name,
-        mode=mode,
-        config=hyperparams,
-        id=f"{job_id}_{str(uuid.uuid4())[:8]}",
-        reinit='finish_previous'
-    )
+    run_id = f"{job_id}_{str(uuid.uuid4())[:8]}"
+    init_timeout = int(hyperparams.get("wandb_init_timeout", 180))
+    max_retries = int(hyperparams.get("wandb_init_retries", 1))
+    retry_sleep_s = float(hyperparams.get("wandb_init_retry_sleep_s", 5.0))
+
+    init_kwargs = {
+        "project": project,
+        "group": group,
+        "name": name,
+        "mode": mode,
+        "config": hyperparams,
+        "id": run_id,
+        "reinit": "finish_previous",
+        "settings": wandb.Settings(init_timeout=init_timeout),
+    }
+
+    run = None
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            run = wandb.init(**init_kwargs)
+            break
+        except Exception as exc:
+            last_error = exc
+            print(
+                f"W&B init failed in mode='{mode}' (attempt {attempt + 1}/{max_retries + 1}): {exc}"
+            )
+            if attempt < max_retries:
+                time.sleep(retry_sleep_s)
+
+    # If online init repeatedly fails (common on busy HPC networks), fall back to offline.
+    if run is None and mode == "online":
+        print("Falling back to W&B offline mode after online init failure.")
+        try:
+            init_kwargs["mode"] = "offline"
+            run = wandb.init(**init_kwargs)
+        except Exception as exc:
+            last_error = exc
+
+    # Final safeguard: continue training even if W&B cannot initialize.
+    if run is None:
+        print(f"W&B disabled for this run due to init failure: {last_error}")
+        return None
 
     # 2. Define custom X-axes directly on the run object
     run.define_metric("global_step")

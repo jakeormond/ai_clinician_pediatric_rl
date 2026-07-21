@@ -930,7 +930,9 @@ class CQL:
 				"actor_loss_q": actor_loss_q.item(),
 				# "actor_loss_bc": actor_loss_bc.item(),
 				"fluid_fire_prob_mean": f_p.mean().item(),
-    			"vaso_fire_prob_mean": v_p.mean().item(),
+    			"fluid_hard_fire_rate": (f_p > 0.5).float().mean().item(),
+				"vaso_fire_prob_mean": v_p.mean().item(),
+				"vaso_hard_fire_rate": (v_p > 0.5).float().mean().item(),
 				# "fluid_volume_loss": actor_dict['fluid_volume_loss'].item(),
 				# "vaso_volume_loss": actor_dict['vaso_volume_loss'].item(),
 				"fluid_mean": pi[:, 0].mean().item(),
@@ -1028,6 +1030,22 @@ class CQL:
 
 		return v0_mean, v0_sem
 
+	
+	@torch.no_grad()
+	def _stochastic_vs_deterministic_q_check(self, state, q_stoch=None, q_det=None):
+		if q_stoch is None:
+			pi_stoch, _, _ = self.actor(state, deterministic=False, hard_gate=True)
+			q_stoch = torch.min(*self.critic(state, pi_stoch))
+		if q_det is None:
+			pi_det, _, _ = self.actor(state, deterministic=True)
+			q_det = torch.min(*self.critic(state, pi_det))
+
+		return {
+			"q_stoch_mean": q_stoch.mean().item(),
+			"q_det_mean": q_det.mean().item(),
+			"q_stoch_minus_det": (q_stoch - q_det).mean().item(),
+		}
+
 
 	@torch.no_grad()
 	def _gate_incentive_diagnostic(self, state, action, tiny_dose=0.0001):
@@ -1120,6 +1138,12 @@ class CQL:
 			current_Q = torch.min(current_Q1, current_Q2)
 			
 			raw_advantage = Q_pi - current_Q	
+
+			# get stochastic pi for comparison
+			pi_stoch, _, _ = self.actor(state, deterministic=False, hard_gate=True)
+			q_stoch = torch.min(*self.critic(state, pi_stoch))
+			stoch_det_q_stats = self._stochastic_vs_deterministic_q_check(state, q_stoch=q_stoch, q_det=Q_pi)
+			losses.update(stoch_det_q_stats)
 
 			# 2. Calculate exponential weights using only the positive advantage landscape
 			# We filter the std calculation so the denominator isn't warped by huge negative outliers

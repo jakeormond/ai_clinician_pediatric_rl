@@ -1,0 +1,7 @@
+prefix=/home/jake/Documents/AI_Clinician/ai_clinician_pediatric_rl/.conda
+includedir=${prefix}/include
+
+Name: VideoProto
+Description: Video extension headers
+Version: 2.3.3
+Cflags: -I${includedir}

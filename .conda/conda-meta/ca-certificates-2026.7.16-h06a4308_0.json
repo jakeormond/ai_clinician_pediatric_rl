@@ -1,0 +1,46 @@
+{
+  "build": "h06a4308_0",
+  "build_number": 0,
+  "channel": "https://repo.anaconda.com/pkgs/main",
+  "constrains": [],
+  "depends": [],
+  "extracted_package_dir": "/home/jake/miniconda3/pkgs/ca-certificates-2026.7.16-h06a4308_0",
+  "files": [
+    "ssl/cacert.pem",
+    "ssl/cert.pem"
+  ],
+  "fn": "ca-certificates-2026.7.16-h06a4308_0.conda",
+  "license": "MPL-2.0",
+  "link": {
+    "source": "/home/jake/miniconda3/pkgs/ca-certificates-2026.7.16-h06a4308_0",
+    "type": 1
+  },
+  "md5": "49bbcd8aae08b29b691f1a444d8f9009",
+  "name": "ca-certificates",
+  "package_tarball_full_path": "/home/jake/miniconda3/pkgs/ca-certificates-2026.7.16-h06a4308_0.conda",
+  "paths_data": {
+    "paths": [
+      {
+        "_path": "ssl/cacert.pem",
+        "path_type": "hardlink",
+        "sha256": "3ff344e30b9b1ed2971044eabb438a08f2e2245ddb5f8ab1a3ad8b63ab4eaf91",
+        "sha256_in_prefix": "3ff344e30b9b1ed2971044eabb438a08f2e2245ddb5f8ab1a3ad8b63ab4eaf91",
+        "size_in_bytes": 186446
+      },
+      {
+        "_path": "ssl/cert.pem",
+        "path_type": "softlink",
+        "sha256": "3ff344e30b9b1ed2971044eabb438a08f2e2245ddb5f8ab1a3ad8b63ab4eaf91",
+        "size_in_bytes": 186446
+      }
+    ],
+    "paths_version": 1
+  },
+  "requested_spec": "None",
+  "sha256": "0592253999d0ad906a99078132fe2b1c1885ac1210c9104fd29dd23b3f7b475d",
+  "size": 108567,
+  "subdir": "linux-64",
+  "timestamp": 1784536964000,
+  "url": "https://repo.anaconda.com/pkgs/main/linux-64/ca-certificates-2026.7.16-h06a4308_0.conda",
+  "version": "2026.7.16"
+}

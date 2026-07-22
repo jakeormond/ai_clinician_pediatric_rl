@@ -1,0 +1,7 @@
+prefix=/home/jake/Documents/AI_Clinician/ai_clinician_pediatric_rl/.conda
+includedir=${prefix}/include
+ 
+Name: XineramaProto
+Description: Xinerama extension headers
+Version: 1.2.1
+Cflags: -I${includedir}

@@ -1,0 +1,130 @@
+{
+  "build": "py314h06a4308_0",
+  "build_number": 0,
+  "channel": "https://repo.anaconda.com/pkgs/main",
+  "constrains": [],
+  "depends": [
+    "python_abi 3.14.* *_cp314",
+    "python >=3.14,<3.15.0a0"
+  ],
+  "extracted_package_dir": "/home/jake/miniconda3/pkgs/decorator-5.3.1-py314h06a4308_0",
+  "files": [
+    "lib/python3.14/site-packages/decorator-5.3.1.dist-info/INSTALLER",
+    "lib/python3.14/site-packages/decorator-5.3.1.dist-info/METADATA",
+    "lib/python3.14/site-packages/decorator-5.3.1.dist-info/RECORD",
+    "lib/python3.14/site-packages/decorator-5.3.1.dist-info/REQUESTED",
+    "lib/python3.14/site-packages/decorator-5.3.1.dist-info/WHEEL",
+    "lib/python3.14/site-packages/decorator-5.3.1.dist-info/direct_url.json",
+    "lib/python3.14/site-packages/decorator-5.3.1.dist-info/licenses/LICENSE.txt",
+    "lib/python3.14/site-packages/decorator-5.3.1.dist-info/top_level.txt",
+    "lib/python3.14/site-packages/decorator/__init__.py",
+    "lib/python3.14/site-packages/decorator/__init__.pyi",
+    "lib/python3.14/site-packages/decorator/__pycache__/__init__.cpython-314.pyc",
+    "lib/python3.14/site-packages/decorator/py.typed"
+  ],
+  "fn": "decorator-5.3.1-py314h06a4308_0.conda",
+  "license": "BSD-2-Clause",
+  "link": {
+    "source": "/home/jake/miniconda3/pkgs/decorator-5.3.1-py314h06a4308_0",
+    "type": 1
+  },
+  "md5": "c7727d37b065f36085ee7deba8810949",
+  "name": "decorator",
+  "package_tarball_full_path": "/home/jake/miniconda3/pkgs/decorator-5.3.1-py314h06a4308_0.conda",
+  "paths_data": {
+    "paths": [
+      {
+        "_path": "lib/python3.14/site-packages/decorator-5.3.1.dist-info/INSTALLER",
+        "path_type": "hardlink",
+        "sha256": "d0edee15f91b406f3f99726e44eb990be6e34fd0345b52b910c568e0eef6a2a8",
+        "sha256_in_prefix": "d0edee15f91b406f3f99726e44eb990be6e34fd0345b52b910c568e0eef6a2a8",
+        "size_in_bytes": 5
+      },
+      {
+        "_path": "lib/python3.14/site-packages/decorator-5.3.1.dist-info/METADATA",
+        "path_type": "hardlink",
+        "sha256": "2133792485403bbd739e1db5960228bedbcde6d00c0acc052b27f39dbae5b5c4",
+        "sha256_in_prefix": "2133792485403bbd739e1db5960228bedbcde6d00c0acc052b27f39dbae5b5c4",
+        "size_in_bytes": 3886
+      },
+      {
+        "_path": "lib/python3.14/site-packages/decorator-5.3.1.dist-info/RECORD",
+        "path_type": "hardlink",
+        "sha256": "c51b67d556a78e6ce01560cef3656a6b50340b9029204607e129f7fa4931db96",
+        "sha256_in_prefix": "c51b67d556a78e6ce01560cef3656a6b50340b9029204607e129f7fa4931db96",
+        "size_in_bytes": 974
+      },
+      {
+        "_path": "lib/python3.14/site-packages/decorator-5.3.1.dist-info/REQUESTED",
+        "path_type": "hardlink",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sha256_in_prefix": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "size_in_bytes": 0
+      },
+      {
+        "_path": "lib/python3.14/site-packages/decorator-5.3.1.dist-info/WHEEL",
+        "path_type": "hardlink",
+        "sha256": "69e6228a0d35958183cc1812f07c565ce837b95eb51bd8a33acba9fa4f68d6c9",
+        "sha256_in_prefix": "69e6228a0d35958183cc1812f07c565ce837b95eb51bd8a33acba9fa4f68d6c9",
+        "size_in_bytes": 91
+      },
+      {
+        "_path": "lib/python3.14/site-packages/decorator-5.3.1.dist-info/direct_url.json",
+        "path_type": "hardlink",
+        "sha256": "4728e931f8d6a724c5c35ac27f965b6763449d9d367dc47510734a7fbb2274f1",
+        "sha256_in_prefix": "4728e931f8d6a724c5c35ac27f965b6763449d9d367dc47510734a7fbb2274f1",
+        "size_in_bytes": 95
+      },
+      {
+        "_path": "lib/python3.14/site-packages/decorator-5.3.1.dist-info/licenses/LICENSE.txt",
+        "path_type": "hardlink",
+        "sha256": "bd12cc51405c10872497c10ca21601f1d4abc50496595cc89e89ab5dad24fb62",
+        "sha256_in_prefix": "bd12cc51405c10872497c10ca21601f1d4abc50496595cc89e89ab5dad24fb62",
+        "size_in_bytes": 1308
+      },
+      {
+        "_path": "lib/python3.14/site-packages/decorator-5.3.1.dist-info/top_level.txt",
+        "path_type": "hardlink",
+        "sha256": "2a7e9e423a3cddcb56c5757204c398b74fd8a634630739ca615b8dcae0bf0d22",
+        "sha256_in_prefix": "2a7e9e423a3cddcb56c5757204c398b74fd8a634630739ca615b8dcae0bf0d22",
+        "size_in_bytes": 10
+      },
+      {
+        "_path": "lib/python3.14/site-packages/decorator/__init__.py",
+        "path_type": "hardlink",
+        "sha256": "47c88707c658cb85d377454fa9254c38b441ee476e5308332a469e2ed2439983",
+        "sha256_in_prefix": "47c88707c658cb85d377454fa9254c38b441ee476e5308332a469e2ed2439983",
+        "size_in_bytes": 17366
+      },
+      {
+        "_path": "lib/python3.14/site-packages/decorator/__init__.pyi",
+        "path_type": "hardlink",
+        "sha256": "5839c4b315d31afa532a6b00a0969548b6e75914dec577802cbe669e25a2ecef",
+        "sha256_in_prefix": "5839c4b315d31afa532a6b00a0969548b6e75914dec577802cbe669e25a2ecef",
+        "size_in_bytes": 2896
+      },
+      {
+        "_path": "lib/python3.14/site-packages/decorator/__pycache__/__init__.cpython-314.pyc",
+        "path_type": "hardlink",
+        "sha256": "9e942b0e7192c0a1f8d6fb6df371fa325ef3f0cae83d87aec5187badc1e441cc",
+        "sha256_in_prefix": "9e942b0e7192c0a1f8d6fb6df371fa325ef3f0cae83d87aec5187badc1e441cc",
+        "size_in_bytes": 23083
+      },
+      {
+        "_path": "lib/python3.14/site-packages/decorator/py.typed",
+        "path_type": "hardlink",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sha256_in_prefix": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "size_in_bytes": 0
+      }
+    ],
+    "paths_version": 1
+  },
+  "requested_spec": "None",
+  "sha256": "d2f6814ccb86e753f5f43a6cf52afd22a870f8f74f0c9ff67f5fff4f6ea9079a",
+  "size": 44514,
+  "subdir": "linux-64",
+  "timestamp": 1781691337000,
+  "url": "https://repo.anaconda.com/pkgs/main/linux-64/decorator-5.3.1-py314h06a4308_0.conda",
+  "version": "5.3.1"
+}

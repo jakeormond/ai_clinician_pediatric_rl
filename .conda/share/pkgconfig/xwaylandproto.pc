@@ -1,0 +1,7 @@
+prefix=/home/jake/Documents/AI_Clinician/ai_clinician_pediatric_rl/.conda
+includedir=${prefix}/include
+
+Name: XwaylandProto
+Description: Xwayland extension headers
+Version: 1.0
+Cflags: -I${includedir}

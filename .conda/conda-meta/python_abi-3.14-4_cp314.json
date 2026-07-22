@@ -1,0 +1,31 @@
+{
+  "build": "4_cp314",
+  "build_number": 4,
+  "channel": "https://repo.anaconda.com/pkgs/main",
+  "constrains": [
+    "python 3.14.* *_cp314"
+  ],
+  "depends": [],
+  "extracted_package_dir": "/home/jake/miniconda3/pkgs/python_abi-3.14-4_cp314",
+  "files": [],
+  "fn": "python_abi-3.14-4_cp314.conda",
+  "license": "BSD-3-Clause",
+  "link": {
+    "source": "/home/jake/miniconda3/pkgs/python_abi-3.14-4_cp314",
+    "type": 1
+  },
+  "md5": "7c0e7a02685af1392e14749406dd94b9",
+  "name": "python_abi",
+  "package_tarball_full_path": "/home/jake/miniconda3/pkgs/python_abi-3.14-4_cp314.conda",
+  "paths_data": {
+    "paths": [],
+    "paths_version": 1
+  },
+  "requested_spec": "None",
+  "sha256": "27eec0a4abc85d1e613e83359dc461c93804434bf4851d97be54279130d766d3",
+  "size": 5530,
+  "subdir": "linux-64",
+  "timestamp": 1782805964000,
+  "url": "https://repo.anaconda.com/pkgs/main/linux-64/python_abi-3.14-4_cp314.conda",
+  "version": "3.14"
+}

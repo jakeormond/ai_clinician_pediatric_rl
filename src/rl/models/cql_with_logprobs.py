@@ -77,8 +77,8 @@ class Actor(nn.Module):
  
 		for layer in [self.fluid_log_std, self.vaso_log_std]:
 			nn.init.zeros_(layer.weight)
-			layer.bias.data.fill_(-1.0)   # inside (log_std_min, log_std_max), unlike the original -2.25 bug
- 
+			layer.bias.data.fill_(-1.0)   # -1.0 gives std ≈ 0.37, which is a reasonable starting point for exploration
+
 		# match known base rates — same values as the BC actor
 		nn.init.zeros_(self.fluid_gate.weight)
 		self.fluid_gate.bias.data.fill_(0.78)    # sigmoid(0.78) ≈ 0.686 fluid nonzero rate
@@ -115,31 +115,36 @@ class Actor(nn.Module):
 		relaxation; hard=True if you specifically need a binary-valued
 		action while still training through it (e.g. matching a hard
 		zero_threshold in the critic's expected input distribution).
+
+		NOTE THAT CURRENTLY HARD IS NEVER SET TO FALSE IN TRAINING
 		"""
 		u = torch.rand_like(gate_logit).clamp(1e-6, 1 - 1e-6)
 		gumbel_noise = torch.log(u) - torch.log(1 - u)
+
+		# with temperature low enough, this effectively acts like a bernoulli sample, producing vanishing gradients
 		soft = torch.sigmoid((gate_logit + gumbel_noise) / self.gate_temperature)
  
 		if not hard:
 			return soft
  
-		hard_sample = (soft > 0.5).float()
-		# straight-through: forward uses hard_sample, backward uses soft's gradient
+		hard_sample = (soft > 0.5).float() # PyTorch has no defined gradient for >, so this contributes exactly 0 gradient.
+		# straight-through: forward uses hard_sample, backward uses soft's gradient, even though it doesn't contribute to 
+		# the forward pass. This is a standard trick for discrete relaxations.
 		return hard_sample + soft - soft.detach()
 	
-
 
 	def forward(self, state: torch.Tensor, deterministic: bool = False,
 			 return_dist=False, sigmoid_correction=True, hard_gate: bool = False):
 		f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std = self._dists(state)
-		f_p = torch.sigmoid(f_gate_logit)
+		f_p = torch.sigmoid(f_gate_logit) 
 		v_p = torch.sigmoid(v_gate_logit)
  
-		if not deterministic:
+		if not deterministic: # training path: sample from the distribution
 			# differentiable gate sample — gradient flows into fluid_gate/vaso_gate
-			f_fire = self._relaxed_gate_sample(f_gate_logit, hard=hard_gate)
-			v_fire = self._relaxed_gate_sample(v_gate_logit, hard=hard_gate)
- 
+			f_fire = self._relaxed_gate_sample(f_gate_logit, hard=hard_gate) 
+			v_fire = self._relaxed_gate_sample(v_gate_logit, hard=hard_gate) 
+
+			# create distributions for the magnitude component using mean and std, then sample from them
 			f_dist = torch.distributions.Normal(f_raw_mean, f_std)
 			v_dist = torch.distributions.Normal(v_raw_mean, v_std)
 			f_raw = f_dist.rsample()
@@ -701,6 +706,7 @@ class CQL:
 		# scaling is just 1 for now, no need to adjust
 		reward = reward * self.reward_scaling
 		
+		########################## CRITIC TRAINING ##########################
 		# compute the target Q value
 		treat_survival_as_truncated = True # i.e. survival is not terminal. 
 		if treat_survival_as_truncated:
@@ -726,19 +732,18 @@ class CQL:
 			current_Q1, current_Q2 = self.critic(state, action)
 
 		# 2. CQL CONSERVATIVE LOSS - sample random actions to penalize them
+		# We are penalize 4 types of actions:
+		# 1. random actions created by shuffling the batch actions
+		# 2. current actions sampled from the actor
+		# 3. next actions sampled from the actor for the next states
+		# 4. actions with vasopressor dose sampled from a uniform distribution between 0.01 and 1, 
+		# with fluid dose equal to 0. This is because vaso never given without fluid.
 		batch_size = state.shape[0]
 
-		with torch.no_grad():
-			# NOT USING UNIFORM RANDOM ACTIONS FOR NOW, USING SHUFFLED BATCH ACTIONS INSTEAD
-			# Sample random actions uniformly [0, 1]
-			# random_actions = torch.FloatTensor(batch_size, self.num_samples, self.dose_actions).uniform_(0, 1).to(self.device)
-			
-			# shuffle actions to create random actions from the batch
-			random_indices = torch.randint(0, batch_size, (batch_size * self.num_samples,), device=self.device)
-			random_actions = action[random_indices].view(batch_size, self.num_samples, -1)
+		random_indices = torch.randint(0, batch_size, (batch_size * self.num_samples,), device=self.device)
+		random_actions = action[random_indices].view(batch_size, self.num_samples, -1)
 
-			# Sample current actions from our Stochastic Actor
-			# We sample multiple times to get a good estimate of the current policy's Q-values
+		with torch.no_grad():
 			curr_actions, curr_log_probs, _ = self.actor(
 				state.repeat_interleave(self.num_samples, dim=0), hard_gate=True
 			)
@@ -752,15 +757,13 @@ class CQL:
 			next_actions = next_actions.view(batch_size, self.num_samples, -1)
 			next_log_probs = next_log_probs.view(batch_size, self.num_samples).clamp(min=-10, max=0)
 
-			# create actions with vasopressor dose sampled from a uniform distribution between 0.01 and 1,
-			# with fluid dose equal to 0. This is because vaso never given without fluid.
-			zero_fluid_actions = torch.zeros(batch_size, self.num_samples, 1, device=self.device)
-			vaso_uniform_actions = torch.FloatTensor(batch_size, self.num_samples, 1).uniform_(0.01, 1.0).to(self.device)
-			vaso_only_actions = torch.cat([zero_fluid_actions, vaso_uniform_actions], dim=-1)
+		# create actions with vasopressor dose sampled from a uniform distribution between 0.01 and 1,
+		# with fluid dose equal to 0. This is because vaso never given without fluid.
+		zero_fluid_actions = torch.zeros(batch_size, self.num_samples, 1, device=self.device)
+		vaso_uniform_actions = torch.FloatTensor(batch_size, self.num_samples, 1).uniform_(0.01, 1.0).to(self.device)
+		vaso_only_actions = torch.cat([zero_fluid_actions, vaso_uniform_actions], dim=-1)
 
-
-		# Evaluate these actions in the Critic
-		# (Using a helper or flattening/unflattening)
+		# flatten samples and get q values for each type of action
 		def get_q_for_samples(s, a_samples, critic_net):
 			# s: [batch, dim], a_samples: [batch, num_samples, act_dim]
 			s_rep = s.unsqueeze(1).repeat(1, self.num_samples, 1).view(-1, s.shape[-1])
@@ -781,7 +784,7 @@ class CQL:
 			q_gap2 = q2_curr.mean() - current_Q2.mean()
 		q_gap = (q_gap1 + q_gap2) / 2.0
 			
-		# 3. CONSTRUCT THE CQL PENALTY (LogSumExp)
+		# combine all the q values for the logsumexp calculation
 		cat_q1 = torch.cat([
 			q1_rand, 
 			q1_curr, 
@@ -797,22 +800,22 @@ class CQL:
 
 		num_samples = cat_q1.shape[1]
 
+		# logsumexp acts as a soft maximum, with a smooth, differentiable contribution from every sample,
+		# temperature-scaled to control the "softness" of the maximum. Lower temp = sharper max, higher temp = smoother average.
+		# As max sharpens, gradient concentrates on the highest Q values
 		scaled_lse1 = torch.logsumexp(cat_q1 / self.temp, dim=1).mean() * self.temp
 		scaled_lse2 = torch.logsumexp(cat_q2 / self.temp, dim=1).mean() * self.temp
 
-		# 3. THE CRITICAL FIX: Subtract the temperature-scaled sample density offset
-		# This forces the baseline penalty of a perfectly flat Q-distribution to equal 0.0
+		# Subtract the temperature-scaled sample density offset because logsumexp is biased upwards by 
+		# the number of samples. Important so cql_alpha has consistnt meaning across different batch sizes and numbers of samples.
 		cql_offset = self.temp * np.log(num_samples)
-
 		cql_loss1 = (scaled_lse1 - cql_offset) - current_Q1.mean()
 		cql_loss2 = (scaled_lse2 - cql_offset) - current_Q2.mean()
 
-		# 4. COMBINED CRITIC LOSS
+		# combined critic loss from Bellman and CQL
 		bellman_loss = (F.smooth_l1_loss(current_Q1, target_Q) + F.smooth_l1_loss(current_Q2, target_Q)) / 2.0
-		cql_loss = cql_loss1 + cql_loss2
-	
+		cql_loss = cql_loss1 + cql_loss2	
 		current_alpha = self.cql_alpha  # Use the fixed cql_alpha value for now
-
 		critic_loss = bellman_loss + current_alpha * cql_loss			
 					
 		losses = {
@@ -823,14 +826,15 @@ class CQL:
 			"q_gap": q_gap.item()
 		}
 				
-		# Optimize the critic
+		# OPTIMIZE CRITIC
 		self.critic_optimizer.zero_grad()
 		critic_loss.backward()
 
 		# capture gradient norms
 		total_critic_grad_norm = self._get_grad_norm(self.critic)
 		grad_norm = {"critic_grad_norm": total_critic_grad_norm}
-		
+
+		# gradient clipping
 		if self.grad_clip is not None:
 			# determine whether to clip gradients based on grad_clip value
 			grad_norm['critic_was_clipped'] = 1.0 if (self.grad_clip and total_critic_grad_norm > self.grad_clip) else 0.0
@@ -851,13 +855,15 @@ class CQL:
 		# log_dict.update(lr_critic=self.critic_optimizer.param_groups[0]['lr'])
 		losses.update(lr_critic=self.critic_optimizer.param_groups[0]['lr'])
 
-		# update networks
+		# update critic target networks with soft update
 		with torch.no_grad():
 			for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
 				target_param.mul_(1.0 - self.tau)
 				target_param.add_(param.data * self.tau)
 
-		# Delayed policy updates
+
+		##################### ACTOR TRAINING #####################
+		# Delayed policy updates, as actor is chasing a moving target (i.e. the critic). 
 		if self.total_it % self.policy_freq != 0:
 			self.actor.eval() # Dropout INACTIVE for the network we are evaluating
 			with torch.no_grad():

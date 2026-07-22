@@ -1,0 +1,7 @@
+prefix=/home/jake/Documents/AI_Clinician/ai_clinician_pediatric_rl/.conda
+includedir=${prefix}/include
+ 
+Name: DRI2Proto
+Description: DRI2 extension headers
+Version: 2.8
+Cflags: -I${includedir}

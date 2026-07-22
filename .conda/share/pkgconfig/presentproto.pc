@@ -1,0 +1,7 @@
+prefix=/home/jake/Documents/AI_Clinician/ai_clinician_pediatric_rl/.conda
+includedir=${prefix}/include
+ 
+Name: PresentProto
+Description: Present extension headers
+Version: 1.4
+Cflags: -I${includedir}

@@ -284,7 +284,7 @@ class ConfigManager:
         # set reward path if reward_type is not "none"
         if self.experiment_type != "supervised_learning": # supervised learning is for generating rewards, so doesn't use them
             if self._data_config['use_reward']:
-                reward_type = self._data_config['reward_type']
+                # reward_type = self._data_config['reward_type']
                 # reward_paths_config_path = self.config_dir / "rewards" / "reward_paths.yaml"
                 # reward_path = self.data_config['reward_path']
                 reward_path = os.path.join(

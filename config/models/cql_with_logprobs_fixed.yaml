@@ -45,10 +45,10 @@
     hidden_dim: 64 # 256 # [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
 
     # Early stopping parameters (fixed for all combinations)
-    early_stopping_flag: False  # Whether to use early stopping
-    patience: 3        # Stop if no improvement for 15 evaluations
+    early_stopping_flag: True  # Whether to use early stopping
+    patience: 15        # Stop if no improvement for 15 evaluations
     eval_freq: 1       # Evaluate every 20 epochs  
-    min_delta: 0.0001   # Minimum improvement threshold
+    min_delta: 0.01   # Minimum improvement threshold
 
     # evaluation parameters
     monitor_v0: True  # Whether to monitor V0 during training - specific to TD3-BC

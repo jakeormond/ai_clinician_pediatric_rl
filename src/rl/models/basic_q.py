@@ -301,6 +301,7 @@ class Q_Learner(object):
         tau: float = 0.005,
         grad_clip: float = 1.0,
         reward_scaling: float = 1.0,
+        reward_type: str = None,  # can be 'terminal' or 'health_score'
         scheduler: torch.optim.lr_scheduler._LRScheduler = None,
         evaluator=False
     ):
@@ -309,6 +310,7 @@ class Q_Learner(object):
         self.device = device
 
         self.critic = critic.to(self.device)
+        self.reward_type = reward_type  # can be 'terminal' or 'health_score'
         
         if not evaluator:
             self.discount = discount
@@ -384,19 +386,23 @@ class Q_Learner(object):
 
         reward = reward * self.reward_scaling
 
-        # compute the target Q value
-        treat_survival_as_truncated = True
-        if treat_survival_as_truncated:
-            # make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
-            done = done * mortality
-        
-        not_done = 1 - done
+        if self.reward_type != 'terminal': # using monte carlo returns  
+            # compute the target Q value
+            treat_survival_as_truncated = True
+            if treat_survival_as_truncated:
+                # make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
+                done = done * mortality
+            
+            not_done = 1 - done
         
         self.critic.train()          # Dropout ACTIVE for the network we are updating
         self.critic_target.eval()
         
         with torch.no_grad():
-            target_Q = self.target_q(reward, not_done, next_state, next_action)
+            if self.reward_type == 'terminal': # using monte carlo returns
+                target_Q = reward
+            else: # using bootstrapped returns
+                target_Q = self.target_q(reward, not_done, next_state, next_action)
 
         # Get current Q estimates
         current_Q1, current_Q2 = self.critic(state, action)
@@ -463,7 +469,10 @@ class Q_Learner(object):
 
         with torch.no_grad():
             # compute the target Q value
-            target_Q = self.target_q(reward, not_done, next_state, next_action)
+            if self.reward_type == 'terminal': # using monte carlo returns
+                target_Q = reward
+            else: # using bootstrapped returns  
+                target_Q = self.target_q(reward, not_done, next_state, next_action)
 
             # Get current Q estimates
             current_Q1, current_Q2 = self.critic(state, action)
@@ -577,6 +586,7 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
         tau=hyperparams.get('tau', config_manager.training_config['tau']),  
         grad_clip=hyperparams['grad_clip'], 
         reward_scaling=hyperparams.get('reward_scaling', 1.0),
+        reward_type=hyperparams['reward_type'],
         scheduler=critic_scheduler
     )
 

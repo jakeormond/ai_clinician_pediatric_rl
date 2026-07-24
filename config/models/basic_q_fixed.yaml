@@ -4,7 +4,7 @@
     name: "basic_q"
     device: "cuda"  # Device (cuda or cpu)
     
-    tuning: True
+    tuning: False
 
     window_length: 72 # 72 hours, same as dynamic deephit - we want to use same state representation, but we can simply use
     # transformer ouput from dynamic deephit - set by use_raw_states
@@ -15,8 +15,9 @@
     # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
     
+    reward_type: "terminal" # "health_score"
     discount: 0.975  # Discount factor
-    terminal_discount: 0.99 # discount for terminal health-score-based rewards
+    terminal_discount: 0.998 # discount for terminal health-score-based rewards
 
     # reward scaling
     health_score_hourly_change_clip: 100.
@@ -25,12 +26,12 @@
     total_health_score_scale: 1  # Scaling factor for total health score component of reward
     potential_based_reward_shaping: False  # Whether to use potential-based reward shaping
     # terminal_health_score_reward: 2.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
-    terminal_reward_scale: 100.  # the scale of terminal reward 
+    terminal_reward_scale: 10.  # the scale of terminal reward 
     
        
     # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
     # max_traj_len: 72  # Max trajectory length - probably need to change this - in data config
-    learning_rate: 1.e-3 # 1e-4           #      [1e-6]  # Learning rates to try
+    learning_rate: 1.e-5 # 1e-4           #      [1e-6]  # Learning rates to try
     dropout: .2
     tau: 0.001 # Target network update rate
     weight_decay: 1.e-4 # L2 regularization strength
@@ -39,7 +40,8 @@
     hidden_dim: 64  # Hidden dimension for all networks [128, 256, 256]] 
     
     # Early stopping parameters (fixed for all combinations)
-    patience: 200       # Stop if no improvement for 15 evaluations
+    early_stopping_flag: True  # Whether to use early stopping
+    patience: 15       # Stop if no improvement for 15 evaluations
     eval_freq: 1        # Evaluate every 20 epochs  
     min_delta: 0.0001   # Minimum improvement threshold
 

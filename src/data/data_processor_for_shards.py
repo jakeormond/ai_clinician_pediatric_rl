@@ -378,12 +378,14 @@ class ShardProcessor:
             
             mc_reward = self.compute_monte_carlo_terminal_rewards(index_ptr, mortality, terminal_reward_scale, terminal_discount)
             self.mc_reward = mc_reward.astype(np.float32)
+            median_reward = np.median(self.mc_reward)
+            return median_reward
 
         else: 
             raise ValueError(f"Invalid reward type: {self.reward_type}. Supported reward types are: 'health_score' and 'time_to_event'.")
 
 
-    def compute_monte_carlo_terminal_rewards(index_ptr, mortality, terminal_reward_scale, terminal_discount):
+    def compute_monte_carlo_terminal_rewards(self, index_ptr, mortality, terminal_reward_scale, terminal_discount):
         """
         Computes a discounted Monte Carlo terminal reward for every timestep
         in every trajectory: target_reward[t] = terminal_discount^(steps_remaining) * signed_outcome
@@ -508,12 +510,13 @@ class ShardProcessor:
       
         self.rl_dataset['next_actions'] = actions[next_state_ind, :]
         
-        dones = torch.tensor(np.zeros_like(self.dynamic_deephit_predictions["reward"]), dtype=torch.float32)
+        # dones = torch.tensor(np.zeros_like(self.dynamic_deephit_predictions["reward"]), dtype=torch.float32)
+        dones = torch.tensor(np.zeros_like(model_outputs[:, 0]), dtype=torch.float32)
         dones[trajectory_end_inds] = 1.0  # mark end of trajectories
         self.rl_dataset['dones'] = dones[next_state_ind]  # only keep dones for the next states, since the current states will never be terminal in our setting (since we exclude end of trajectory timesteps)
         
         mortality = self.dynamic_deephit_dataset['event']
-        mortality_full = np.zeros_like(self.dynamic_deephit_predictions["reward"], dtype=np.float32)
+        mortality_full = np.zeros_like(model_outputs[:, 0], dtype=np.float32)
         # make full mortality trajectoires == 1
         mortality_start_inds = trajectory_start_inds[mortality == 1]
         mortality_end_inds = trajectory_end_inds[mortality == 1]

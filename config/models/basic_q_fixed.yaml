@@ -4,7 +4,7 @@
     name: "basic_q"
     device: "cuda"  # Device (cuda or cpu)
     
-    tuning: False
+    tuning: True
 
     window_length: 72 # 72 hours, same as dynamic deephit - we want to use same state representation, but we can simply use
     # transformer ouput from dynamic deephit - set by use_raw_states
@@ -16,6 +16,18 @@
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
     
     discount: 0.975  # Discount factor
+    terminal_discount: 0.99 # discount for terminal health-score-based rewards
+
+    # reward scaling
+    health_score_hourly_change_clip: 100.
+    health_score_scale: 0.  # Scaling factor for health score component of reward
+    health_score_hourly_change_scale: 1.  # Scaling factor for hourly change component of reward
+    total_health_score_scale: 1  # Scaling factor for total health score component of reward
+    potential_based_reward_shaping: False  # Whether to use potential-based reward shaping
+    # terminal_health_score_reward: 2.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
+    terminal_reward_scale: 100.  # the scale of terminal reward 
+    
+       
     # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
     # max_traj_len: 72  # Max trajectory length - probably need to change this - in data config
     learning_rate: 1.e-3 # 1e-4           #      [1e-6]  # Learning rates to try
@@ -47,14 +59,6 @@
 
     use_compressed_latents: False  # Whether to use compressed latents as states instead of raw features or transformer output - specific to basic Q model, not used for TD3-BC or CQL
 
-    # reward scaling
-    # reward_scaling: 1.5  # Scaling factor for rewards
-    health_score_hourly_change_clip: 100.
-    health_score_scale: 0.  # Scaling factor for health score component of reward
-    health_score_hourly_change_scale: 1.  # Scaling factor for hourly change component of reward
-    total_health_score_scale: 1  # Scaling factor for total health score component of reward
-    potential_based_reward_shaping: False  # Whether to use potential-based reward shaping
-    terminal_health_score_reward: 2.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
 
     # n-step returns
     n_step: 0  # Number of steps to use for n-step returns (set to 1 or None to disable n-step returns)

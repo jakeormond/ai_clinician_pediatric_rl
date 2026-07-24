@@ -26,7 +26,7 @@ proportion_w_data: 0.80
 
 # # reward is stored in the experiments dir, and the path is specified in config/rewards/reward_paths.yaml
 use_reward: True
-reward_type: "health_score" # if no reward, set to "none"
+# reward_type: "health_score" # if no reward, set to "none"
 
 use_behavior_cloning_latents: False
 

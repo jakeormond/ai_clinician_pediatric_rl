@@ -250,15 +250,17 @@ class ShardProcessor:
 
     
     def process_reward(self, config_manager, hyperparams, health_score_median=None):
-        reward_type = config_manager.data_config['reward_type']
-        if reward_type == 'health_score':
+        self.reward_type = config_manager.training_config['reward_type']
+        index_ptr = self.dynamic_deephit_dataset['index_ptr']
+        mortality = self.dynamic_deephit_dataset['event']  # 1 for mortality, 0 for survival
+
+        if self.reward_type == 'health_score':
             """ 
             Health score and hourly change are scaled equally and then combined to get the final reward, 
             which is then scaled again to keep gradients in an ideal range.
             """
             # score is 0 to 100
             health_score = self.dynamic_deephit_predictions['health_score'] 
-            index_ptr = self.dynamic_deephit_dataset['index_ptr']
 
             # get hourly_health_change            
             if hyperparams['potential_based_reward_shaping']: # we apply discount to the next state's health score, so we need to shift the hourly health change by one timestep to align with the current state
@@ -368,10 +370,71 @@ class ShardProcessor:
             self.dynamic_deephit_predictions['reward'] = health_score_total.astype(np.float32)                                         
         
             return health_score_median
-        
+
+        elif self.reward_type == 'terminal':
+            # process terminal rewards monte carlo style
+            terminal_reward_scale = hyperparams['terminal_reward_scale']
+            terminal_discount = hyperparams['terminal_discount']
+            
+            mc_reward = self.compute_monte_carlo_terminal_rewards(index_ptr, mortality, terminal_reward_scale, terminal_discount)
+            self.mc_reward = mc_reward.astype(np.float32)
+
         else: 
-            raise ValueError(f"Invalid reward type: {reward_type}. Supported reward types are: 'health_score' and 'time_to_event'.")
-    
+            raise ValueError(f"Invalid reward type: {self.reward_type}. Supported reward types are: 'health_score' and 'time_to_event'.")
+
+
+    def compute_monte_carlo_terminal_rewards(index_ptr, mortality, terminal_reward_scale, terminal_discount):
+        """
+        Computes a discounted Monte Carlo terminal reward for every timestep
+        in every trajectory: target_reward[t] = terminal_discount^(steps_remaining) * signed_outcome
+
+        where steps_remaining is the number of steps from t to the trajectory's
+        final timestep, and signed_outcome is +terminal_reward_scale for
+        discharge (mortality=0) or -terminal_reward_scale for death (mortality=1).
+
+        Parameters
+        ----------
+        index_ptr : array of shape (n_trajectories + 1,)
+            index_ptr[i] is the start index of trajectory i in the flat
+            timestep arrays; index_ptr[i+1] is one-past-the-end (standard
+            CSR-style pointer convention).
+        mortality : array of shape (n_trajectories,)
+            1 if trajectory i ends in mortality, 0 if discharge.
+        terminal_reward_scale : float
+            Magnitude of the terminal reward (sign applied based on mortality).
+        terminal_discount : float
+            Discount factor used ONLY for this MC terminal-reward computation —
+            keep this separate from whatever discount your intermediate
+            health-score reward model uses.
+
+        Returns
+        -------
+        mc_reward : array of shape (n_timesteps,)
+            Flat array, same length/ordering as your existing per-timestep
+            arrays (state, action, etc.), giving the discounted terminal
+            reward target for each timestep.
+        """
+        n_trajectories = len(index_ptr) - 1
+        n_timesteps = index_ptr[-1]
+        mc_reward = np.zeros(n_timesteps, dtype=np.float64)
+
+        signed_outcome = np.where(mortality == 1, -terminal_reward_scale, terminal_reward_scale)
+
+        for i in range(n_trajectories):
+            start = index_ptr[i]
+            end = index_ptr[i + 1]  # one-past-the-end
+            traj_len = end - start
+
+            # steps_remaining[t] = distance from timestep t to the FINAL
+            # timestep of this trajectory (0 at the last step, traj_len-1 at the first)
+            steps_remaining = np.arange(traj_len - 1, -1, -1)
+
+            discounts = terminal_discount ** steps_remaining
+            mc_reward[start:end] = discounts * signed_outcome[i]
+
+        return mc_reward   
+
+
     def create_rl_dataset(
             self, states="model_outputs", 
             scaler=None, 
@@ -434,7 +497,14 @@ class ShardProcessor:
         actions = torch.tensor(self.dynamic_deephit_dataset["trajectories"][:, action_ind], dtype=torch.float32)
         self.rl_dataset['actions'] = actions[state_ind, :]
 
-        self.rl_dataset['rewards'] = torch.tensor(self.dynamic_deephit_predictions["reward"][state_ind], dtype=torch.float32)
+        if self.reward_type == 'health_score':
+            print("Using health_score reward type")
+            self.rl_dataset['rewards'] = torch.tensor(self.dynamic_deephit_predictions["reward"][state_ind], dtype=torch.float32)
+        elif self.reward_type == 'terminal':
+            print("Using terminal reward type")
+            self.rl_dataset['rewards'] = torch.tensor(self.mc_reward[state_ind+1], dtype=torch.float32) # we use +1 because we want last state to be full reward
+        else:
+            raise ValueError(f"Invalid reward type: {self.reward_type}. Supported reward types are: 'health_score' and 'terminal'.")
       
         self.rl_dataset['next_actions'] = actions[next_state_ind, :]
         
@@ -458,6 +528,8 @@ class ShardProcessor:
         if n_step <= 1:
             return scaler
 
+
+        #################### NOT CURRENTLY USED #####################
         # After computing states, actions, rewards, dones — add n-step computation
         raw_rewards = self.dynamic_deephit_predictions["reward"]  # full array before indexing
 

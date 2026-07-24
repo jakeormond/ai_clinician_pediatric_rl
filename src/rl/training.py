@@ -598,6 +598,32 @@ def is_stably_converged(loss_history, loss_type="v_loss", split="val", burn_in=1
     return rel_variability < rel_tol
 
 
+def build_zero_occupancy_action_pool(actions, min_count=1):
+    """
+    Identifies action-space bins with near-zero occupancy in the dataset,
+    and returns their bounds so we can sample actions uniformly within
+    each unsupported bin. joint_counts: (n_fluid_bins, n_vaso_bins) array.
+
+    Currently hardcoded to 2D action space (fluid, vaso), bins each into 
+    20 bins, so joint_counts is a 20x20 array. The function returns a list of tuples,
+
+    """
+
+    n_bins = 20
+    joint_counts, fluid_edges, vaso_edges = np.histogram2d(actions[:, 0], actions[:, 1], bins=n_bins)   
+
+    zero_bins = [] # list of (f_lo, f_hi, v_lo, v_hi)
+    for i in range(joint_counts.shape[0]):
+        for j in range(joint_counts.shape[1]):
+            if joint_counts[i, j] < min_count:
+                zero_bins.append((
+                    fluid_edges[i], fluid_edges[i + 1],
+                    vaso_edges[j], vaso_edges[j + 1],
+                ))
+
+    return zero_bins
+
+
 def train_with_hyperparameters(
         train_processor, 
         val_processor, 
@@ -638,6 +664,11 @@ def train_with_hyperparameters(
     )
     # add ratio_of_fluid_to_vaso to config_manager for actor loss
     actions = train_processor.rl_dataset["actions"]
+
+    # get zero_occupancy_action_pool
+    zero_bins = build_zero_occupancy_action_pool(actions, min_count=1)
+    zero_bins_tensor = torch.tensor(zero_bins, dtype=torch.float32)
+
     ratio_of_fluid_to_vaso = (torch.sum(actions[:, 0]) / (torch.sum(actions[:, 1]) + 1e-8)).item()  # avoid division by zero
     config_manager.training_config['ratio_of_fluid_to_vaso'] = ratio_of_fluid_to_vaso
 
@@ -660,6 +691,7 @@ def train_with_hyperparameters(
     else:    
         # create trainer
         trainer = create_trainer(train_processor, hyperparams, config_manager)
+        trainer.zero_occupancy_action_pool = zero_bins_tensor.to(trainer.device)  # Assign the zero occupancy action pool to the trainer
 
     # create sarsa_evaluator if model_type is not basic_q, since we want to evaluate the advantage of the learned policy compared to the clinician policy during training
     if config_manager.model_type != "basic_q" and config_manager.model_type != "fqe":

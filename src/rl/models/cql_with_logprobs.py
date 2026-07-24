@@ -678,6 +678,22 @@ class CQL:
 			return target_Q
 
 
+	def sample_zero_occupancy_actions(self, batch_size, num_samples):
+		"""
+		For each of batch_size*num_samples draws, pick a random zero-occupancy
+		bin and sample an action uniformly within its bounds.
+		"""
+		n_bins = self.zero_occupancy_action_pool.shape[0]
+		bin_idx = torch.randint(0, n_bins, (batch_size, num_samples), device=self.device)
+		bins = self.zero_occupancy_action_pool[bin_idx]  # (batch, num_samples, 4)
+
+		f_lo, f_hi, v_lo, v_hi = bins[..., 0], bins[..., 1], bins[..., 2], bins[..., 3]
+		f_sample = f_lo + torch.rand_like(f_lo) * (f_hi - f_lo)
+		v_sample = v_lo + torch.rand_like(v_lo) * (v_hi - v_lo)
+
+		return torch.stack([f_sample, v_sample], dim=-1)  # (batch, num_samples, 2)
+
+
 	def train(self, batch: TensorBatch) -> Tuple[Dict[str, float], Dict[str, float]]:
 		self.total_it += 1
 
@@ -763,6 +779,9 @@ class CQL:
 		vaso_uniform_actions = torch.FloatTensor(batch_size, self.num_samples, 1).uniform_(0.01, 1.0).to(self.device)
 		vaso_only_actions = torch.cat([zero_fluid_actions, vaso_uniform_actions], dim=-1)
 
+		# zero_occupancy_actions
+		zero_occupancy_actions = self.sample_zero_occupancy_actions(batch_size, self.num_samples)
+
 		# flatten samples and get q values for each type of action
 		def get_q_for_samples(s, a_samples, critic_net):
 			# s: [batch, dim], a_samples: [batch, num_samples, act_dim]
@@ -775,6 +794,7 @@ class CQL:
 		q1_curr, q2_curr = get_q_for_samples(state, curr_actions, self.critic)
 		q1_next, q2_next = get_q_for_samples(next_state, next_actions, self.critic) 
 		q1_vaso_only, q2_vaso_only = get_q_for_samples(state, vaso_only_actions, self.critic)
+		q1_zero_occupancy, q2_zero_occupancy = get_q_for_samples(state, zero_occupancy_actions, self.critic)
 
 		# Inside the training loop, after calculating q1_rand, q1_curr, etc.
 		with torch.no_grad():
@@ -789,13 +809,15 @@ class CQL:
 			q1_rand, 
 			q1_curr, 
 			q1_next,
-			q1_vaso_only
+			q1_vaso_only,
+			q1_zero_occupancy
 		], dim=1)
 		cat_q2 = torch.cat([
 			q2_rand, 
 			q2_curr, 
 			q2_next,
-			q2_vaso_only
+			q2_vaso_only,
+			q2_zero_occupancy
 		], dim=1)
 
 		num_samples = cat_q1.shape[1]

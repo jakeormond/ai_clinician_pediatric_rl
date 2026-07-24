@@ -845,7 +845,12 @@ class CQL:
 			"cql_loss": cql_loss.item(),
 			"current_alpha": current_alpha,
 			"critic_loss": critic_loss.item(), 
-			"q_gap": q_gap.item()
+			"q_gap": q_gap.item(),
+			"q_rand": np.mean([q1_rand.mean().item(), q2_rand.mean().item()]),
+			"q_curr": np.mean([q1_curr.mean().item(), q2_curr.mean().item()]),
+			"q_next": np.mean([q1_next.mean().item(), q2_next.mean().item()]),
+			"q_vaso_only": np.mean([q1_vaso_only.mean().item(), q2_vaso_only.mean().item()]),
+			"q_zero_occupancy": np.mean([q1_zero_occupancy.mean().item(), q2_zero_occupancy.mean().item()]),
 		}
 				
 		# OPTIMIZE CRITIC

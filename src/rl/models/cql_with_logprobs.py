@@ -534,6 +534,8 @@ class CQL:
 		noise_clip: float = 0.05,
 		policy_freq: int = 2,
 
+		reward_type: str = None,  # can be 'terminal' or 'health_score'
+
 		cql_alpha: float = 2.0,  # Use the alpha arg as the CQL conservative weight
 		temp: float = 1.0,         # Temperature for the LogSumExp
 		num_samples: int = 10,   # How many random actions to sample for the penalty
@@ -553,7 +555,6 @@ class CQL:
 		grad_clip: float = None,  # Add grad_clip argument
 		ema_alpha: float = 0.99,  # Add ema_alpha argument for moving
 		reward_scaling: float = 1.0,
-		use_monte_carlo_terminal_returns: bool = False,
 
 		ratio_of_fluid_to_vaso: float = 1.0,  # Add ratio_of_fluid_to_vaso argument
 
@@ -580,6 +581,8 @@ class CQL:
 		self.cql_alpha = cql_alpha  # Add cql_alpha as an argument and assign it to the instance variable
 		self.temp = temp         # Add temp as an argument and assign it to the instance variable
 		self.num_samples = num_samples   # Add num_samples as an argument and assign it to the instance variable
+
+		self.reward_type = reward_type  # can be 'terminal' or 'health_score'
 	
 		self.actor_loss_bc_scale = actor_loss_bc_scale
 		self.actor_loss_q_scale = actor_loss_q_scale
@@ -600,8 +603,6 @@ class CQL:
 		self.ema_alpha = ema_alpha # Closer to 1.0 means more smoothing
 		
 		self.reward_scaling = reward_scaling
-
-		self.use_monte_carlo_terminal_returns = use_monte_carlo_terminal_returns
 
 		self.ratio_of_fluid_to_vaso = ratio_of_fluid_to_vaso
 
@@ -724,19 +725,20 @@ class CQL:
 		
 		########################## CRITIC TRAINING ##########################
 		# compute the target Q value
-		treat_survival_as_truncated = True # i.e. survival is not terminal. 
-		if treat_survival_as_truncated:
-			# make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
-			done = done * mortality		
-		not_done = 1 - done
+		if self.reward_type != 'terminal': # using monte carlo returns  
+			treat_survival_as_truncated = True # i.e. survival is not terminal. 
+			if treat_survival_as_truncated:
+				# make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
+				done = done * mortality		
+			not_done = 1 - done
 
 		self.critic.train()          # Dropout ACTIVE for the network we are updating
 		
 		# get target Q for bellman loss
 		with torch.no_grad(): # uses target actor for next action
-			if self.use_monte_carlo_terminal_returns: # this should only be used for terminal rewards
+			if self.reward_type == 'terminal': # using monte carlo returns
 				# is 1 where mortality is 1, else 0. 
-				target_Q = -(mortality - 1).float()
+				target_Q = reward
 			else:
 				target_Q = self.target_q(action, next_state, reward, not_done, noise=True)
 
@@ -1147,18 +1149,18 @@ class CQL:
 		reward = reward * self.reward_scaling
 
 		# compute the target Q value
-		treat_survival_as_truncated = True
-		if treat_survival_as_truncated:
-				# make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
-			done = done * mortality
-		
-		not_done = 1 - done
+		if self.reward_type != 'terminal': # using monte carlo returns
+			treat_survival_as_truncated = True
+			if treat_survival_as_truncated:
+					# make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
+				done = done * mortality			
+			not_done = 1 - done
 
 		with torch.no_grad():
 			# compute the target Q value
-			if self.use_monte_carlo_terminal_returns:
+			if self.reward_type == 'terminal': # using monte carlo returns
 				# is 1 where mortality is 1, else 0. 
-				target_Q = -(mortality - 1).float()
+				target_Q = reward
 			else:
 				target_Q = self.target_q(action, next_state, reward, not_done, noise=False)
 
@@ -1342,7 +1344,8 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		vaso_mean_reg_scale=hyperparams['vaso_mean_reg_scale'],
 
 		num_samples=hyperparams['num_samples'],
-		use_monte_carlo_terminal_returns=hyperparams['monte_carlo_terminal_returns'], 
+
+		reward_type=hyperparams['reward_type'],
 
 		ratio_of_fluid_to_vaso=config_manager.training_config['ratio_of_fluid_to_vaso'],
 

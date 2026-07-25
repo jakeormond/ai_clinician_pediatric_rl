@@ -9,11 +9,11 @@
     n_episodes: 1000  # How many episodes run during evaluation
     # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
-    
-    reward_type: "health_score" # "terminal"
-    
-    discount: 0.975 # discount for intermediate health-score-based rewards
+       
+    reward_type: "terminal" # "health_score"
+    discount: 0.975  # Discount factor
     terminal_discount: 0.998 # discount for terminal health-score-based rewards
+
 
     # health score reward shaping parameters
     health_score_hourly_change_clip: 100. # health score is 0 to 100, clip prevents large spikes in reward
@@ -22,7 +22,7 @@
     total_health_score_scale: 1.  # Scaling factor for total health score component of reward
     potential_based_reward_shaping: False 
     # terminal_health_score_reward: 100.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
-    terminal_reward_scale: 100.  # the scale of terminal reward 
+    terminal_reward_scale: 10.  # the scale of terminal reward 
     
     # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
     # max_traj_len: 2000  # Max trajectory length - probably need to change this
@@ -76,7 +76,6 @@
 
     n_step: 0  # Number of steps to use for n-step returns (set to 1 or None to disable n-step returns)
 
-    monte_carlo_terminal_returns: False
 
     use_compressed_latents: False  # Whether to use compressed latents as states instead of raw features or transformer output - specific to basic Q model, not used for TD3-BC or CQL
 

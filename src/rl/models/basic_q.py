@@ -594,20 +594,39 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 
 
 def get_evaluator(state_dim, action_dim, config_manager):
-    discount = config_manager.training_config['discount']
     
-    if config_manager.training_config['health_score_scale'] == 0.0:    
+    
+    if config_manager.training_config['reward_type'] == 'terminal':
+        terminal_discount = config_manager.training_config['terminal_discount']
         model_path = os.path.join(config_manager.paths['rl_models_dir'], 
             'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
-            config_manager.actions, "health_score_change_only", f'final_model_discount_{discount}')
-    else:
-        model_path = os.path.join(config_manager.paths['rl_models_dir'], 
-            'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
-            config_manager.actions, "raw_health_score_only", f'final_model_discount_{discount}')
+            config_manager.actions, "terminal_only", f'final_model_terminal_discount_{terminal_discount}')
+
+    elif config_manager.training_config['reward_type'] == 'health_score':
+        discount = config_manager.training_config['discount']
+        if config_manager.training_config['health_score_scale'] == 0.0:    
+            model_path = os.path.join(config_manager.paths['rl_models_dir'], 
+                'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
+                config_manager.actions, "health_score_change_only", f'final_model_discount_{discount}')
+        else:
+            model_path = os.path.join(config_manager.paths['rl_models_dir'], 
+                'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
+                config_manager.actions, "raw_health_score_only", f'final_model_discount_{discount}')
     
     model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
     model_path = os.path.join(model_path, model_folder)
 
+    # check if there is a folder inside model_path, if so, use that as the model_path
+    while True:
+        if os.path.isdir(model_path):
+            subfolders = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))]
+            if subfolders:
+                model_folder = subfolders[0]
+                model_path = os.path.join(model_path, model_folder)
+            else:
+                break
+        else:
+            break
     
     critic, hyperparams = load_critic(state_dim, action_dim,model_path=model_path)
 

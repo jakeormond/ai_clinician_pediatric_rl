@@ -438,7 +438,19 @@
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env"
         },
-
+        
+        {
+            "name": "terminal_reward_evaluation",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.rl.evaluate_terminal_reward_models",
+            "args": [
+                "--hospital", "choc", 
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
 
         {
             "name": "sarsa_hyperparameter_search_evaluation",

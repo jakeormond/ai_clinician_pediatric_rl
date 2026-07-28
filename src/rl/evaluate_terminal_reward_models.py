@@ -92,25 +92,29 @@ def load_sarsa_critic(model_dir=None, reward_type='terminal'):
         if reward_type == 'terminal':
             sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/terminal_only/final_model_terminal_discount_0.998"
         elif reward_type == 'health_score_change':
-            sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/health_score_change_only/final_model_health_score_change_discount_0.975"
+            sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/health_score_change_only/final_model_discount_0.975"
         else:
             raise ValueError(f"Unsupported reward type: {reward_type}")
 
         inner_directories = [f for f in os.listdir(sarsa_dir) if os.path.isdir(os.path.join(sarsa_dir, f))]
-        sarsa_dir = os.path.join(sarsa_dir, inner_directories[0])
-        configuration_path = os.path.join(sarsa_dir, "config_manager.pkl")
-        config_manager = load_configuration(configuration_path)
-    
-        inner_directories = [f for f in os.listdir(sarsa_dir) if os.path.isdir(os.path.join(sarsa_dir, f))]
-        if len(inner_directories) != 1:
-            raise ValueError(f"Expected exactly one inner directory in {sarsa_dir}, but found {len(inner_directories)}: {inner_directories}")
-    
         model_dir = os.path.join(sarsa_dir, inner_directories[0])
 
-    else: 
-        # load config_manager.pkl from parent dir
+        # if inner_directories[0] begins with "local" or "unknown", then we stop
+        if not (inner_directories[0].startswith("local") or inner_directories[0].startswith("unknown")):  
+
+            inner_directories = [f for f in os.listdir(model_dir) if os.path.isdir(os.path.join(sarsa_dir, f))]
+            if len(inner_directories) != 1:
+                raise ValueError(f"Expected exactly one inner directory in {model_dir}, but found {len(inner_directories)}: {inner_directories}")
+    
+            model_dir = os.path.join(model_dir, inner_directories[0])
+        
+    configuration_path = os.path.join(model_dir, "config_manager.pkl")
+    # check if config_manager.pkl exists
+    if not os.path.exists(configuration_path):
+        # then it's in the parent directory
         configuration_path = os.path.join(os.path.dirname(model_dir), "config_manager.pkl")
-        config_manager = load_configuration(configuration_path)
+    
+    config_manager = load_configuration(configuration_path)
 
     # load results.json
     hyperparams_path = os.path.join(model_dir, "results.json")
@@ -387,8 +391,11 @@ def evaluate_multiple_models(rl_model_dir=None):
 
 
 def main():
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     # load terminal sarsa model
-    terminal_reward_critic, terminal_sarsa_config_manager,terminal_sarsa_hyperparams = load_sarsa_critic(reward_type='terminal')
+    terminal_sarsa_critic, terminal_sarsa_config_manager, terminal_sarsa_hyperparams = load_sarsa_critic(reward_type='terminal')
 
     # load health_score sarsa model
     health_score_critic, health_score_sarsa_config_manager, health_score_sarsa_hyperparams = load_sarsa_critic(reward_type='health_score_change')
@@ -397,14 +404,14 @@ def main():
     terminal_cql_actor, terminal_cql_critic, terminal_cql_config_manager, terminal_cql_hyperparams = load_actor_and_critic()
 
     # load test data
-    test_processor = load_test_data(terminal_sarsa_config_manager, terminal_sarsa_hyperparams)  
+    test_processor = load_test_data(health_score_sarsa_config_manager, health_score_sarsa_hyperparams)  
 
     # get and create actions
     clinician_actions = test_processor.rl_dataset["actions"]
+
+    # create zero fluid actions. We don't need zero vaso because that's what the policy outputs
     zero_fluid_actions = torch.zeros_like(clinician_actions)
     zero_fluid_actions[:, 1] = clinician_actions[:, 1]
-    zero_vaso_clin_actions = torch.zeros_like(clinician_actions)
-    zero_vaso_clin_actions[:, 0] = clinician_actions[:, 0]
 
     # generate policy actions from the terminal cql actor
     cql_actor_actions = generate_model_outputs(
@@ -412,8 +419,11 @@ def main():
         batch_size=batch_size, 
         model=terminal_cql_actor,
         model_type="actor",
-        device="cuda" if torch.cuda.is_available() else "cpu"
+        device=device
     )
+
+    # confirm the policy is recommending zero vaso
+    assert torch.all(cql_actor_actions[:, 1] == 0), "CQL actor is not recommending zero vaso for all states."
 
     clin_fluid_actor_vaso = clinician_actions.clone()
     clin_fluid_actor_vaso[:, 1] = cql_actor_actions[:, 1]
@@ -421,38 +431,49 @@ def main():
     actor_fluid_clin_vaso[:, 0] = cql_actor_actions[:, 0]
 
     # generate model outputs for terminal sarsa critic  
-    batch_size = terminal_sarsa_hyperparams['batch_size']
+    batch_size = health_score_sarsa_hyperparams['batch_size']
 
-    cql_q_values = generate_model_outputs(
-        test_processor=test_processor, 
-        batch_size=batch_size, 
-        model=terminal_cql_critic,
-        model_type="critic",
-        reduction='mean',
-        device="cuda" if torch.cuda.is_available() else "cpu"
-    )
-
-    cql_zero_vaso_q_values = generate_model_outputs(
-        test_processor=test_processor, 
-        batch_size=batch_size, 
-        model=terminal_cql_critic,
-        actions_to_use=zero_vaso_clin_actions,
-        model_type="critic",
-        reduction='mean',
-        device="cuda" if torch.cuda.is_available() else "cpu"
-    )
-
-    cql_zero_fluid_q_values = generate_model_outputs(
-        test_processor=test_processor, 
-        batch_size=batch_size, 
-        model=terminal_cql_critic,
-        actions_to_use=zero_fluid_actions,
-        model_type="critic",
-        reduction='mean',
-        device="cuda" if torch.cuda.is_available() else "cpu"
-    )
-
+    # organize the actions and critics into dictionaries for easy access
+    action_variants = {
+        "clinician":   clinician_actions,       # baseline
+        "zero_vaso":   clin_fluid_actor_vaso,  # == actor's vaso prediction, confirmed near-identical
+        "actor_fluid": actor_fluid_clin_vaso,
+        "zero_fluid":  zero_fluid_actions,
+    }
     
+    critics = {
+        "cql_terminal": terminal_cql_critic,
+        "sarsa_terminal": terminal_sarsa_critic,
+        "sarsa_health_score": health_score_critic,
+    }
+
+    q_values = {}
+    for critic_name, critic in critics.items():
+        q_values[critic_name] = {}
+        for variant_name, actions in action_variants.items():
+            q_values[critic_name][variant_name] = generate_model_outputs(
+                test_processor=test_processor,
+                batch_size=batch_size,
+                model=critic,
+                actions_to_use=actions if variant_name != "clinician" else None,
+                model_type="critic",
+                reduction='mean',
+                device=device,
+            )
+
+    # calculate advantages for each critic and action variant
+    advantages = {}
+    for critic_name in critics.keys():
+        advantages[critic_name] = {}
+        for variant_name in [k for k in action_variants.keys() if k != "clinician"]:
+            advantages[critic_name][variant_name] = q_values[critic_name][variant_name] - q_values[critic_name]["clinician"]
+
+    # correlation between advantages and clinician vaso doses by mortality
+    mortality = test_processor.rl_dataset["event"]
+
+
+
+
 
 
     pass

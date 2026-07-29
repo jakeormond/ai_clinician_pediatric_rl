@@ -25,6 +25,8 @@ from scipy import stats
 from ..setup_environment import load_paths
 
 
+SAVE_DIR = "/home/jake/Documents/AI_Clinician/models/analysis/terminal_reward_zero_dose_advantage"
+os.makedirs(SAVE_DIR, exist_ok=True)
 
 
 def load_configuration(config_manager_path):
@@ -46,9 +48,9 @@ def load_configuration(config_manager_path):
     return config_manager
 
 
-def load_test_data(config_manager, hyperparams):
+def load_data(config_manager, hyperparams):
     # load the data
-    train_processor, _, test_processor = create_processor_from_shards(config_manager, normalize=True, set_to_return='all')
+    train_processor, val_processor, test_processor = create_processor_from_shards(config_manager, normalize=True, set_to_return='all')
 
     # process the reward
     health_score_median = train_processor.process_reward(config_manager, hyperparams)
@@ -57,7 +59,7 @@ def load_test_data(config_manager, hyperparams):
     # create rl dataset
     train_processor, test_processor, _ = create_test_rl_dataset(train_processor, test_processor, config_manager, hyperparams)
 
-    return test_processor
+    return train_processor, test_processor
 
 
 def create_test_rl_dataset(train_processor, test_processor, config_manager, hyperparams):
@@ -102,7 +104,7 @@ def load_sarsa_critic(model_dir=None, reward_type='terminal'):
         # if inner_directories[0] begins with "local" or "unknown", then we stop
         if not (inner_directories[0].startswith("local") or inner_directories[0].startswith("unknown")):  
 
-            inner_directories = [f for f in os.listdir(model_dir) if os.path.isdir(os.path.join(sarsa_dir, f))]
+            inner_directories = [f for f in os.listdir(model_dir) if os.path.isdir(os.path.join(model_dir, f))]
             if len(inner_directories) != 1:
                 raise ValueError(f"Expected exactly one inner directory in {model_dir}, but found {len(inner_directories)}: {inner_directories}")
     
@@ -243,7 +245,7 @@ def get_trajectory_data(processor, traj_start_inds, stay_id, as_tensor=True):
 
 
 def generate_model_outputs(
-        test_processor, 
+        processor, 
         batch_size=1024, 
         model=None,
         actions_to_use=None,
@@ -256,28 +258,28 @@ def generate_model_outputs(
     """
     
     # get the actions and get their standard deviation
-    all_actions = test_processor.rl_dataset["actions"]
+    all_actions = processor.rl_dataset["actions"]
     action_dim = all_actions.shape[1]
     
     action_std = torch.as_tensor(all_actions.std(axis=0), dtype=torch.float32).to(device)
     print(f"Action std: {action_std}")    
     
-    # loop through trajectories in test_processor.rl_dataset and evaluate the model
-    traj_end_inds = np.where(test_processor.rl_dataset["dones"] == 1)[0]
+    # loop through trajectories in processor.rl_dataset and evaluate the model
+    traj_end_inds = np.where(processor.rl_dataset["dones"] == 1)[0]
     traj_start_inds = np.concatenate(([0], traj_end_inds + 1))
-    stay_ids = test_processor.dynamic_deephit_dataset["stay_ids"]
+    stay_ids = processor.dynamic_deephit_dataset["stay_ids"]
     
     # create storage
     if model_type == "critic":
-        model_outputs = torch.zeros(test_processor.rl_dataset["states"].shape[0], dtype=torch.float32).to(device)
+        model_outputs = torch.zeros(processor.rl_dataset["states"].shape[0], dtype=torch.float32).to(device)
     elif model_type == "actor":
-        model_outputs = torch.zeros(test_processor.rl_dataset["states"].shape[0], action_dim, dtype=torch.float32).to(device)
+        model_outputs = torch.zeros(processor.rl_dataset["states"].shape[0], action_dim, dtype=torch.float32).to(device)
     elif model_type == "value_network":
-        model_outputs = torch.zeros(test_processor.rl_dataset["states"].shape[0], dtype=torch.float32).to(device)
+        model_outputs = torch.zeros(processor.rl_dataset["states"].shape[0], dtype=torch.float32).to(device)
 
     for stay_id in stay_ids:
         states, traj_actions, rewards, next_states, next_actions, dones, mortalities, indices = \
-            get_trajectory_data(test_processor, traj_start_inds, stay_id, as_tensor=True) 
+            get_trajectory_data(processor, traj_start_inds, stay_id, as_tensor=True) 
         
         if actions_to_use is not None:
             # use the provided actions instead of the ones from the dataset
@@ -312,82 +314,161 @@ def generate_model_outputs(
     return model_outputs
 
 
+def get_steps_to_go(processor):
+    dones = processor.rl_dataset["dones"]
+    traj_end_inds = np.where(dones == 1)[0]
+    traj_start_inds = np.concatenate(([0], traj_end_inds + 1))[:-1]
+
+    steps_to_go = np.zeros(dones.shape[0], dtype=np.int32)
+    for start, end in zip(traj_start_inds, traj_end_inds):
+        steps_to_go[start:end + 1] = np.arange(end - start, -1, -1)
+
+    return steps_to_go
 
 
+def _bin_and_average(x, y, n_bins=30, log_x=False):
+    """Bins y by x, returns bin centers, means, and SEMs."""
+    if log_x:
+        bin_edges = np.logspace(0, np.log10(x.max() + 1), n_bins)
+        bin_edges = np.concatenate(([0], bin_edges))
+    else:
+        bin_edges = np.linspace(x.min(), x.max(), n_bins + 1)
+
+    bin_idx = np.clip(np.digitize(x, bin_edges) - 1, 0, len(bin_edges) - 2)
+    centers, means, sems, counts = [], [], [], []
+    for b in range(len(bin_edges) - 1):
+        in_bin = bin_idx == b
+        n = in_bin.sum()
+        if n == 0:
+            continue
+        centers.append((bin_edges[b] + bin_edges[b + 1]) / 2)
+        means.append(y[in_bin].mean())
+        sems.append(y[in_bin].std() / np.sqrt(n))
+        counts.append(n)
+    return np.array(centers), np.array(means), np.array(sems), np.array(counts)
 
 
-def evaluate_multiple_models(rl_model_dir=None):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def correlation_report(x, y, label):
+    """Computes Spearman correlation and returns a formatted string + values."""
+    rho, pval = stats.spearmanr(x, y)
+    text = f"{label}: ρ={rho:.3f}, p={pval:.2e}, n={len(x)}"
+    return rho, pval, text
 
-    # parse arguments
-    args = parse_args()
 
-    # create configuration
-    config_manager = ConfigManager(args)
+def plot_advantage_analysis(
+        advantage,
+        steps_to_go,
+        mortality,
+        real_dose,           # clinician's actual dose for this action dimension
+        dose_name,
+        critic_name,
+        max_steps=None,
+        n_bins=30,
+        log_x=False,
+        save_dir=SAVE_DIR,
+        split=None,
+        save=True,
+    ):
+    """
+    Two-row figure:
+      Row 1: advantage vs. steps_to_go, survival | mortality panels,
+             with real clinician dose overlaid on a secondary y-axis
+             (to visually check the predicted INVERSE relationship).
+      Row 2: advantage vs. real clinician dose directly, survival | mortality.
+    Spearman correlations reported for both relationships, both panels.
+    """
+    advantage = np.asarray(advantage)
+    steps_to_go = np.asarray(steps_to_go)
+    mortality = np.asarray(mortality)
+    real_dose = np.asarray(real_dose)
 
-    # 1. Load the "Jury" (SARSA Critic)
-    # Using the exact same architecture as your training
-    sarsa_critic, sarsa_configuration, sarsa_hyperparams = load_sarsa_critic(config_manager)
+    if max_steps is not None:
+        mask = steps_to_go <= max_steps
+        advantage, steps_to_go, mortality, real_dose = (
+            advantage[mask], steps_to_go[mask], mortality[mask], real_dose[mask]
+        )
 
-    # load the data
-    train_processor, _, test_processor = create_processor_from_shards(sarsa_configuration, normalize=True, set_to_return='all')
+    survival_mask = mortality == 0
+    mortality_mask = mortality == 1
 
-    # process the reward
-    health_score_median = train_processor.process_reward(config_manager, sarsa_hyperparams)
-    test_processor.process_reward(config_manager, sarsa_hyperparams, health_score_median=health_score_median)
-    
-    # create rl dataset
-    batch_size = 1024
-    train_processor, test_processor, _ = create_test_rl_dataset(train_processor, test_processor, config_manager, sarsa_hyperparams)
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
 
-    # get the model directories
-    rl_path = os.path.join(config_manager.paths['rl_models_dir'], config_manager.rl_type, 
-                    f"split_{config_manager.split_num}", config_manager.cohort, config_manager.actions,
-                    config_manager.reward_type, f"discount_{config_manager.discount}")
-    rl_folders = [f for f in os.listdir(rl_path) if os.path.isdir(os.path.join(rl_path, f))]
-    if "final_model" in rl_folders or "*_run" in rl_folders:
-        rl_folders.remove("final_model")
-        rl_folders = [f for f in rl_folders if not f.endswith("_run")]
+    group_info = [
+        (0, survival_mask, "Survival", "seagreen"),
+        (1, mortality_mask, "Mortality", "crimson"),
+    ]
 
-    sarsa_advantage_results =[]
-    rl_advantage_results = []
+    report_lines = []
 
-    for rl_folder in rl_folders:       
-        model_path = os.path.join(rl_path, rl_folder)
-        
-        # load the configuration
-        configuration_path = os.path.join(model_path, "config_manager.pkl")
-        model_cfg = load_configuration(configuration_path)
+    for col, mask, label, color in group_info:
+        adv = advantage[mask]
+        steps = steps_to_go[mask]
+        dose = real_dose[mask]
 
-        # find directories within model_path that begin with "local" or "unknown"
-        model_subfolders = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and (f.startswith("local") or f.startswith("unknown"))]
+        # --- Row 1: advantage vs steps_to_go, with real dose overlaid ---
+        ax1 = axes[0, col]
+        centers, means, sems, _ = _bin_and_average(steps, adv, n_bins, log_x)
+        dose_centers, dose_means, dose_sems, _ = _bin_and_average(steps, dose, n_bins, log_x)
 
-        for subfolder in model_subfolders:
-            if rl_model_dir is not None:
-                if subfolder != rl_model_dir:
-                    continue
+        rho1, p1, text1 = correlation_report(steps, adv, f"{label} — advantage vs steps_to_go")
+        report_lines.append(text1)
 
-            model_subfolder_path = os.path.join(model_path, subfolder)
-            
-            print(f"Evaluating model in folder: {model_subfolder_path}")
+        ax1.plot(centers, means, color=color, lw=2, label=f"{dose_name} advantage")
+        ax1.fill_between(centers, means - sems, means + sems, color=color, alpha=0.25)
+        ax1.axhline(0, color='gray', lw=1, ls='--')
+        ax1.set_ylabel(f"Advantage: Q(counterfactual) - Q(real)")
+        ax1.set_title(f"{label}  (ρ={rho1:.3f}, p={p1:.1e})")
+        ax1.invert_xaxis()
+        if log_x:
+            ax1.set_xscale('log')
 
-            sarsa_advantage_result, rl_advantage_result = evaluate(
-                config_manager=model_cfg, 
-                sarsa_critic=sarsa_critic, 
-                sarsa_configuration=sarsa_configuration,
-                model_path=model_subfolder_path,
-                test_processor=test_processor
-                )
+        ax1b = ax1.twinx()
+        ax1b.plot(dose_centers, dose_means, color='black', lw=1.5, ls=':', alpha=0.6, label=f"real {dose_name} dose")
+        ax1b.set_ylabel(f"Real clinician {dose_name} dose", color='gray')
+        ax1b.tick_params(axis='y', colors='gray')
 
-            sarsa_advantage_results.append(sarsa_advantage_result)
-            rl_advantage_results.append(rl_advantage_result)
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines1b, labels1b = ax1b.get_legend_handles_labels()
+        ax1.legend(lines1 + lines1b, labels1 + labels1b, loc='best', fontsize=8)
 
-    # convert results to dataframe and save as csv
-    sarsa_advantage_df = pd.DataFrame(sarsa_advantage_results)
-    rl_advantage_df = pd.DataFrame(rl_advantage_results)
+        # --- Row 2: advantage vs real dose directly ---
+        ax2 = axes[1, col]
+        centers2, means2, sems2, _ = _bin_and_average(dose, adv, n_bins=20, log_x=False)
 
-    sarsa_advantage_df.to_csv(os.path.join(rl_path, 'sarsa_advantage_results.csv'), index=False)
-    rl_advantage_df.to_csv(os.path.join(rl_path, 'rl_advantage_results.csv'), index=False)
+        rho2, p2, text2 = correlation_report(dose, adv, f"{label} — advantage vs real dose")
+        report_lines.append(text2)
+
+        ax2.plot(centers2, means2, color=color, lw=2)
+        ax2.fill_between(centers2, means2 - sems2, means2 + sems2, color=color, alpha=0.25)
+        ax2.axhline(0, color='gray', lw=1, ls='--')
+        ax2.set_xlabel(f"Real clinician {dose_name} dose")
+        ax2.set_ylabel("Advantage")
+        ax2.set_title(f"{label}  (ρ={rho2:.3f}, p={p2:.1e})")
+
+    axes[0, 0].set_xlabel("Steps remaining until trajectory end")
+    axes[0, 1].set_xlabel("Steps remaining until trajectory end")
+
+    fig.suptitle(f"{critic_name}: {dose_name} advantage analysis")
+    plt.tight_layout()
+
+    if save:
+        filename = f"{critic_name}_{dose_name}_advantage_analysis.png"
+        # check if split is None, if so, save in SAVE_DIR, else save in SAVE_DIR/split
+        if split is not None:
+            save_dir = os.path.join(save_dir, split)
+            os.makedirs(save_dir, exist_ok=True)
+
+        filepath = os.path.join(save_dir, filename)
+        fig.savefig(filepath, dpi=200, bbox_inches='tight')
+        print(f"Saved: {filepath}")
+
+    if not save:
+        plt.show()
+    plt.close(fig)  # prevent figures from accumulating in memory across the loop
+
+    print("\n".join(report_lines))
+
+    return report_lines
 
 
 def main():
@@ -404,72 +485,104 @@ def main():
     terminal_cql_actor, terminal_cql_critic, terminal_cql_config_manager, terminal_cql_hyperparams = load_actor_and_critic()
 
     # load test data
-    test_processor = load_test_data(health_score_sarsa_config_manager, health_score_sarsa_hyperparams)  
+    processors = {}
+    processors['train'], processors['test'] = load_data(terminal_sarsa_config_manager, terminal_sarsa_hyperparams)  
 
-    # get and create actions
-    clinician_actions = test_processor.rl_dataset["actions"]
+    for split, processor in processors.items():
+        # get and create actions
+        clinician_actions = processor.rl_dataset["actions"]
 
-    # create zero fluid actions. We don't need zero vaso because that's what the policy outputs
-    zero_fluid_actions = torch.zeros_like(clinician_actions)
-    zero_fluid_actions[:, 1] = clinician_actions[:, 1]
+        # create zero fluid actions. We don't need zero vaso because that's what the policy outputs
+        zero_fluid_actions = torch.zeros_like(clinician_actions)
+        zero_fluid_actions[:, 1] = clinician_actions[:, 1]
 
-    # generate policy actions from the terminal cql actor
-    cql_actor_actions = generate_model_outputs(
-        test_processor=test_processor, 
-        batch_size=batch_size, 
-        model=terminal_cql_actor,
-        model_type="actor",
-        device=device
-    )
+        # get mortality
+        mortality = processor.rl_dataset["mortality"]
 
-    # confirm the policy is recommending zero vaso
-    assert torch.all(cql_actor_actions[:, 1] == 0), "CQL actor is not recommending zero vaso for all states."
+        # calculate steps to go
+        steps_to_go = get_steps_to_go(processor)
 
-    clin_fluid_actor_vaso = clinician_actions.clone()
-    clin_fluid_actor_vaso[:, 1] = cql_actor_actions[:, 1]
-    actor_fluid_clin_vaso = clinician_actions.clone()
-    actor_fluid_clin_vaso[:, 0] = cql_actor_actions[:, 0]
+        ### calculate correlations and plot for each critic and action variant ###############
+        clinician_actions_np = clinician_actions.cpu().numpy() if torch.is_tensor(clinician_actions) else clinician_actions
+        mortality_np = mortality.cpu().numpy() if torch.is_tensor(mortality) else mortality
+        steps_to_go_np = steps_to_go.cpu().numpy() if torch.is_tensor(steps_to_go) else steps_to_go
 
-    # generate model outputs for terminal sarsa critic  
-    batch_size = health_score_sarsa_hyperparams['batch_size']
+        dose_dim = {"zero_vaso": 1, "actor_fluid": 0, "zero_fluid": 0}  # action index per variant
 
-    # organize the actions and critics into dictionaries for easy access
-    action_variants = {
-        "clinician":   clinician_actions,       # baseline
-        "zero_vaso":   clin_fluid_actor_vaso,  # == actor's vaso prediction, confirmed near-identical
-        "actor_fluid": actor_fluid_clin_vaso,
-        "zero_fluid":  zero_fluid_actions,
-    }
-    
-    critics = {
-        "cql_terminal": terminal_cql_critic,
-        "sarsa_terminal": terminal_sarsa_critic,
-        "sarsa_health_score": health_score_critic,
-    }
+        # generate policy actions from the terminal cql actor
+        batch_size = health_score_sarsa_hyperparams['batch_size']
+        cql_actor_actions = generate_model_outputs(
+            processor=processor, 
+            batch_size=batch_size, 
+            model=terminal_cql_actor,
+            model_type="actor",
+            device=device
+        )
 
-    q_values = {}
-    for critic_name, critic in critics.items():
-        q_values[critic_name] = {}
-        for variant_name, actions in action_variants.items():
-            q_values[critic_name][variant_name] = generate_model_outputs(
-                test_processor=test_processor,
-                batch_size=batch_size,
-                model=critic,
-                actions_to_use=actions if variant_name != "clinician" else None,
-                model_type="critic",
-                reduction='mean',
-                device=device,
-            )
+        # confirm the policy is recommending zero vaso
+        assert torch.all(cql_actor_actions[:, 1] == 0), "CQL actor is not recommending zero vaso for all states."
 
-    # calculate advantages for each critic and action variant
-    advantages = {}
-    for critic_name in critics.keys():
-        advantages[critic_name] = {}
-        for variant_name in [k for k in action_variants.keys() if k != "clinician"]:
-            advantages[critic_name][variant_name] = q_values[critic_name][variant_name] - q_values[critic_name]["clinician"]
+        clin_fluid_actor_vaso = clinician_actions.clone()
+        clin_fluid_actor_vaso[:, 1] = cql_actor_actions[:, 1]
+        actor_fluid_clin_vaso = clinician_actions.clone()
+        actor_fluid_clin_vaso[:, 0] = cql_actor_actions[:, 0]
 
-    # correlation between advantages and clinician vaso doses by mortality
-    mortality = test_processor.rl_dataset["event"]
+        # organize the actions and critics into dictionaries for easy access
+        action_variants = {
+            "clinician":   clinician_actions,       # baseline
+            "zero_vaso":   clin_fluid_actor_vaso,  # == actor's vaso prediction, confirmed near-identical
+            "actor_fluid": actor_fluid_clin_vaso,
+            "zero_fluid":  zero_fluid_actions,
+        }
+        
+        critics = {
+            "cql_terminal": terminal_cql_critic,
+            "sarsa_terminal": terminal_sarsa_critic,
+            "sarsa_health_score": health_score_critic,
+        }
+
+        q_values = {}
+        for critic_name, critic in critics.items():
+            q_values[critic_name] = {}
+            for variant_name, actions in action_variants.items():
+                q_values[critic_name][variant_name] = generate_model_outputs(
+                    processor=processor,
+                    batch_size=batch_size,
+                    model=critic,
+                    actions_to_use=actions if variant_name != "clinician" else None,
+                    model_type="critic",
+                    reduction='mean',
+                    device=device,
+                )
+
+        # calculate advantages for each critic and action variant
+        advantages = {}
+        for critic_name in critics.keys():
+            advantages[critic_name] = {}
+            for variant_name in [k for k in action_variants.keys() if k != "clinician"]:
+                advantages[critic_name][variant_name] = q_values[critic_name][variant_name] - q_values[critic_name]["clinician"]
+
+        all_reports = {}
+        for critic_name in critics.keys():
+            all_reports[critic_name] = {}
+            for variant_name in ["zero_vaso", "actor_fluid", "zero_fluid"]:
+                adv = advantages[critic_name][variant_name]
+                adv_np = adv.cpu().numpy() if torch.is_tensor(adv) else adv
+
+                dim = dose_dim[variant_name]
+                real_dose = clinician_actions_np[:, dim]
+
+                report = plot_advantage_analysis(
+                    advantage=adv_np,
+                    steps_to_go=steps_to_go_np,
+                    mortality=mortality_np,
+                    real_dose=real_dose,
+                    dose_name=variant_name,
+                    critic_name=critic_name,
+                    save=True,
+                    split=split
+                )
+                all_reports[critic_name][variant_name] = report
 
 
 

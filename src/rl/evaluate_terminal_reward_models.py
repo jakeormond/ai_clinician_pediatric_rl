@@ -361,6 +361,41 @@ def correlation_report(x, y, label):
     return rho, pval, text
 
 
+def compute_signal_penalty_decomposition(
+        cql_critic, sarsa_critic, processor,
+        zero_action_variant,
+        batch_size, device,
+        normalize=True,
+    ):
+    q_cql_real = generate_model_outputs(processor, batch_size, cql_critic, actions_to_use=None, model_type="critic", reduction='mean', device=device)
+    q_cql_zero = generate_model_outputs(processor, batch_size, cql_critic, actions_to_use=zero_action_variant, model_type="critic", reduction='mean', device=device)
+    q_sarsa_real = generate_model_outputs(processor, batch_size, sarsa_critic, actions_to_use=None, model_type="critic", reduction='mean', device=device)
+    q_sarsa_zero = generate_model_outputs(processor, batch_size, sarsa_critic, actions_to_use=zero_action_variant, model_type="critic", reduction='mean', device=device)
+
+    if normalize:
+        # scale factor: spread of Q_SARSA over the real, in-distribution dataset actions
+        # (computed once per reward arm, using the SARSA critic as the "unpenalized" reference scale)
+        scale = q_sarsa_real.std().clamp(min=1e-6)
+        q_cql_real, q_cql_zero, q_sarsa_real, q_sarsa_zero = (
+            q_cql_real / scale, q_cql_zero / scale, q_sarsa_real / scale, q_sarsa_zero / scale
+        )
+
+    signal = q_sarsa_zero - q_sarsa_real                     # note: sign flipped vs. your original — see below
+    penalty_real = q_sarsa_real - q_cql_real
+    penalty_zero = q_sarsa_zero - q_cql_zero
+    delta_penalty = penalty_real - penalty_zero              # differential penalty, not raw penalty
+    advantage_cql = q_cql_zero - q_cql_real
+
+    return {
+        "signal": signal.cpu().numpy(),
+        "delta_penalty": delta_penalty.cpu().numpy(),
+        "advantage_cql": advantage_cql.cpu().numpy(),
+        "scale_used": scale.item() if normalize else 1.0,
+    }
+
+
+
+
 def plot_advantage_analysis(
         advantage,
         steps_to_go,

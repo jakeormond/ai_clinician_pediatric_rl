@@ -164,7 +164,13 @@ def load_actor_and_critic(model_dir=None, model_type='cql'):
 
     else: 
         # load config_manager.pkl from parent dir
-        configuration_path = os.path.join(os.path.dirname(model_dir), "config_manager.pkl")
+        configuration_path = os.path.join(model_dir, "config_manager.pkl")
+        print(f"Loading config manager from: {configuration_path}")
+        # check if config_manager.pkl exists
+        if not os.path.exists(configuration_path):
+            # then it's in the parent parent directory
+            print(f"config_manager.pkl not found in {model_dir}, checking parent directory.")
+            configuration_path = os.path.join(os.path.dirname(model_dir), "config_manager.pkl")
         config_manager = load_configuration(configuration_path)
 
     # load results.json

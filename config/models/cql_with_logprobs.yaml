@@ -10,7 +10,7 @@
     # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
     
-    reward_type: "terminal" # "health_score"
+    reward_type: "health_score" # "terminal" # "health_score"
     discount: 0.975  # Discount factor
     terminal_discount: 0.998 # discount for terminal health-score-based rewards
 

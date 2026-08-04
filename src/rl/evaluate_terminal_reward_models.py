@@ -89,12 +89,15 @@ def create_test_rl_dataset(train_processor, test_processor, config_manager, hype
     return train_processor, test_processor, scaler
 
 
-def load_sarsa_critic(model_dir=None, reward_type='terminal'):
+def load_sarsa_critic(model_dir=None, shifted_actions=False, reward_type='terminal'):
     if model_dir is None:
         if reward_type == 'terminal':
             sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/terminal_only/final_model_terminal_discount_0.998"
         elif reward_type == 'health_score_change':
-            sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/health_score_change_only/final_model_discount_0.975"
+            if not shifted_actions:
+                sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/health_score_change_only/final_model_discount_0.975"
+            else:
+                sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/health_score_change_only/final_model_discount_0.975/shifted_actions"
         else:
             raise ValueError(f"Unsupported reward type: {reward_type}")
 

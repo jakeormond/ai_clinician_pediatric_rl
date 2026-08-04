@@ -91,6 +91,7 @@ def create_buffer(
     use_compressed_latents = hyperparams['use_compressed_latents']
     n_step = hyperparams['n_step']
     gamma = hyperparams['discount']
+    actions_shift = hyperparams.get('actions_shift', 0.0)  # Default to 0.0 if not provided
 
     scaler = processor.create_rl_dataset(
         states="model_outputs", 
@@ -98,7 +99,8 @@ def create_buffer(
         action_names=action_names, 
         use_compressed_latents=use_compressed_latents,
         n_step=n_step,
-        gamma=gamma
+        gamma=gamma,
+        actions_shift=actions_shift
     ) 
     if n_step == None or n_step <= 1:
         use_n_step = False

@@ -267,8 +267,8 @@ def generate_model_outputs(
     all_actions = processor.rl_dataset["actions"]
     action_dim = all_actions.shape[1]
     
-    action_std = torch.as_tensor(all_actions.std(axis=0), dtype=torch.float32).to(device)
-    print(f"Action std: {action_std}")    
+    # action_std = torch.as_tensor(all_actions.std(axis=0), dtype=torch.float32).to(device)
+    # print(f"Action std: {action_std}")    
     
     # loop through trajectories in processor.rl_dataset and evaluate the model
     traj_end_inds = np.where(processor.rl_dataset["dones"] == 1)[0]

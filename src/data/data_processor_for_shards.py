@@ -443,7 +443,8 @@ class ShardProcessor:
             action_names=None, 
             use_compressed_latents=False,
             n_step=None,
-            gamma=None
+            gamma=None, 
+            actions_shift=False,
         ):
         self.rl_dataset = {}
 
@@ -497,7 +498,11 @@ class ShardProcessor:
             raise NotImplementedError(f"Only states='model_outputs' is currently implemented, but got states={states}")
              
         actions = torch.tensor(self.dynamic_deephit_dataset["trajectories"][:, action_ind], dtype=torch.float32)
-        self.rl_dataset['actions'] = actions[state_ind, :]
+
+        if not actions_shift:
+            self.rl_dataset['actions'] = actions[state_ind, :]
+        else:
+            self.rl_dataset['actions'] = actions[next_state_ind, :]
 
         if self.reward_type == 'health_score':
             print("Using health_score reward type")
@@ -508,13 +513,30 @@ class ShardProcessor:
         else:
             raise ValueError(f"Invalid reward type: {self.reward_type}. Supported reward types are: 'health_score' and 'terminal'.")
       
-        self.rl_dataset['next_actions'] = actions[next_state_ind, :]
-        
         # dones = torch.tensor(np.zeros_like(self.dynamic_deephit_predictions["reward"]), dtype=torch.float32)
         dones = torch.tensor(np.zeros_like(model_outputs[:, 0]), dtype=torch.float32)
         dones[trajectory_end_inds] = 1.0  # mark end of trajectories
         self.rl_dataset['dones'] = dones[next_state_ind]  # only keep dones for the next states, since the current states will never be terminal in our setting (since we exclude end of trajectory timesteps)
         
+        
+        if not actions_shift:
+            self.rl_dataset['next_actions'] = actions[next_state_ind, :]
+        elif actions_shift:
+            next_next_state_ind = next_state_ind + 1
+            # drop final index
+            next_next_state_ind = next_next_state_ind[:-1]
+            # get next_next_actions
+            next_next_actions = actions[next_next_state_ind, :]
+            # concatenate on the final index of next_actions with zeros, since there is no next action for the final state
+            next_actions_final = torch.zeros_like(next_next_actions[0, :], dtype=torch.float32)
+            next_next_actions = torch.cat([next_next_actions, next_actions_final.unsqueeze(0)], dim=0)
+            # get done indices from self.rl_dataset['dones'] 
+            done_inds = torch.where(self.rl_dataset['dones'] == 1)[0]
+            # set all done_inds to next_actions_final
+            next_next_actions[done_inds, :] = next_actions_final.unsqueeze(0)
+            # store in rl_dataset
+            self.rl_dataset['next_actions'] = next_next_actions
+
         mortality = self.dynamic_deephit_dataset['event']
         mortality_full = np.zeros_like(model_outputs[:, 0], dtype=np.float32)
         # make full mortality trajectoires == 1

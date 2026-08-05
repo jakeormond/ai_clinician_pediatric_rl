@@ -11,26 +11,41 @@
     use_raw_states: False # if true, will use the raw features as states,
     # if false, uses transformer output
     
-    # Early stopping parameters (fixed for all combinations)    
-    use_early_stopping: False
-    patience: 200       # Stop if no improvement for 15 evaluations
-
     n_episodes: 1000  # How many episodes run during evaluation
     # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
-    checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
-    discount: 0.975  # [0.7, 0.8] #[0.8, 0.9, 0.95, 0.99]  # Discount factor
-    # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
-    # max_traj_len: 72  # Max trajectory length - probably need to change this - in data config
+    checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path    
     
-    learning_rate: # 1.e-3 # "loguniform(1e-5, 1e-4)" # "loguniform(3e-5, 1e-4)"           #      [1e-6]  # Learning rates to try
-    dropout:  0.2 # "uniform(0.1, 0.3)"   # "uniform(0.0, 0.3)"
-    tau: [0.01, 0.005, 0.001] # [0.005, 0.01]   # [0.0005, 0.001, 0.005, 0.01] # Target network update rate
-    weight_decay: 1.e-4 # "loguniform(1e-4, 1e-3)" # "loguniform(1e-5, 1e-2)" # L2 regularization strength
+    reward_type: "health_score" # "terminal" # "health_score"
+    discount: 0.975  # Discount factor
+    terminal_discount: 0.998 # discount for terminal health-score-based rewards
+    
+    # reward scaling
+    health_score_hourly_change_clip: 100.
+    health_score_scale: 0.  # Scaling factor for health score component of reward
+    health_score_hourly_change_scale: 1.  # Scaling factor for hourly change component of reward
+    total_health_score_scale: 1. # .01  # Scaling factor for total health score component of reward
+    potential_based_reward_shaping: False  # Whether to use potential-based reward shaping
+    # terminal_health_score_reward: 2.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
+    terminal_reward_scale: 10.
+   
+    # add reward to vaso dosing as positive control expt
+    add_reward_to_vaso_dosing: True  # Whether to add reward to vaso dosing as positive control expt - this is added as a reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
+    vaso_reward_coefficient: [0.2, 0.5, 1.0, 5.0] # [1.0, 5.0] # [0.2, 0.5, 1.0, 5.0]
+
+    # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
+    # max_traj_len: 72  # Max trajectory length - probably need to change this - in data config   
+    learning_rate: 1.e-4 # 1.e-3 # "loguniform(1e-5, 1e-4)" # "loguniform(3e-5, 1e-4)"           #      [1e-6]
+    dropout:  0.1 # "uniform(0.1, 0.3)"   # "uniform(0.0, 0.3)"
+    tau: 0.001 # [0.01, 0.005, 0.001] # [0.005, 0.01]   # [0.0005, 0.001, 0.005, 0.01] # Target network update rate
+    weight_decay: 1.e-5 # "loguniform(1e-4, 1e-3)" # "loguniform(1e-5, 1e-2)" # L2 regularization strength
     # policy_noise: 0.2 # Noise added to target policy during critic updates
     batch_size: 1024  # Batch size for all networks
-    hidden_dim: [64, 128, 256] # [512, 1024]  # Hidden dimension for all networks [128, 256, 256]] 
+    hidden_dim: 128 # [64, 128, 256] # [512, 1024]  # Hidden dimension for all networks [128, 256, 256]] 
 
 
+    # Early stopping parameters (fixed for all combinations)
+    early_stopping_flag: True  # Whether to use early stopping
+    patience: 15       # Stop if no improvement for 15 evaluations
     eval_freq: 1        # Evaluate every 20 epochs  
     min_delta: 0.0001   # Minimum improvement threshold
 
@@ -44,22 +59,15 @@
 
     # include next actions
     include_next_actions: True  # needed for SARSA
-
-    # gradient clipping
-    grad_clip: 1. # [0.5, 1.0]
+    actions_shift: True # temporal shift to maintain causality.
     
+    # gradient clipping
+    grad_clip: 1.
+
     use_compressed_latents: False  # Whether to use compressed latents as states instead of raw features or transformer output - specific to basic Q model, not used for TD3-BC or CQL
 
-    # reward scaling
-    # reward_scaling: 1.5  # Scaling factor for rewards
-    health_score_hourly_change_clip: 100.
-    health_score_scale: 0.  # Scaling factor for health score component of reward
-    health_score_hourly_change_scale: 1.  # Scaling factor for hourly change component of reward
-    total_health_score_scale: 1. # .01  # Scaling factor for total health score component of reward
-    potential_based_reward_shaping: False  # Whether to use potential-based reward shaping
-    # terminal_health_score_reward: 2.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
-    terminal_reward_scale: 10.
 
     # n-step returns
     n_step: 0  # Number of steps to use for n-step returns (set to 1 or None to disable n-step returns)
+    
     

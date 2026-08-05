@@ -97,7 +97,7 @@ def load_sarsa_critic(model_dir=None, shifted_actions=False, reward_type='termin
             if not shifted_actions:
                 sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/health_score_change_only/final_model_discount_0.975"
             else:
-                sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/health_score_change_only/final_model_discount_0.975/shifted_actions"
+                sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/health_score_change_only/final_model_discount_0.975/shifted_actions/vaso_reward_positive_control"
         else:
             raise ValueError(f"Unsupported reward type: {reward_type}")
 

@@ -97,7 +97,7 @@ def load_sarsa_critic(model_dir=None, shifted_actions=False, reward_type='termin
             if not shifted_actions:
                 sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/health_score_change_only/final_model_discount_0.975"
             else:
-                sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/health_score_change_only/final_model_discount_0.975/shifted_actions/vaso_reward_positive_control"
+                sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/health_score_change_only/final_model_discount_0.975/shifted_actions/vaso_reward_positive_control/vaso_coeff_0.2"
         else:
             raise ValueError(f"Unsupported reward type: {reward_type}")
 
@@ -124,7 +124,7 @@ def load_sarsa_critic(model_dir=None, shifted_actions=False, reward_type='termin
     # load results.json
     hyperparams_path = os.path.join(model_dir, "results.json")
     if not os.path.exists(hyperparams_path):
-        raise FileNotFoundError(f"results.json not found in {sarsa_dir}")
+        raise FileNotFoundError(f"results.json not found in {model_dir}")
     with open(hyperparams_path, "r") as f:
         results = json.load(f)
         hyperparams = results["hyperparameters"]   

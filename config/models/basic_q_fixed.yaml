@@ -15,7 +15,7 @@
     # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
     
-    reward_type: "health_score" # "terminal" # "health_score"
+    reward_type: "terminal" # "terminal" # "health_score"
     discount: 0.975  # Discount factor
     terminal_discount: 0.998 # discount for terminal health-score-based rewards
 
@@ -28,10 +28,13 @@
     # terminal_health_score_reward: 2.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
     terminal_reward_scale: 10.  # the scale of terminal reward 
     
-       
+    # add reward to vaso dosing as positive control expt
+    add_reward_to_vaso_dosing: False  # Whether to add reward to vaso dosing as positive control expt - this is added as a reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
+    vaso_reward_coefficient: [0.01, 0.05, 0.1, 0.2, 0.5] # [1.0, 5.0] # [0.2, 0.5, 1.0, 5.0]
+
     # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
     # max_traj_len: 72  # Max trajectory length - probably need to change this - in data config
-    learning_rate: 1.e-4 # 1.e-5 # 1e-4           #      [1e-6]  # Learning rates to try
+    learning_rate: 1.e-5 # 1.e-5 # 1e-4           #      [1e-6]  # Learning rates to try
     dropout: .1 # .2
     tau: 0.001 # Target network update rate
     weight_decay: 1.e-5 # 1.e-4 # L2 regularization strength
@@ -55,7 +58,7 @@
 
     # include next actions
     include_next_actions: True  # needed for SARSA
-    actions_shift: True # temporal shift to maintain causality.
+    actions_shift: False # temporal shift to maintain causality.
 
     # gradient clipping
     grad_clip: 1.

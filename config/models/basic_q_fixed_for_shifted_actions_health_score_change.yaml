@@ -15,7 +15,7 @@
     # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
     checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
     
-    reward_type: "health_score" # "terminal" # "health_score"
+    reward_type: "terminal" # "health_score" # "terminal" # "health_score"
     discount: 0.975  # Discount factor
     terminal_discount: 0.998 # discount for terminal health-score-based rewards
 
@@ -31,7 +31,7 @@
        
     # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
     # max_traj_len: 72  # Max trajectory length - probably need to change this - in data config
-    learning_rate: 1.e-4 # 1.e-5 # 1e-4           #      [1e-6]  # Learning rates to try
+    learning_rate: 1.e-5 # terminal: 1.e-5 # health_score_change: 1.e-4           #      [1e-6]  # Learning rates to try
     dropout: .1 # .2
     tau: 0.001 # Target network update rate
     weight_decay: 1.e-5 # 1.e-4 # L2 regularization strength

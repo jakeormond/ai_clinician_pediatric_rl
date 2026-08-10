@@ -747,9 +747,6 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
             current_params,
             search_iteration=i
         )
-    
-    
-
 
 
 def get_hyperparameter(hyperparams, config_manager, param_name):

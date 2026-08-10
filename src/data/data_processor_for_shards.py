@@ -250,7 +250,7 @@ class ShardProcessor:
 
     
     def process_reward(self, config_manager, hyperparams, health_score_median=None):
-        self.reward_type = config_manager.training_config['reward_type']
+        self.reward_type = config_manager.reward_type
         index_ptr = self.dynamic_deephit_dataset['index_ptr']
         mortality = self.dynamic_deephit_dataset['event']  # 1 for mortality, 0 for survival
 

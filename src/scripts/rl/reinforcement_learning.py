@@ -73,6 +73,11 @@ def parse_arguments():
                             ], 
                         help='Model type to train (default: any_percent_bc)') 
 
+    parser.add_argument('--reward_type', 
+                        default='health_score', 
+                        choices=['terminal', 'health_score'], 
+                        help='Type of reward to use (default: health_score)')
+
     parser.add_argument('--mode', type=str, default='single_split',
                         choices=['single_split', 'aggregate', 'analysis'],
                         help='Mode of training: single_split or aggregate (default: single_split)')

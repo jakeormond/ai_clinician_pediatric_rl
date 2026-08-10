@@ -638,6 +638,8 @@ def train_with_hyperparameters(
     # process the reward
     health_score_median = train_processor.process_reward(config_manager, hyperparams)
     val_processor.process_reward(config_manager, hyperparams, health_score_median=health_score_median)
+    # add reward_type to hyperparams for logging
+    hyperparams['reward_type'] = config_manager.reward_type
     
     n_epochs = config_manager.n_epochs
 

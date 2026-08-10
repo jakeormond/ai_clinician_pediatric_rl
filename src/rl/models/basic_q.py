@@ -586,7 +586,7 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
         tau=hyperparams.get('tau', config_manager.training_config['tau']),  
         grad_clip=hyperparams['grad_clip'], 
         reward_scaling=hyperparams.get('reward_scaling', 1.0),
-        reward_type=hyperparams['reward_type'],
+        reward_type=config_manager.reward_type,
         scheduler=critic_scheduler
     )
 

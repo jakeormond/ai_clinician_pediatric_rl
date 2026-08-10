@@ -646,7 +646,10 @@ def train_with_hyperparameters(
 
     # get job_id and seed
     job_id = get_job_id(config_manager)
-    seed = generate_run_seed(job_id, search_iteration)
+    if hyperparams.get('use_fixed_seed', False):
+        seed = hyperparams.get('seed', 42)  # Default to 42 if not specified
+    else:
+        seed = generate_run_seed(job_id, search_iteration)
     hyperparams['seed'] = seed
     config_manager.seed = seed
     set_seed(seed)

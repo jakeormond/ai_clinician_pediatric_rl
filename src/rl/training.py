@@ -2,6 +2,8 @@ import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 from collections import defaultdict
 from dataclasses import asdict
+import random
+import os
 from pathlib import Path
 import json
 import numpy as np
@@ -522,12 +524,21 @@ def optimize_hyperparameters(train_processor, val_processor, config_manager):
         select_best_trajectories(val_processor, config_manager)    
     
     ##################### loop through hyperparameter combinations #####################
+    # dedicated RNGs for hyperparameter sampling only — created once, outside
+    # the loop, so set_seed() calls inside training (per-iteration) can never
+    # reset them and cause repeated draws.
+    search_seed = int.from_bytes(os.urandom(4), "big")  # genuinely random, not time-based
+    logger.info(f"Hyperparameter search seed: {search_seed}")
+    config_manager.training_config['search_seed'] = search_seed
+
+    sampler_rng = random.Random(search_seed)
+    sampler_np_rng = np.random.default_rng(search_seed)
     logger.info(f"Starting hyperparameter optimization with {config_manager.n_search_iterations} iterations...")
     
     for i in range(config_manager.n_search_iterations):
         ################# select hyperparameters randomly #################
         current_params = select_hyperparameters_randomly(
-            hyperparameter_space, config_manager
+            hyperparameter_space, sampler_rng, sampler_np_rng
         )       
         logger.info(f"Testing hyperparameters {i+1}/{config_manager.n_search_iterations}: {current_params}")
 

@@ -178,18 +178,24 @@ def get_fixed_hyperparameters(config_manager):
     hyperparameters = config_manager.training_config.copy()
     return hyperparameters
 
-def select_hyperparameters_randomly(hyperparameter_space, config_manager):
-    """Selects hyperparameters randomly from the given space."""
+def select_hyperparameters_randomly(hyperparameter_space, rng, np_rng):
+    """Selects hyperparameters randomly from the given space.
+
+    rng: a `random.Random` instance, used for list choices.
+    np_rng: a `np.random.Generator` instance, used as the random_state for
+            scipy.stats distributions' .rvs() calls.
+    Both must be created once, outside the search loop, and never touched
+    by set_seed() inside training — otherwise hyperparameter sampling gets
+    silently reset to the same state every iteration.
+    """
     selected_params = {}
     for param, value in hyperparameter_space.items():
         if isinstance(value, list):
-            selected_params[param] = random.choice(value)
-        # else if it is a single value
+            selected_params[param] = rng.choice(value)
         elif isinstance(value, (int, float, str, bool)):
             selected_params[param] = value
         else:  # assume it's a scipy.stats distribution
-            # selected_params[param] = round(value.rvs(), 10)  # round for readability
-            selected_params[param] = value.rvs()  # round for readability
+            selected_params[param] = value.rvs(random_state=np_rng)
     return selected_params
 
 

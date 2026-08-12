@@ -39,18 +39,6 @@ def setup_logger(verbose=False):
     )
 
 
-# def set_seed(seed=42):
-#     random.seed(seed)
-#     os.environ['PYTHONHASHSEED'] = str(seed)
-#     np.random.seed(seed)
-#     torch.manual_seed(seed)
-#     torch.cuda.manual_seed(seed)
-#     torch.cuda.manual_seed_all(seed) # if you are using multi-GPU
-#     # The following ensure complete reproducibility but can slow down training:
-#     torch.backends.cudnn.deterministic = True
-#     torch.backends.cudnn.benchmark = False
-
-
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Train RL model')
@@ -89,22 +77,18 @@ def parse_arguments():
         
     parser.add_argument('--split_num', type=int, nargs='+', default=None,
                         help='Split number to train (not strictly required for single_split mode)')    
-    
-    # parser.add_argument('--seed', type=int, default=[42],
-    #                     help='Random seed to use for training (default: [42])')
+
+    # seeds is a list if not None, but argparse doesn't support list of ints, so we use nargs='+' and convert to list of ints
+    parser.add_argument('--seeds', type=int, nargs='+', default=None,
+                        help='Random seeds to use for training (default: None, which means use the default seed in the config file)')
     
     # mode-specific arguments    
     parser.add_argument('--fold', type=int, default=None,
                        help='Fold number to train (required for single_fold mode)')
 
-    # parser.add_argument('--experiment_variant', 
-    #                     default='quick_test', 
-    #                     choices=['quick_test', 'standard'], 
-    #                     help='Variant of the experiment to run (default: quick_test)')
-
     parser.add_argument('--search_variant', 
                         default='random_search', 
-                        choices=['random_search', 'grid_search', 'fixed_hyperparameters'], 
+                        choices=['random_search', 'grid_search', 'fixed_hyperparameters', 'best_hyperparameters'],
                         help='Variant of the search to use (default: random_search)')
 
     parser.add_argument('--n_search_iterations', type=int, default=2,

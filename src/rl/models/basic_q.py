@@ -575,7 +575,7 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
     critic_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
 		critic_optimizer, 
 		T_max=hyperparams['total_steps'],
-		eta_min=hyperparams['learning_rate'] * 0.1  # Final learning rate will be 10% of initial LR 
+		eta_min=learning_rate * 0.1  # Final learning rate will be 10% of initial LR 
 	)
    
     trainer = Q_Learner(

@@ -28,6 +28,11 @@
     # terminal_health_score_reward: 2.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
     terminal_reward_scale: 10.  # the scale of terminal reward 
     
+    # seeds 
+    use_fixed_seed: False # # Whether to use a fixed seed for reproducibility, otherwise randomly generated
+    seed: 42 # Seed value to use if use_fixed_seed is True
+    
+    
     # add reward to vaso dosing as positive control expt
     add_reward_to_vaso_dosing: False  # Whether to add reward to vaso dosing as positive control expt - this is added as a reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
     vaso_reward_coefficient: [0.01, 0.05, 0.1, 0.2, 0.5] # [1.0, 5.0] # [0.2, 0.5, 1.0, 5.0]

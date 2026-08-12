@@ -87,6 +87,7 @@ class ConfigManager:
                         else:
                             self.experiment_dir = Path(results_dir)
 
+
             elif self.experiment_type == "hyperparameter_search_evaluation" or self.experiment_type == "model_evaluation":
                 #### THIS NEEDS FIXING!!!!!!!!!!!!! ##############
                 
@@ -124,6 +125,14 @@ class ConfigManager:
 
             else:
                 self.create_single_split_dir()
+
+                if self.search_variant == "best_hyperparameters":
+                    self.best_results_path = os.path.join(
+                        self.paths["rl_models_dir"], self.model_type,
+                        f"split_{self.split_num}", self.cohort, self.actions,
+                        f"best_results_{self.reward_type}.json"
+                    )
+
 
         elif self.mode == "analyse_features":
             self.set_experiment_name()
@@ -407,14 +416,37 @@ class ConfigManager:
         return n_outer_folds, n_inner_folds, target_fold     
 
     def set_training_config(self):
-        training_config_path = self.get_config_path("training")
-        if not training_config_path.exists():
-            raise FileNotFoundError(f"Training config file not found: {training_config_path}")
-        with open(training_config_path, 'r') as f:
-            self.training_config = yaml.safe_load(f)
-        # add the action_mode to the training_config
-        if self.model_type != "dynamic_deephit":
-            self.training_config['action_mode'] = self.action_mode
+        if self.search_variant == 'best_hyperparameters':
+            # load best hyperparameters from f"best_results_{self.reward_type}.json" in the model_dir
+            if not os.path.exists(self.best_results_path):
+                raise FileNotFoundError(f"Best results file not found: {self.best_results_path}")
+            with open(self.best_results_path, 'r') as f:
+                best_results = yaml.safe_load(f)
+            self.training_config = best_results['hyperparameters']
+
+            numeric_float_keys = [
+                "learning_rate", "discount", "tau", "weight_decay",
+                "grad_clip", "reward_scaling"
+            ]
+            numeric_int_keys = ["batch_size", "hidden_dim", "total_steps", "n_step"]
+
+            for k in numeric_float_keys:
+                if k in self.training_config and isinstance(self.training_config[k], str):
+                    self.training_config[k] = float(self.training_config[k])
+
+            for k in numeric_int_keys:
+                if k in self.training_config and isinstance(self.training_config[k], str):
+                    self.training_config[k] = int(float(self.training_config[k]))
+
+        else:   
+            training_config_path = self.get_config_path("training")
+            if not training_config_path.exists():
+                raise FileNotFoundError(f"Training config file not found: {training_config_path}")
+            with open(training_config_path, 'r') as f:
+                self.training_config = yaml.safe_load(f)
+            # add the action_mode to the training_config
+            if self.model_type != "dynamic_deephit":
+                self.training_config['action_mode'] = self.action_mode
 
         
     def add_fold(self, fold):
@@ -453,10 +485,14 @@ class ConfigManager:
         
         elif self.experiment_type == "model_evaluation" or self.experiment_variant == "hyperparameter_search_evaluation":
             return
+
+        elif self.search_variant == "best_hyperparameters" and self.seeds is not None:
+            self.experiment_name = \
+                f"{self.hospital}_{self.model_type}_{self.actions}_{self.search_variant}_{self.start_time}_with_seeds"
         
         else:
             self.experiment_name = \
-                f"{self.hospital}_{self.model_type}_{self.actions}_{self.search_variant}_{self.experiment_variant}_{self.start_time}"
+                f"{self.hospital}_{self.model_type}_{self.actions}_{self.search_variant}_{self.start_time}"
         # make directory if it doesn't exist
         self._create_experiment_dir()
 

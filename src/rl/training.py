@@ -491,6 +491,27 @@ def single_split_training(config_manager):
         else:
             logger.warning("No valid validation losses were recorded during hyperparameter optimization.")
 
+
+    elif config_manager.search_variant == 'best_hyperparameters' and \
+        config_manager.seeds is not None and len(config_manager.seeds) > 0:
+        logger.info(" Best hyperparameter training mode enabled.")
+
+        # train model with best hyperparameters for each seed
+        for seed in config_manager.seeds:
+            config_manager.training_config['seed'] = seed
+            logger.info(f"Training with best hyperparameters for seed {seed}...")
+
+            # get fixed hyperparameters
+            hyperparams = get_fixed_hyperparameters(config_manager)
+
+            # train model
+            train_with_hyperparameters(
+                train_processor, 
+                val_processor, 
+                config_manager, 
+                hyperparams,
+            )            
+
     else:
         logger.info(" Fixed hyperparameter training mode enabled.")
 

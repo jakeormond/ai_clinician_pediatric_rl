@@ -922,6 +922,7 @@ Expects, already in your session:
     clinician_actions                           : test-set clinician actions, (n, 2)
     generate_model_outputs, normalize_sensitivity, action_sensitivity_sweep : your existing functions
 """
+ 
 
 def build_joint_occupancy_counts(actions, n_bins=20):
     """
@@ -993,21 +994,117 @@ def occupancy_partitioned_range(
     }
  
  
+def build_joint_state_action_occupancy_counts(health_score, actions, n_severity_bins=5, n_action_bins=10):
+    """
+    3D joint occupancy histogram: severity (health score) x fluid x vaso,
+    built from TRAINING data. Coarser action binning (default 10x10 rather
+    than 20x20) than the marginal 2D histogram, since adding a third
+    dimension thins out cell counts fast — kept coarse enough that cells
+    stay meaningfully populated.
+ 
+    Severity bins are QUANTILES of the training health-score distribution,
+    not fixed-width — health score is unlikely to be uniformly distributed
+    across 0-100, so quantile bins keep roughly equal numbers of training
+    timesteps per severity bin.
+ 
+    Returns: joint_counts (n_severity_bins, n_action_bins, n_action_bins),
+             severity_edges, fluid_edges, vaso_edges
+    """
+    health_score_np = health_score.cpu().numpy() if torch.is_tensor(health_score) else np.asarray(health_score)
+    actions_np = actions.cpu().numpy() if torch.is_tensor(actions) else np.asarray(actions)
+ 
+    severity_edges = np.quantile(health_score_np, np.linspace(0, 1, n_severity_bins + 1))
+    severity_edges[0], severity_edges[-1] = -np.inf, np.inf  # catch any out-of-training-range test values
+ 
+    fluid_edges = np.linspace(0, 1, n_action_bins + 1)
+    vaso_edges = np.linspace(0, 1, n_action_bins + 1)
+ 
+    severity_bin = _bin_index(health_score_np, severity_edges)
+    fluid_bin = _bin_index(actions_np[:, 0], fluid_edges)
+    vaso_bin = _bin_index(actions_np[:, 1], vaso_edges)
+ 
+    joint_counts = np.zeros((n_severity_bins, n_action_bins, n_action_bins))
+    np.add.at(joint_counts, (severity_bin, fluid_bin, vaso_bin), 1)
+ 
+    return joint_counts, severity_edges, fluid_edges, vaso_edges
+ 
+ 
+def occupancy_partitioned_range_state_aware(
+        q_at_grid,          # (n_timesteps, n_grid)
+        grid,                # (n_grid,)
+        real_other_dose,     # (n_timesteps,)
+        sweep_dim,
+        test_health_score,   # (n_timesteps,) — THIS test set's own severity, used to pick each
+                              # timestep's own severity bin (built from training-set quantile edges)
+        joint_counts, severity_edges, fluid_edges, vaso_edges,
+        min_count=10,
+    ):
+    """
+    Same as occupancy_partitioned_range, but occupancy is looked up within
+    each timestep's OWN severity bin, rather than pooled across the whole
+    training set — i.e. "was this dose combination seen in patients this
+    sick," not "was this dose combination seen anywhere."
+    """
+    q = q_at_grid.cpu().numpy() if torch.is_tensor(q_at_grid) else np.asarray(q_at_grid)
+    grid_np = grid.cpu().numpy() if torch.is_tensor(grid) else np.asarray(grid)
+    real_other_np = real_other_dose.cpu().numpy() if torch.is_tensor(real_other_dose) else np.asarray(real_other_dose)
+    health_score_np = test_health_score.cpu().numpy() if torch.is_tensor(test_health_score) else np.asarray(test_health_score)
+ 
+    n_timesteps, n_grid = q.shape
+    severity_bin = _bin_index(health_score_np, severity_edges)  # (n_timesteps,) — fixed per timestep, doesn't vary across the sweep
+ 
+    if sweep_dim == 1:  # vaso swept, fluid held at real dose
+        fluid_vals = np.repeat(real_other_np[:, None], n_grid, axis=1)
+        vaso_vals = np.tile(grid_np[None, :], (n_timesteps, 1))
+    else:
+        fluid_vals = np.tile(grid_np[None, :], (n_timesteps, 1))
+        vaso_vals = np.repeat(real_other_np[:, None], n_grid, axis=1)
+ 
+    fluid_bin = _bin_index(fluid_vals, fluid_edges)
+    vaso_bin = _bin_index(vaso_vals, vaso_edges)
+    severity_bin_broadcast = np.repeat(severity_bin[:, None], n_grid, axis=1)
+ 
+    counts = joint_counts[severity_bin_broadcast, fluid_bin, vaso_bin]
+    well_supported = counts >= min_count
+ 
+    full_range = q.max(axis=1) - q.min(axis=1)
+    restricted_range = np.full(n_timesteps, np.nan)
+    for t in range(n_timesteps):
+        mask = well_supported[t]
+        if mask.sum() >= 2:
+            vals = q[t, mask]
+            restricted_range[t] = vals.max() - vals.min()
+ 
+    frac_supported = well_supported.mean(axis=1)
+ 
+    return {
+        "full_range": full_range,
+        "restricted_range": restricted_range,
+        "frac_supported": frac_supported,
+    }
+ 
+ 
 def compute_seed_occupancy_sensitivities(
         models, q_values_list, processor, clinician_actions, sweep_dim,
         joint_counts, fluid_edges, vaso_edges, min_count=10,
         dim_label="", condition_label="",
+        state_aware=False, test_health_score=None, severity_edges=None,
     ):
     """
     Runs the sweep + occupancy partition for every seed's model. Returns
     (full_medians, restricted_medians, coverage) arrays, each length n_seeds.
     restricted_medians uses only timesteps with a valid (non-NaN) restricted
     range; coverage = fraction of timesteps with >=2 well-supported grid points.
+ 
+    If state_aware=True, uses occupancy_partitioned_range_state_aware (severity
+    x fluid x vaso occupancy) instead of the marginal (fluid x vaso only)
+    version — requires test_health_score and severity_edges, and joint_counts
+    should be the 3D array from build_joint_state_action_occupancy_counts.
     """
     other_dim = 0 if sweep_dim == 1 else 1
     real_other_dose = clinician_actions[:, other_dim]
  
-    full_medians, restricted_medians, coverage = [], [], []
+    full_medians, restricted_medians, coverage, frac_supported_list = [], [], [], []
     n_seeds = len(models)
  
     for seed_idx, (model_entry, q_real) in enumerate(zip(models, q_values_list)):
@@ -1016,10 +1113,18 @@ def compute_seed_occupancy_sensitivities(
         model = model_entry[0] if isinstance(model_entry, (list, tuple)) else model_entry
  
         sweep = action_sensitivity_sweep(processor, model, clinician_actions, sweep_dim=sweep_dim)
-        part = occupancy_partitioned_range(
-            sweep["q_at_grid"], sweep["grid"], real_other_dose, sweep_dim,
-            joint_counts, fluid_edges, vaso_edges, min_count=min_count,
-        )
+ 
+        if state_aware:
+            part = occupancy_partitioned_range_state_aware(
+                sweep["q_at_grid"], sweep["grid"], real_other_dose, sweep_dim,
+                test_health_score, joint_counts, severity_edges, fluid_edges, vaso_edges,
+                min_count=min_count,
+            )
+        else:
+            part = occupancy_partitioned_range(
+                sweep["q_at_grid"], sweep["grid"], real_other_dose, sweep_dim,
+                joint_counts, fluid_edges, vaso_edges, min_count=min_count,
+            )
  
         full_pct = normalize_sensitivity(
             torch.as_tensor(part["full_range"]), q_real.detach().cpu()
@@ -1033,12 +1138,15 @@ def compute_seed_occupancy_sensitivities(
         restricted_medians.append(np.median(restricted_pct))
         cov = valid.mean()  # fraction of timesteps where a restricted range could even be computed
         coverage.append(cov)
+        mean_frac_supported = part["frac_supported"].mean()  # avg fraction of the 20 grid points that were well-supported, per timestep
+        frac_supported_list.append(mean_frac_supported)
  
         print(f"  [{condition_label} / {dim_label}] seed {seed_idx + 1}/{n_seeds}: done in {time.time() - t0:.1f}s "
               f"(full median={np.median(full_pct):.1f}%, restricted median={np.median(restricted_pct):.1f}%, "
-              f"coverage={cov*100:.0f}% of timesteps had >=2 well-supported grid points)", flush=True)
+              f"coverage={cov*100:.0f}% of timesteps had >=2 well-supported grid points, "
+              f"avg {mean_frac_supported*100:.0f}% of the 20 grid points were well-supported per timestep)", flush=True)
  
-    return np.array(full_medians), np.array(restricted_medians), np.array(coverage)
+    return np.array(full_medians), np.array(restricted_medians), np.array(coverage), np.array(frac_supported_list)
  
  
 def _beeswarm_offsets(values, min_sep, max_offset=0.18, step=0.045):
@@ -1066,32 +1174,51 @@ def plot_occupancy_partitioned_sensitivity(
     training_actions,          # actions from the TRAINING set, for building occupancy histogram
     min_count=10,
     save_path="/mnt/user-data/outputs/occupancy_partitioned_sensitivity.png",
+    state_aware=False,
+    training_health_score=None,   # required if state_aware=True — training-set health scores
+    test_health_score=None,       # required if state_aware=True — test-set health scores
+    n_severity_bins=5,
+    n_action_bins=10,
 ):
-    joint_counts, fluid_edges, vaso_edges = build_joint_occupancy_counts(training_actions)
+    if state_aware:
+        if training_health_score is None or test_health_score is None:
+            raise ValueError("state_aware=True requires both training_health_score and test_health_score")
+        joint_counts, severity_edges, fluid_edges, vaso_edges = build_joint_state_action_occupancy_counts(
+            training_health_score, training_actions, n_severity_bins=n_severity_bins, n_action_bins=n_action_bins
+        )
+        restriction_label = f"Joint state+dose\nsupported (n≥{min_count})"
+        title_suffix = "restricted to joint severity+dose data-supported regions"
+    else:
+        joint_counts, fluid_edges, vaso_edges = build_joint_occupancy_counts(training_actions)
+        severity_edges = None
+        restriction_label = f"Well-supported\nonly (n≥{min_count})"
+        title_suffix = "restricted to data-supported regions"
  
     fig, axes = plt.subplots(1, 2, figsize=(11, 5))
     dims = [("Vasopressor", 1, axes[0]), ("Fluid", 0, axes[1])]
     results = {}
  
     for dim_label, sweep_dim, ax in dims:
-        print(f"\n=== {dim_label}: occupancy-partitioned sweep ===", flush=True)
+        print(f"\n=== {dim_label}: occupancy-partitioned sweep ({'state-aware' if state_aware else 'marginal'}) ===", flush=True)
  
         print("-- Terminal reward models --", flush=True)
-        full_t, restr_t, cov_t = compute_seed_occupancy_sensitivities(
+        full_t, restr_t, cov_t, frac_t = compute_seed_occupancy_sensitivities(
             terminal_models, terminal_q_values, processor, clinician_actions, sweep_dim,
             joint_counts, fluid_edges, vaso_edges, min_count=min_count,
             dim_label=dim_label, condition_label="terminal",
+            state_aware=state_aware, test_health_score=test_health_score, severity_edges=severity_edges,
         )
         print("-- Health-score-difference models --", flush=True)
-        full_h, restr_h, cov_h = compute_seed_occupancy_sensitivities(
+        full_h, restr_h, cov_h, frac_h = compute_seed_occupancy_sensitivities(
             health_score_models, health_score_q_values, processor, clinician_actions, sweep_dim,
             joint_counts, fluid_edges, vaso_edges, min_count=min_count,
             dim_label=dim_label, condition_label="health_score",
+            state_aware=state_aware, test_health_score=test_health_score, severity_edges=severity_edges,
         )
  
         results[dim_label] = {
-            "terminal": {"full": full_t, "restricted": restr_t, "coverage": cov_t},
-            "health_score": {"full": full_h, "restricted": restr_h, "coverage": cov_h},
+            "terminal": {"full": full_t, "restricted": restr_t, "coverage": cov_t, "frac_supported": frac_t},
+            "health_score": {"full": full_h, "restricted": restr_h, "coverage": cov_h, "frac_supported": frac_h},
         }
  
         # paired points: x=0 "Full range", x=1 "Well-supported only", one line per seed
@@ -1112,7 +1239,7 @@ def plot_occupancy_partitioned_sensitivity(
                        linewidths=0.7, zorder=2)
  
         ax.set_xticks([0, 1])
-        ax.set_xticklabels(["Full sweep\nrange", f"Well-supported\nonly (n≥{min_count})"])
+        ax.set_xticklabels(["Full sweep\nrange", restriction_label])
         ax.set_xlim(-0.4, 1.4)
         ax.set_ylabel("Median normalized sensitivity\n(% of state-wise Q IQR)")
         ax.set_title(f"{dim_label}", fontsize=11, fontweight="bold")
@@ -1120,18 +1247,20 @@ def plot_occupancy_partitioned_sensitivity(
         ax.spines[["top", "right"]].set_visible(False)
         ax.grid(axis="y", alpha=0.25)
  
-        print(f"{dim_label} — Terminal:     full={full_t.mean():.1f}% (coverage={cov_t.mean()*100:.0f}%), "
-              f"restricted={restr_t.mean():.1f}%")
-        print(f"{dim_label} — Health-score: full={full_h.mean():.1f}% (coverage={cov_h.mean()*100:.0f}%), "
-              f"restricted={restr_h.mean():.1f}%")
+        print(f"{dim_label} — Terminal:     full={full_t.mean():.1f}% (coverage={cov_t.mean()*100:.0f}%, "
+              f"avg grid-point support={frac_t.mean()*100:.0f}%), restricted={restr_t.mean():.1f}%")
+        print(f"{dim_label} — Health-score: full={full_h.mean():.1f}% (coverage={cov_h.mean()*100:.0f}%, "
+              f"avg grid-point support={frac_h.mean()*100:.0f}%), restricted={restr_h.mean():.1f}%")
  
     axes[0].legend(loc="upper left", frameon=False, fontsize=9)
-    fig.suptitle("Action-sensitivity: full sweep vs. restricted to data-supported regions", fontsize=12, y=1.03)
+    fig.suptitle(f"Action-sensitivity: full sweep vs. {title_suffix}", fontsize=12, y=1.03)
     fig.tight_layout()
     fig.savefig(save_path, dpi=300, bbox_inches="tight")
     print(f"\nSaved to {save_path}")
     return fig, results
+ 
 
+ 
 def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

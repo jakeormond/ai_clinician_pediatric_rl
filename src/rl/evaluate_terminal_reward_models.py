@@ -6,6 +6,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 import h5py as h5
+import seaborn as sns
+import time
 
 import torch
 import numpy as np
@@ -21,9 +23,16 @@ from .training import create_processor_from_shards
 from .replay_buffer import RLDataset
 from torch.utils.data import DataLoader, TensorDataset
 from scipy import stats
+from sklearn.metrics import roc_auc_score
 
 from ..setup_environment import load_paths
 
+
+SURVIVE_COLOR = "#2471a3"
+DIE_COLOR = "#c0392b"
+
+TERMINAL_REWARD_COLOR = "#7d3c98"   # purple
+HEALTH_SCORE_REWARD_COLOR = "#229954"  # green
 
 SAVE_DIR = "/home/jake/Documents/AI_Clinician/models/analysis/terminal_reward_zero_dose_advantage"
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -67,6 +76,7 @@ def create_test_rl_dataset(train_processor, test_processor, config_manager, hype
     n_step = hyperparams['n_step']
     gamma = hyperparams['discount']
     use_compressed_latents = hyperparams['use_compressed_latents']
+    actions_shift = hyperparams['actions_shift'] 
 
     scaler = train_processor.create_rl_dataset(
         states="model_outputs", 
@@ -74,7 +84,8 @@ def create_test_rl_dataset(train_processor, test_processor, config_manager, hype
         action_names=action_names, 
         use_compressed_latents=use_compressed_latents,
         n_step=n_step,
-        gamma=gamma
+        gamma=gamma,
+        actions_shift=actions_shift
     ) 
 
     _ = test_processor.create_rl_dataset(
@@ -83,13 +94,14 @@ def create_test_rl_dataset(train_processor, test_processor, config_manager, hype
         action_names=action_names,
         use_compressed_latents=use_compressed_latents,
         n_step=n_step,
-        gamma=gamma
+        gamma=gamma,
+        actions_shift=actions_shift
     )
 
     return train_processor, test_processor, scaler
 
 
-def load_sarsa_critic(model_dir=None, shifted_actions=False, reward_type='terminal'):
+def load_sarsa_critic(model_dir=None, shifted_actions=True, reward_type='terminal'):
     if model_dir is None:
         if reward_type == 'terminal':
             sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/terminal_only/final_model_terminal_discount_0.998"
@@ -515,6 +527,611 @@ def plot_advantage_analysis(
     return report_lines
 
 
+
+SURVIVE_COLOR = "#2471a3"
+DIE_COLOR = "#c0392b"
+ 
+ 
+def _to_numpy(x):
+    return x.detach().cpu().numpy() if torch.is_tensor(x) else np.asarray(x)
+ 
+ 
+def _build_long_df(q_values_list, mortality):
+    """
+    q_values_list: list of n_seeds arrays, each (n_test,)
+    mortality: (n_test,) array, shared across all seeds (same test set)
+ 
+    Returns a long-format dataframe: columns = ['seed', 'q_value', 'outcome']
+    """
+    mortality = _to_numpy(mortality)
+    rows = []
+    for seed_idx, q in enumerate(q_values_list):
+        q = _to_numpy(q).reshape(-1)
+        if q.shape[0] != mortality.shape[0]:
+            raise ValueError(
+                f"Seed {seed_idx}: q_values length ({q.shape[0]}) != mortality length "
+                f"({mortality.shape[0]}). Are these from the same test set / ordering?"
+            )
+        outcome = np.where(mortality == 1, "Non-survivor", "Survivor")
+        rows.append(pd.DataFrame({
+            "seed": f"Seed {seed_idx + 1}",
+            "q_value": q,
+            "outcome": outcome,
+        }))
+    return pd.concat(rows, ignore_index=True)
+ 
+ 
+def plot_q_by_outcome(q_values_list, mortality, title, save_path):
+    df = _build_long_df(q_values_list, mortality)
+ 
+    fig, ax = plt.subplots(figsize=(9, 5))
+ 
+    sns.violinplot(
+        data=df, x="seed", y="q_value", hue="outcome",
+        split=True, inner="quartile", ax=ax,
+        palette={"Survivor": SURVIVE_COLOR, "Non-survivor": DIE_COLOR},
+        cut=0, linewidth=1,
+    )
+ 
+    ax.set_xlabel("")
+    ax.set_ylabel("Q-value (real clinician actions)")
+    ax.set_title(title, fontsize=12, fontweight="bold")
+    ax.legend(title=None, loc="upper right", frameon=False)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.grid(axis="y", alpha=0.25)
+ 
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    print(f"Saved to {save_path}")
+    return fig, df
+
+
+
+def _seed_means(q_values_list, mortality):
+    """Returns (survivor_means, non_survivor_means), each length n_seeds."""
+    mortality = _to_numpy(mortality)
+    survivor_means, non_survivor_means = [], []
+    for q in q_values_list:
+        q = _to_numpy(q).reshape(-1)
+        survivor_means.append(q[mortality == 0].mean())
+        non_survivor_means.append(q[mortality == 1].mean())
+    return np.array(survivor_means), np.array(non_survivor_means)
+ 
+ 
+def plot_mean_q_by_outcome(
+    terminal_q_values,
+    health_score_q_values,
+    mortality,
+    save_path="/mnt/user-data/outputs/mean_q_by_outcome.png",
+):
+    fig, axes = plt.subplots(1, 2, figsize=(9, 4.5))
+ 
+    conditions = [
+        ("Terminal reward", terminal_q_values, axes[0]),
+        ("Health-score-difference reward", health_score_q_values, axes[1]),
+    ]
+ 
+    rng = np.random.default_rng(0)  # fixed seed so jitter is reproducible across re-runs
+ 
+    for title, q_values_list, ax in conditions:
+        surv, non_surv = _seed_means(q_values_list, mortality)
+        n_seeds = len(surv)
+        x_surv, x_non_surv = 0, 1
+ 
+        # small per-seed jitter (same jitter offset used for both the point and its
+        # connecting line, so overlapping seeds — common for terminal — become
+        # visible as separate points/lines rather than stacking exactly on top of each other)
+        jitter = rng.uniform(-0.06, 0.06, size=n_seeds)
+        x_surv_j = x_surv + jitter
+        x_non_surv_j = x_non_surv + jitter
+ 
+        # thin connecting line per seed
+        for xs, xn, s, ns in zip(x_surv_j, x_non_surv_j, surv, non_surv):
+            ax.plot([xs, xn], [s, ns], color="grey", alpha=0.5, linewidth=1, zorder=1)
+ 
+        ax.scatter(x_surv_j, surv, color=SURVIVE_COLOR, s=60, zorder=2, label="Survivor")
+        ax.scatter(x_non_surv_j, non_surv, color=DIE_COLOR, s=60, zorder=2, label="Non-survivor")
+ 
+        ax.set_xticks([x_surv, x_non_surv])
+        ax.set_xticklabels(["Survivor", "Non-survivor"])
+        ax.set_xlim(-0.4, 1.4)
+        ax.set_ylabel("Mean Q-value (real clinician actions)")
+        ax.set_title(title, fontsize=11, fontweight="bold")
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.grid(axis="y", alpha=0.25)
+ 
+    fig.suptitle(f"Mean Q-value by outcome, per seed (n={len(terminal_q_values)} seeds/condition)", fontsize=12, y=1.03)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    print(f"Saved to {save_path}")
+    plt.close(fig)  # prevent figures from accumulating in memory across the loop
+    return fig
+ 
+
+
+def _beeswarm_offsets(values, min_sep, max_offset=0.18, step=0.045):
+    """
+    Deterministic x-offsets for a 1D beeswarm: points that are close together
+    in value get pushed apart symmetrically; points that are already far from
+    their neighbors stay at offset 0. Not random — same input always gives
+    the same layout, and separation reflects actual closeness in value.
+ 
+    values: 1D array of y-values (e.g. AUCs) to place along a single column.
+    min_sep: values closer than this (in y-units) are considered "colliding"
+             and will be pushed apart.
+    max_offset / step: how far apart collision resolution can push points,
+             and the increment used per collision, in x-axis units.
+    """
+    order = np.argsort(values)
+    offsets = np.zeros(len(values))
+    placed = []  # (y_value, x_offset) of points already placed
+ 
+    for idx in order:
+        y = values[idx]
+        colliding = [p for p in placed if abs(p[0] - y) < min_sep]
+        if not colliding:
+            offsets[idx] = 0.0
+        else:
+            k = len(colliding)
+            side = 1 if k % 2 == 1 else -1
+            magnitude = min(((k + 1) // 2) * step, max_offset)
+            offsets[idx] = side * magnitude
+        placed.append((y, offsets[idx]))
+ 
+    return offsets
+ 
+ 
+def _seed_aucs(q_values_list, mortality):
+    """Returns array of AUCs, one per seed, using each model's full test-set Q values."""
+    mortality = _to_numpy(mortality)
+    aucs = []
+    for q in q_values_list:
+        q = _to_numpy(q).reshape(-1)
+        auc = roc_auc_score(1 - mortality, q)  # higher Q -> predicts survival
+        aucs.append(auc)
+    return np.array(aucs)
+ 
+ 
+def plot_auc_by_condition(
+    terminal_q_values,
+    health_score_q_values,
+    mortality,
+    save_path="/mnt/user-data/outputs/auc_by_condition.png",
+):
+    auc_terminal = _seed_aucs(terminal_q_values, mortality)
+    auc_health = _seed_aucs(health_score_q_values, mortality)
+ 
+    fig, ax = plt.subplots(figsize=(5.5, 5))
+ 
+    # min_sep controls how close two AUC values need to be before they're
+    # pushed apart — set relative to the full spread across both conditions
+    # so it adapts to whatever scale your actual AUCs land on (e.g. terminal
+    # spanning 0.6-0.9 vs. health-score clustered tightly near 0.5).
+    all_aucs = np.concatenate([auc_terminal, auc_health])
+    min_sep = max((all_aucs.max() - all_aucs.min()) * 0.03, 1e-4)
+ 
+    x_terminal = 0 + _beeswarm_offsets(auc_terminal, min_sep=min_sep)
+    x_health = 1 + _beeswarm_offsets(auc_health, min_sep=min_sep)
+ 
+    ax.scatter(x_terminal, auc_terminal, color=TERMINAL_REWARD_COLOR, s=70, alpha=0.85,
+               edgecolors="white", linewidths=0.8, zorder=3, label="Terminal")
+    ax.scatter(x_health, auc_health, color=HEALTH_SCORE_REWARD_COLOR, s=70, alpha=0.85,
+               edgecolors="white", linewidths=0.8, zorder=3, label="Health-score diff.")
+ 
+    ax.axhline(0.5, color="grey", linestyle="--", linewidth=1, zorder=1)
+    ax.text(1.32, 0.5, "chance", va="center", fontsize=9, color="grey")
+ 
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels(["Terminal\nreward", "Health-score\ndifference"])
+    ax.set_xlim(-0.4, 1.4)
+    ax.set_ylabel("AUC (Q-value as survival predictor)")
+    ax.set_title("Q-value discrimination of survival, per seed\n(n=5 seeds/condition)", fontsize=11, fontweight="bold")
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.grid(axis="y", alpha=0.25)
+ 
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    print(f"Saved to {save_path}")
+    print(f"Terminal AUC:     mean={auc_terminal.mean():.3f}, values={np.round(auc_terminal, 3)}")
+    print(f"Health-score AUC: mean={auc_health.mean():.3f}, values={np.round(auc_health, 3)}")
+    return fig, auc_terminal, auc_health
+ 
+
+
+
+
+def action_sensitivity_sweep(
+        processor,
+        model,
+        clinician_actions,
+        sweep_dim,          # 0 = fluid, 1 = vaso — which action to sweep
+        n_grid=20,
+        batch_size=1024,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    ):
+    """
+    Sweeps `sweep_dim` across [0, 1], holding the OTHER action dimension at
+    the clinician's real dose throughout (since swept_actions is cloned from
+    clinician_actions and only sweep_dim is overwritten). Use sweep_dim=1
+    for vaso, sweep_dim=0 for fluid.
+    """
+    grid = torch.linspace(0, 1, n_grid)
+    q_at_grid = []
+ 
+    for grid_idx, val in enumerate(grid):
+        print(f"    grid point {grid_idx + 1}/{n_grid} (value={val.item():.3f})...", flush=True)
+        swept_actions = clinician_actions.clone()
+        swept_actions[:, sweep_dim] = val
+        # the other dimension is untouched -> stays at clinician's real dose
+ 
+        q_vals = generate_model_outputs(
+            processor,
+            model=model,
+            actions_to_use=swept_actions,
+            model_type="critic",
+            reduction='mean',
+            batch_size=batch_size,
+            device=device,
+        )
+        q_at_grid.append(q_vals)
+ 
+    q_at_grid = torch.stack(q_at_grid, dim=1)  # (n_timesteps, n_grid)
+    q_range = q_at_grid.max(dim=1).values - q_at_grid.min(dim=1).values
+ 
+    return {
+        "q_at_grid": q_at_grid,
+        "q_range": q_range,
+        "grid": grid,
+    }
+ 
+ 
+def compute_seed_sensitivities(models, q_values_list, processor, clinician_actions, sweep_dim, dim_label="", condition_label=""):
+    """
+    Runs the sweep for every seed's model, returns one median normalized
+    sensitivity (% of that seed's own real-action Q IQR) per seed.
+    """
+    import time
+ 
+    medians = []
+    n_seeds = len(models)
+    for seed_idx, (model_entry, q_real) in enumerate(zip(models, q_values_list)):
+        t0 = time.time()
+        print(f"  [{condition_label} / {dim_label}] seed {seed_idx + 1}/{n_seeds}: starting sweep...", flush=True)
+        model = model_entry[0] if isinstance(model_entry, (list, tuple)) else model_entry
+        sweep = action_sensitivity_sweep(processor, model, clinician_actions, sweep_dim=sweep_dim)
+        pct = normalize_sensitivity(sweep["q_range"], q_real)
+        medians.append(np.median(pct))
+        print(f"  [{condition_label} / {dim_label}] seed {seed_idx + 1}/{n_seeds}: done in {time.time() - t0:.1f}s "
+              f"(median sensitivity = {np.median(pct):.1f}%)", flush=True)
+    return np.array(medians)
+ 
+ 
+def _beeswarm_offsets(values, min_sep, max_offset=0.18, step=0.045):
+    """Deterministic beeswarm x-offsets — see plot_auc_by_condition.py for details."""
+    order = np.argsort(values)
+    offsets = np.zeros(len(values))
+    placed = []
+    for idx in order:
+        y = values[idx]
+        colliding = [p for p in placed if abs(p[0] - y) < min_sep]
+        if not colliding:
+            offsets[idx] = 0.0
+        else:
+            k = len(colliding)
+            side = 1 if k % 2 == 1 else -1
+            magnitude = min(((k + 1) // 2) * step, max_offset)
+            offsets[idx] = side * magnitude
+        placed.append((y, offsets[idx]))
+    return offsets
+ 
+ 
+def plot_action_sensitivity_by_condition(
+    terminal_models, health_score_models,
+    terminal_q_values, health_score_q_values,
+    processor, clinician_actions,
+    save_path="/mnt/user-data/outputs/action_sensitivity_by_condition.png",
+):
+    """
+    Two panels (vaso, fluid), each showing terminal vs. health-score
+    median-per-seed normalized sensitivity, same beeswarm/color style as
+    plot_auc_by_condition. Magnitude only — no dosing direction/preference.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+ 
+    dims = [("Vasopressor", 1, axes[0]), ("Fluid", 0, axes[1])]
+    results = {}
+ 
+    for dim_label, sweep_dim, ax in dims:
+        print(f"\n=== {dim_label} sweep ===", flush=True)
+ 
+        print(f"-- Terminal reward models --", flush=True)
+        sens_terminal = compute_seed_sensitivities(
+            terminal_models, terminal_q_values, processor, clinician_actions, sweep_dim,
+            dim_label=dim_label, condition_label="terminal"
+        )
+        print(f"-- Health-score-difference models --", flush=True)
+        sens_health = compute_seed_sensitivities(
+            health_score_models, health_score_q_values, processor, clinician_actions, sweep_dim,
+            dim_label=dim_label, condition_label="health_score"
+        )
+        results[dim_label] = {"terminal": sens_terminal, "health_score": sens_health}
+ 
+        all_vals = np.concatenate([sens_terminal, sens_health])
+        min_sep = max((all_vals.max() - all_vals.min()) * 0.03, 1e-4)
+ 
+        x_terminal = 0 + _beeswarm_offsets(sens_terminal, min_sep=min_sep)
+        x_health = 1 + _beeswarm_offsets(sens_health, min_sep=min_sep)
+ 
+        ax.scatter(x_terminal, sens_terminal, color=TERMINAL_REWARD_COLOR, s=70, alpha=0.85,
+                   edgecolors="white", linewidths=0.8, zorder=3, label="Terminal")
+        ax.scatter(x_health, sens_health, color=HEALTH_SCORE_REWARD_COLOR, s=70, alpha=0.85,
+                   edgecolors="white", linewidths=0.8, zorder=3, label="Health-score diff.")
+ 
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels(["Terminal\nreward", "Health-score\ndifference"])
+        ax.set_xlim(-0.4, 1.4)
+        ax.set_ylabel("Median action-sweep Q range\n(% of state-wise Q IQR)")
+        ax.set_title(f"{dim_label} dose sensitivity\n(n={len(sens_terminal)} seeds/condition)",
+                     fontsize=11, fontweight="bold")
+        ax.set_ylim(bottom=0)
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.grid(axis="y", alpha=0.25)
+ 
+        print(f"{dim_label} — Terminal:     mean={sens_terminal.mean():.1f}%, values={np.round(sens_terminal, 1)}")
+        print(f"{dim_label} — Health-score: mean={sens_health.mean():.1f}%, values={np.round(sens_health, 1)}")
+ 
+    axes[0].legend(loc="upper left", frameon=False, fontsize=9)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    print(f"Saved to {save_path}")
+    return fig, results
+def normalize_sensitivity(q_range, reference_q_real):
+    """
+    Expresses per-timestep action-sensitivity (q_range) as a percentage
+    of the reference critic's overall between-state Q spread (IQR),
+    computed at real clinician actions — puts sensitivity on a comparable
+    scale across critics/reward arms with very different absolute Q scales.
+    """
+    q25, q75 = torch.quantile(reference_q_real, 0.25), torch.quantile(reference_q_real, 0.75)
+    ref_iqr = (q75 - q25).clamp(min=1e-6)
+    return (q_range / ref_iqr * 100).cpu().numpy()
+
+
+
+"""
+Occupancy-partitioned action-sensitivity.
+ 
+For each timestep's action-sensitivity sweep, restricts the max-min Q-range
+calculation to only the grid points whose (fluid, vaso) combination has real
+data support in the training set (occupancy count >= min_count), using the
+same 2D joint-occupancy binning as build_zero_occupancy_action_pool. Compares
+this "well-supported only" sensitivity against the original unrestricted
+sensitivity.
+ 
+Rationale: if health-score's higher sensitivity survives restriction to
+well-supported (state-independent) action-space regions, that argues the
+effect is learned signal rather than smooth extrapolation into sparse/empty
+regions of action space.
+ 
+Expects, already in your session:
+    terminal_models, health_score_models       : lists of 5 loaded critics
+    terminal_q_values, health_score_q_values   : lists of 5 Q-value tensors at
+        real clinician actions (for the IQR normalization reference)
+    processors['test']                          : test processor
+    processors['train'] (or wherever your training actions live)          
+    clinician_actions                           : test-set clinician actions, (n, 2)
+    generate_model_outputs, normalize_sensitivity, action_sensitivity_sweep : your existing functions
+"""
+
+def build_joint_occupancy_counts(actions, n_bins=20):
+    """
+    Full 2D joint occupancy histogram of (fluid, vaso) actions, plus bin
+    edges — same binning convention as build_zero_occupancy_action_pool,
+    but returns the full count grid rather than just the empty-bin list.
+    Should be built from TRAINING data (what the critic actually learned
+    from), not test data.
+    """
+    actions_np = actions.cpu().numpy() if torch.is_tensor(actions) else np.asarray(actions)
+    joint_counts, fluid_edges, vaso_edges = np.histogram2d(
+        actions_np[:, 0], actions_np[:, 1], bins=n_bins
+    )
+    return joint_counts, fluid_edges, vaso_edges
+ 
+ 
+def _bin_index(values, edges):
+    """0-indexed bin index per value, matching np.histogram2d's convention.
+    Values outside [edges[0], edges[-1]] are clipped into the nearest edge bin."""
+    idx = np.digitize(values, edges[1:-1], right=False)
+    return np.clip(idx, 0, len(edges) - 2)
+ 
+ 
+def occupancy_partitioned_range(
+        q_at_grid,        # (n_timesteps, n_grid) from action_sensitivity_sweep
+        grid,              # (n_grid,) swept values
+        real_other_dose,   # (n_timesteps,) real clinician dose for the OTHER (held-fixed) action
+        sweep_dim,         # 0 = fluid swept, 1 = vaso swept
+        joint_counts, fluid_edges, vaso_edges,
+        min_count=10,
+    ):
+    """
+    Returns, per timestep: full (unrestricted) Q-range, occupancy-restricted
+    Q-range (NaN if fewer than 2 well-supported grid points), and the
+    fraction of grid points that were well-supported.
+    """
+    q = q_at_grid.cpu().numpy() if torch.is_tensor(q_at_grid) else np.asarray(q_at_grid)
+    grid_np = grid.cpu().numpy() if torch.is_tensor(grid) else np.asarray(grid)
+    real_other_np = real_other_dose.cpu().numpy() if torch.is_tensor(real_other_dose) else np.asarray(real_other_dose)
+ 
+    n_timesteps, n_grid = q.shape
+ 
+    if sweep_dim == 1:  # vaso swept, fluid held at real dose
+        fluid_vals = np.repeat(real_other_np[:, None], n_grid, axis=1)
+        vaso_vals = np.tile(grid_np[None, :], (n_timesteps, 1))
+    else:  # fluid swept, vaso held at real dose
+        fluid_vals = np.tile(grid_np[None, :], (n_timesteps, 1))
+        vaso_vals = np.repeat(real_other_np[:, None], n_grid, axis=1)
+ 
+    fluid_bin = _bin_index(fluid_vals, fluid_edges)
+    vaso_bin = _bin_index(vaso_vals, vaso_edges)
+    counts = joint_counts[fluid_bin, vaso_bin]
+    well_supported = counts >= min_count
+ 
+    full_range = q.max(axis=1) - q.min(axis=1)
+    restricted_range = np.full(n_timesteps, np.nan)
+    for t in range(n_timesteps):
+        mask = well_supported[t]
+        if mask.sum() >= 2:
+            vals = q[t, mask]
+            restricted_range[t] = vals.max() - vals.min()
+ 
+    frac_supported = well_supported.mean(axis=1)
+ 
+    return {
+        "full_range": full_range,
+        "restricted_range": restricted_range,
+        "frac_supported": frac_supported,
+    }
+ 
+ 
+def compute_seed_occupancy_sensitivities(
+        models, q_values_list, processor, clinician_actions, sweep_dim,
+        joint_counts, fluid_edges, vaso_edges, min_count=10,
+        dim_label="", condition_label="",
+    ):
+    """
+    Runs the sweep + occupancy partition for every seed's model. Returns
+    (full_medians, restricted_medians, coverage) arrays, each length n_seeds.
+    restricted_medians uses only timesteps with a valid (non-NaN) restricted
+    range; coverage = fraction of timesteps with >=2 well-supported grid points.
+    """
+    other_dim = 0 if sweep_dim == 1 else 1
+    real_other_dose = clinician_actions[:, other_dim]
+ 
+    full_medians, restricted_medians, coverage = [], [], []
+    n_seeds = len(models)
+ 
+    for seed_idx, (model_entry, q_real) in enumerate(zip(models, q_values_list)):
+        t0 = time.time()
+        print(f"  [{condition_label} / {dim_label}] seed {seed_idx + 1}/{n_seeds}: running sweep + occupancy partition...", flush=True)
+        model = model_entry[0] if isinstance(model_entry, (list, tuple)) else model_entry
+ 
+        sweep = action_sensitivity_sweep(processor, model, clinician_actions, sweep_dim=sweep_dim)
+        part = occupancy_partitioned_range(
+            sweep["q_at_grid"], sweep["grid"], real_other_dose, sweep_dim,
+            joint_counts, fluid_edges, vaso_edges, min_count=min_count,
+        )
+ 
+        full_pct = normalize_sensitivity(
+            torch.as_tensor(part["full_range"]), q_real.detach().cpu()
+        )
+        valid = ~np.isnan(part["restricted_range"])
+        restricted_pct = normalize_sensitivity(
+            torch.as_tensor(part["restricted_range"][valid]), q_real.detach().cpu()
+        ) if valid.sum() > 0 else np.array([np.nan])
+ 
+        full_medians.append(np.median(full_pct))
+        restricted_medians.append(np.median(restricted_pct))
+        cov = valid.mean()  # fraction of timesteps where a restricted range could even be computed
+        coverage.append(cov)
+ 
+        print(f"  [{condition_label} / {dim_label}] seed {seed_idx + 1}/{n_seeds}: done in {time.time() - t0:.1f}s "
+              f"(full median={np.median(full_pct):.1f}%, restricted median={np.median(restricted_pct):.1f}%, "
+              f"coverage={cov*100:.0f}% of timesteps had >=2 well-supported grid points)", flush=True)
+ 
+    return np.array(full_medians), np.array(restricted_medians), np.array(coverage)
+ 
+ 
+def _beeswarm_offsets(values, min_sep, max_offset=0.18, step=0.045):
+    order = np.argsort(values)
+    offsets = np.zeros(len(values))
+    placed = []
+    for idx in order:
+        y = values[idx]
+        colliding = [p for p in placed if abs(p[0] - y) < min_sep]
+        if not colliding:
+            offsets[idx] = 0.0
+        else:
+            k = len(colliding)
+            side = 1 if k % 2 == 1 else -1
+            magnitude = min(((k + 1) // 2) * step, max_offset)
+            offsets[idx] = side * magnitude
+        placed.append((y, offsets[idx]))
+    return offsets
+ 
+ 
+def plot_occupancy_partitioned_sensitivity(
+    terminal_models, health_score_models,
+    terminal_q_values, health_score_q_values,
+    processor, clinician_actions,
+    training_actions,          # actions from the TRAINING set, for building occupancy histogram
+    min_count=10,
+    save_path="/mnt/user-data/outputs/occupancy_partitioned_sensitivity.png",
+):
+    joint_counts, fluid_edges, vaso_edges = build_joint_occupancy_counts(training_actions)
+ 
+    fig, axes = plt.subplots(1, 2, figsize=(11, 5))
+    dims = [("Vasopressor", 1, axes[0]), ("Fluid", 0, axes[1])]
+    results = {}
+ 
+    for dim_label, sweep_dim, ax in dims:
+        print(f"\n=== {dim_label}: occupancy-partitioned sweep ===", flush=True)
+ 
+        print("-- Terminal reward models --", flush=True)
+        full_t, restr_t, cov_t = compute_seed_occupancy_sensitivities(
+            terminal_models, terminal_q_values, processor, clinician_actions, sweep_dim,
+            joint_counts, fluid_edges, vaso_edges, min_count=min_count,
+            dim_label=dim_label, condition_label="terminal",
+        )
+        print("-- Health-score-difference models --", flush=True)
+        full_h, restr_h, cov_h = compute_seed_occupancy_sensitivities(
+            health_score_models, health_score_q_values, processor, clinician_actions, sweep_dim,
+            joint_counts, fluid_edges, vaso_edges, min_count=min_count,
+            dim_label=dim_label, condition_label="health_score",
+        )
+ 
+        results[dim_label] = {
+            "terminal": {"full": full_t, "restricted": restr_t, "coverage": cov_t},
+            "health_score": {"full": full_h, "restricted": restr_h, "coverage": cov_h},
+        }
+ 
+        # paired points: x=0 "Full range", x=1 "Well-supported only", one line per seed
+        rng_all = np.concatenate([full_t, restr_t, full_h, restr_h])
+        min_sep = max((np.nanmax(rng_all) - np.nanmin(rng_all)) * 0.03, 1e-4)
+ 
+        for full_vals, restr_vals, color, label in [
+            (full_t, restr_t, TERMINAL_REWARD_COLOR, "Terminal"),
+            (full_h, restr_h, HEALTH_SCORE_REWARD_COLOR, "Health-score diff."),
+        ]:
+            x_full = 0 + _beeswarm_offsets(full_vals, min_sep=min_sep)
+            x_restr = 1 + _beeswarm_offsets(restr_vals, min_sep=min_sep)
+            for xf, xr, fv, rv in zip(x_full, x_restr, full_vals, restr_vals):
+                ax.plot([xf, xr], [fv, rv], color=color, alpha=0.4, linewidth=1, zorder=1)
+            ax.scatter(x_full, full_vals, color=color, s=60, alpha=0.9, edgecolors="white",
+                       linewidths=0.7, zorder=2, label=label)
+            ax.scatter(x_restr, restr_vals, color=color, s=60, alpha=0.9, edgecolors="white",
+                       linewidths=0.7, zorder=2)
+ 
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels(["Full sweep\nrange", f"Well-supported\nonly (n≥{min_count})"])
+        ax.set_xlim(-0.4, 1.4)
+        ax.set_ylabel("Median normalized sensitivity\n(% of state-wise Q IQR)")
+        ax.set_title(f"{dim_label}", fontsize=11, fontweight="bold")
+        ax.set_ylim(bottom=0)
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.grid(axis="y", alpha=0.25)
+ 
+        print(f"{dim_label} — Terminal:     full={full_t.mean():.1f}% (coverage={cov_t.mean()*100:.0f}%), "
+              f"restricted={restr_t.mean():.1f}%")
+        print(f"{dim_label} — Health-score: full={full_h.mean():.1f}% (coverage={cov_h.mean()*100:.0f}%), "
+              f"restricted={restr_h.mean():.1f}%")
+ 
+    axes[0].legend(loc="upper left", frameon=False, fontsize=9)
+    fig.suptitle("Action-sensitivity: full sweep vs. restricted to data-supported regions", fontsize=12, y=1.03)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    print(f"\nSaved to {save_path}")
+    return fig, results
+
 def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -632,8 +1249,6 @@ def main():
 
 
 
-
-    pass
 
 
 if __name__ == "__main__":

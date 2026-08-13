@@ -512,8 +512,10 @@ class ShardProcessor:
 
         if not actions_shift:
             self.rl_dataset['actions'] = actions[state_ind, :]
+            print("using unshifted actions for RL dataset")
         else:
             self.rl_dataset['actions'] = actions[next_state_ind, :]
+            print("using shifted actions for RL dataset")
 
         if self.reward_type == 'health_score':
             print("Using health_score reward type")

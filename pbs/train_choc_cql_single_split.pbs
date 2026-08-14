@@ -65,6 +65,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --hospital choc \
     --experiment_type reinforcement_learning \
     --model_type conservative_q_learning \
+    --reward_type health_score \
     --mode single_split \
     --split_num 0 \
     --search_variant random_search \

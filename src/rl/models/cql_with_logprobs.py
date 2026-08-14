@@ -521,7 +521,7 @@ class CQL:
 	def __init__(
 		self,
 		
-		use_smoothing: bool = False,
+		# use_smoothing: bool = False,
 
 		actor: nn.Module = None,
 		actor_optimizer: torch.optim.Optimizer = None,
@@ -540,7 +540,7 @@ class CQL:
 		temp: float = 1.0,         # Temperature for the LogSumExp
 		num_samples: int = 10,   # How many random actions to sample for the penalty
 
-		actor_loss_bc_scale: float = 2.0,  # Weight for the BC loss in the actor update
+		# actor_loss_bc_scale: float = 2.0,  # Weight for the BC loss in the actor update
 		actor_loss_q_scale: float = 50.0,   # Weight for the Q loss in the actor update
 		# actor_loss_entropy_scale: float = 0.1, # Weight for the entropy loss in the actor update
 		actor_loss_gate_entropy_scale: float = 0.02, # Weight for the entropy loss in the actor update
@@ -564,7 +564,7 @@ class CQL:
 
 	):
 		
-		self.use_smoothing = use_smoothing
+		# self.use_smoothing = use_smoothing
 
 		self.actor = actor
 		self.actor_optimizer = actor_optimizer
@@ -584,7 +584,7 @@ class CQL:
 
 		self.reward_type = reward_type  # can be 'terminal' or 'health_score'
 	
-		self.actor_loss_bc_scale = actor_loss_bc_scale
+		# self.actor_loss_bc_scale = actor_loss_bc_scale
 		self.actor_loss_q_scale = actor_loss_q_scale
 		self.actor_loss_gate_entropy_scale = actor_loss_gate_entropy_scale
 		self.actor_loss_mag_entropy_scale = actor_loss_mag_entropy_scale
@@ -704,22 +704,6 @@ class CQL:
 		# Sample replay buffer 
 		state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
 		
-		# not currently using smoothing
-		if self.use_smoothing is True:
-			with torch.no_grad():
-				# add noise to states
-				state_std = state.std(dim=0, keepdim=True)
-				noise_scale = state_std * 0.04 + 1e-6
-				state_noise = torch.randn_like(state) * noise_scale
-				smoothed_states = state + state_noise
-				
-				# add noise to actions
-				critic_action_noise = (torch.randn_like(action) * 0.04).clamp(-0.1, 0.1)
-				smoothed_actions = action + critic_action_noise
-				is_zero_dose = (action < 1e-4)
-				smoothed_actions = torch.where(is_zero_dose, torch.zeros_like(smoothed_actions), smoothed_actions)			
-				smoothed_actions = smoothed_actions.clamp(0, 1.0) # Ensure actions remain in valid range after smoothing
-
 		# scaling is just 1 for now, no need to adjust
 		reward = reward * self.reward_scaling
 		
@@ -744,10 +728,7 @@ class CQL:
 
 		# Get current Q estimates - for bellman loss and cql loss
 		# current_Q1, current_Q2 = self.critic(state, action)
-		if self.use_smoothing is True: # not currently used
-			current_Q1, current_Q2 = self.critic(smoothed_states, smoothed_actions)
-		else:
-			current_Q1, current_Q2 = self.critic(state, action)
+		current_Q1, current_Q2 = self.critic(state, action)
 
 		# 2. CQL CONSERVATIVE LOSS - sample random actions to penalize them
 		# We are penalize 4 types of actions:
@@ -994,7 +975,8 @@ class CQL:
 				"actor_raw_advantage_mean": raw_advantage.mean().item(),
 				"actor_loss_gate_ent": actor_loss_gate_ent.item(),
 				"actor_loss_mag_ent": actor_loss_mag_ent.item(),
-				"gate_temperature": current_gate_temp
+				"gate_temperature": current_gate_temp,
+				"v_mean_saturation_penalty": v_mean_saturation_penalty.item()
 			})
 						
 			# Final combined update
@@ -1096,7 +1078,7 @@ class CQL:
 
 
 	@torch.no_grad()
-	def _gate_incentive_diagnostic(self, state, action, tiny_dose=0.0001):
+	def _gate_incentive_diagnostic(self, state, action, tiny_dose_fluid=0.0005, tiny_dose_vaso=0.001):
 		"""
 		Compares Q(action with dose forced to exactly 0) vs Q(action with dose
 		forced to a tiny nonzero value), holding the OTHER dose fixed at its
@@ -1109,6 +1091,8 @@ class CQL:
 		that would push the actor's gate toward saturation.
 		"""
 		results = {}
+
+		tiny_dose = {0: tiny_dose_fluid, 1: tiny_dose_vaso}
 
 		for dose_idx, name in [(0, "fluid"), (1, "vaso")]:
 			near_zero_mask = action[:, dose_idx] < self.actor.zero_threshold
@@ -1124,7 +1108,7 @@ class CQL:
 			a_zero[:, dose_idx] = 0.0
 
 			a_tiny = a_real.clone()
-			a_tiny[:, dose_idx] = tiny_dose
+			a_tiny[:, dose_idx] = tiny_dose[dose_idx]
 
 			q1_zero, q2_zero = self.critic(s, a_zero)
 			q1_tiny, q2_tiny = self.critic(s, a_tiny)
@@ -1224,8 +1208,10 @@ class CQL:
 				# "actor_loss_bc": actor_loss_bc.item(), 
 				"fluid_fire_prob_mean": f_p.mean().item(),
 				"fluid_hard_fire_rate": (f_p > 0.5).float().mean().item(),
+				"f_p_devation_mean": (f_p - 0.5).abs().mean().item(),
     			"vaso_fire_prob_mean": v_p.mean().item(),
 				"vaso_hard_fire_rate": (v_p > 0.5).float().mean().item(),
+				"v_p_devation_mean": (v_p - 0.5).abs().mean().item(),
 				"fluid_mean": pi[:, 0].mean().item(),
 				"fluid_non_zero_mean": pi[pi[:, 0] > 0, 0].mean().item() if (pi[:, 0] > 0).any() else float('nan'),
 				"vaso_mean": pi[:, 1].mean().item(),
@@ -1333,9 +1319,9 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		cql_alpha=hyperparams['cql_alpha'],
 		temp=hyperparams['temp'],
 
-		use_smoothing=hyperparams['use_smoothing'],
+		# use_smoothing=hyperparams['use_smoothing'],
 
-		actor_loss_bc_scale=hyperparams['actor_loss_bc_scale'],
+		# actor_loss_bc_scale=hyperparams['actor_loss_bc_scale'],
 		actor_loss_q_scale=hyperparams['actor_loss_q_scale'],
 		# actor_loss_entropy_scale=hyperparams['actor_loss_entropy_scale'],
 		actor_loss_gate_entropy_scale=hyperparams['actor_loss_gate_entropy_scale'],

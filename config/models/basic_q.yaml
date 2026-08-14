@@ -1,21 +1,13 @@
-# this is for basic SARSA Q-learning model
     project: "AI_Clininician"
     group: "reinforcement_learning"
     name: "basic_q"
     device: "cuda"  # Device (cuda or cpu)   
    
     tuning: False
-
-    window_length: 72 # 72 hours, same as dynamic deephit - we want to use same state representation, but we can simply use
-    # transformer ouput from dynamic deephit - set by use_raw_states
-    use_raw_states: False # if true, will use the raw features as states,
-    # if false, uses transformer output
-    
+  
     n_episodes: 1000  # How many episodes run during evaluation
-    # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
-    checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path    
     
-    # reward_type: "health_score" # "terminal" # "health_score"
+    reward_type: "health_score" # "terminal" # "health_score"
     discount: 0.975  # Discount factor
     terminal_discount: 0.998 # discount for terminal health-score-based rewards
     
@@ -24,26 +16,21 @@
     health_score_scale: 0.  # Scaling factor for health score component of reward
     health_score_hourly_change_scale: 1.  # Scaling factor for hourly change component of reward
     total_health_score_scale: 1. # .01  # Scaling factor for total health score component of reward
-    potential_based_reward_shaping: False  # Whether to use potential-based reward shaping
-    # terminal_health_score_reward: 2.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
     terminal_reward_scale: 10.
 
     # seeds 
     use_fixed_seed: True # # Whether to use a fixed seed for reproducibility, otherwise randomly generated
     seed: 42 # Seed value to use if use_fixed_seed is True
-
    
     # add reward to vaso dosing as positive control expt
     add_reward_to_vaso_dosing: False  # Whether to add reward to vaso dosing as positive control expt - this is added as a reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
     vaso_reward_coefficient: [0.01, 0.05, 0.1, 0.2, 0.5] # [1.0, 5.0] # [0.2, 0.5, 1.0, 5.0]
 
-    # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
-    # max_traj_len: 72  # Max trajectory length - probably need to change this - in data config   
     learning_rate: [5.e-6, 1.e-5, 5.e-5, 1.e-4, 5.e-4, 1.e-3, 5.e-3] # 1.e-4 # 1.e-3 # "loguniform(1e-5, 1e-4)" # "loguniform(3e-5, 1e-4)"           #      [1e-6]
     dropout:  0.1 # "uniform(0.1, 0.3)"   # "uniform(0.0, 0.3)"
     tau: 0.001 # [0.01, 0.005, 0.001] # [0.005, 0.01]   # [0.0005, 0.001, 0.005, 0.01] # Target network update rate
     weight_decay: 1.e-5 # "loguniform(1e-4, 1e-3)" # "loguniform(1e-5, 1e-2)" # L2 regularization strength
-    # policy_noise: 0.2 # Noise added to target policy during critic updates
+
     batch_size: 1024  # Batch size for all networks
     hidden_dim: [64, 128, 256] # [512, 1024]  # Hidden dimension for all networks [128, 256, 256]] 
 

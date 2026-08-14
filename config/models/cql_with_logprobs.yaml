@@ -36,7 +36,7 @@
     noise_clip: 0.5 # Range to clip target policy noise
     policy_freq: 2 # Frequency of delayed policy updates
 
-    cql_alpha: [0.0005, 0.001, 0.002] #  [0.005, 0.006, 0.007, 0.008, 0.009] # [0.006, 0.007, 0.008, 0.009, 0.01, 0.011, 0.012, 0.013, 0.014, 0.015] # 0.1 # 0.001 # 0.01 # 0.001 #.001 # Weighting for CQL penalty term
+    cql_alpha: [0.5, 0.1, 0.05, 0.01] #  [0.005, 0.006, 0.007, 0.008, 0.009] # [0.006, 0.007, 0.008, 0.009, 0.01, 0.011, 0.012, 0.013, 0.014, 0.015] # 0.1 # 0.001 # 0.01 # 0.001 #.001 # Weighting for CQL penalty term
     temp: 1.0 # Temperature for CQL penalty term
     num_samples: 10 # Number of samples for CQL penalty term
 
@@ -63,7 +63,7 @@
     actor_loss_gate_entropy_scale: 0. # 0.02 # 5.e-4
     actor_loss_mag_entropy_scale: 0. # 5.e-4
 
-    vaso_mean_reg_scale: [0.0005, 0.001, 0.002, 0.005] # [0.001, 0.005, 0.01, 0.025]  
+    vaso_mean_reg_scale: 0. # [0.0005, 0.001, 0.002, 0.005] # [0.001, 0.005, 0.01, 0.025]  
     
     use_compressed_latents: False  # Whether to use compressed latents as states instead of raw features or transformer output - specific to basic Q model, not used for TD3-BC or CQL
 

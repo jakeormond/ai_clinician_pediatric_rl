@@ -41,7 +41,7 @@
     num_samples: 10 # Number of samples for CQL penalty term
 
     batch_size: 1024 # [256, 512, 1024]  # Batch size for all networks
-    hidden_dim: 64 # 256 # [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
+    hidden_dim: 128 # [64, 128, 256] # 256 # [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
 
     # Early stopping parameters (fixed for all combinations)
     early_stopping_flag: False  # Whether to use early stopping

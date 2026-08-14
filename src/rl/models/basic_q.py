@@ -599,9 +599,22 @@ def get_evaluator(state_dim, action_dim, config_manager):
     
     if config_manager.reward_type == 'terminal':
         terminal_discount = config_manager.training_config['terminal_discount']
+        # model_path = os.path.join(config_manager.paths['rl_models_dir'], 
+        #     'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
+        #     config_manager.actions, "terminal_only", f'final_model_terminal_discount_{terminal_discount}')
+
         model_path = os.path.join(config_manager.paths['rl_models_dir'], 
-            'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
-            config_manager.actions, "terminal_only", f'final_model_terminal_discount_{terminal_discount}')
+                        'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
+                        config_manager.actions)
+        
+        # load sorted_runs_health_score.csv
+        sorted_runs_path = os.path.join(model_path, "sorted_runs_terminal.csv")
+        if os.path.exists(sorted_runs_path):
+            sorted_runs = pd.read_csv(sorted_runs_path)
+            # get the last row, which has the best run
+            best_run = sorted_runs.iloc[0]
+            best_run_folder = best_run['run_dir']
+            model_path = os.path.join(model_path, best_run_folder)
 
     elif config_manager.reward_type == 'health_score':
         discount = config_manager.training_config['discount']

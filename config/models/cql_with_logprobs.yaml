@@ -61,7 +61,7 @@
 
     actor_loss_q_scale: 10.
     actor_loss_gate_entropy_scale: 0. # 0.02 # 5.e-4
-    actor_loss_mag_entropy_scale: 5.e-4
+    actor_loss_mag_entropy_scale: 0. # 5.e-4
 
     vaso_mean_reg_scale: [0.0005, 0.001, 0.002, 0.005] # [0.001, 0.005, 0.01, 0.025]  
     

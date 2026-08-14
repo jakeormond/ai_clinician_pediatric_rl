@@ -64,7 +64,7 @@ echo "Starting training..."
 python -u -m src.scripts.rl.reinforcement_learning \
     --hospital choc \
     --experiment_type reinforcement_learning \
-    --model_type conservative_q_learning \
+    --model_type cql_with_logprobs \
     --reward_type terminal \
     --mode single_split \
     --split_num 0 \

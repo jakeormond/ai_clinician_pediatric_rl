@@ -119,6 +119,12 @@ def parse_arguments():
                             'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad'],
                         help='Cohort to use for this experiment (overrides config file)')
 
+
+    parser.add_argument('--unit', type=str, default=None,
+                        choices=['PICU', 'NICU', 'ICU'],
+                        help='Unit to use for this experiment (overrides config file)')
+    
+
     parser.add_argument('--model_dir', type=str, default=None,
                         help='Directory of the model to load for prediction or feature evaluation (required for prediction and feature_evaluation experiment variants)')
 
@@ -145,6 +151,8 @@ def parse_arguments():
     parser.add_argument('--n_epochs', type=int, default = 10,                  
                     help='Number of epochs to train for - should be 1000, but for testing we set to 10')  
     
+
+
     args = parser.parse_args()
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")

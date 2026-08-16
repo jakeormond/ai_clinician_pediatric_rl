@@ -185,6 +185,17 @@ class ConfigManager:
         else:
             self._data_config['cohort'] = 'all'
 
+        if self.unit is not None:
+            self._data_config['unit'] = self.unit.lower()
+            self.data_config['unit_stay_ids_path'] = os.path.join(
+                self.get_data_dir, 'cohorts',
+                'icu_units',
+                f"{self._data_config['unit']}_stay_ids.csv"
+            )
+        else:
+            self._data_config['unit'] = None
+            self.data_config['unit_stay_ids_path'] = None
+
 
     def reset_cohort(self, cohort):
         """Reset the cohort in the data config."""

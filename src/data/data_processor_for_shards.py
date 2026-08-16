@@ -65,7 +65,22 @@ class ShardProcessor:
             self.shard_dir = os.path.join(shard_dir, 'training_set')
         
         # load processed data if it exists, otherwise process raw shard files and save the processed data for future use
-        final_file_name = f"{self.split}_dynamic_deephit_dataset.h5"
+        if config_manager.cohort == 'sepsis' and config_manager.unit == 'PICU':
+            self.file_name_prefix = f"{self.split}_sepsis_picu"
+            if config_manager.training_config['tuning']:
+                self.norm_params_prefix = "tuning_sepsis_picu"
+            else:
+                self.norm_params_prefix = "train_sepsis_picu"
+        elif config_manager.cohort is None and config_manager.unit is None:
+            self.file_name_prefix = f"{self.split}"
+            if config_manager.training_config['tuning']:
+                self.norm_params_prefix = "tuning"
+            else:
+                self.norm_params_prefix = "train"
+        else:
+            raise ValueError(f"Invalid cohort and unit combination: {config_manager.cohort}, {config_manager.unit}. Supported combinations are: (None, None) and ('sepsis', 'PICU').")
+
+        final_file_name = f"{self.file_name_prefix}_dynamic_deephit_dataset.h5"
         final_file_path = os.path.join(self.shard_dir, final_file_name)
         
         # load if exists
@@ -89,8 +104,13 @@ class ShardProcessor:
                 pred_split = self.split
                 if self.split == 'tuning':
                     pred_split = 'train' # the tuning set predictions are generated from the model trained on the training set, so we need to load the train_set_predictions.h5 file
-                # prediction_file_path = os.path.join(supervised_model_dir, final_model_dir, f"{pred_split}_set_predictions.h5")
-                prediction_file_path = os.path.join(final_model_dir, f"{pred_split}_set_predictions.h5")
+
+                if config_manager.cohort == 'sepsis' and config_manager.unit == 'PICU':
+                    pred_split_prefix = f"{pred_split}_sepsis_picu"
+                elif config_manager.cohort is None and config_manager.unit is None:
+                    pred_split_prefix = f"{pred_split}"
+                
+                prediction_file_path = os.path.join(final_model_dir, f"{pred_split_prefix}_predictions.h5")
 
                 self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
                                                                         keys_to_exclude=['predictions', 'entropy'])
@@ -99,11 +119,7 @@ class ShardProcessor:
                 if config_manager.data_config['use_behavior_cloning_latents']:
                     self.use_behavior_cloning_latents = True
                     bc_model_file_dir = config_manager.data_config['bc_latents_path']
-                    bc_prediction_file_path = os.path.join(bc_model_file_dir, f"{pred_split}_set_predictions.h5")
-
-                    # self.bc_latents = self.load_dynamic_deephit_predictions_from_h5(bc_prediction_file_path, 
-                    #                                                     keys_to_load=['model_outputs', 'index_ptr', 'stay_ids'])
-
+                    bc_prediction_file_path = os.path.join(bc_model_file_dir, f"{pred_split_prefix}_predictions.h5")
                     self.bc_latents = self.load_dynamic_deephit_predictions_from_h5(bc_prediction_file_path, 
                                                                         keys_to_load=['model_outputs', 'compressed_latents', 'index_ptr', 'stay_ids'])
                 else:
@@ -118,14 +134,17 @@ class ShardProcessor:
                     logger.info(f"Filtering dynamic deephit predictions to only include cohort: {config_manager._data_config['cohort']}")
                     self.filter_cohort(config_manager)               
                 
-                return
+                if config_manager._data_config['unit'] is not None and config_manager._data_config['unit'] != 'all':
+                    # if we are filtering to a specific unit, we need to filter the dataset to only include that unit
+                    logger.info(f"Filtering dynamic deephit dataset to only include unit: {config_manager._data_config['unit']}")
+                    self.filter_unit(config_manager)    
 
-            
+
+                return
+          
             # load the normalization parameters if they exist from the json file
-            if config_manager.training_config['tuning']:
-                norm_params_file = os.path.join(self.shard_dir, "tuning_norm_params.json")
-            else:
-                norm_params_file = os.path.join(self.shard_dir, "train_norm_params.json")
+
+            norm_params_file = os.path.join(self.shard_dir, f"{self.norm_params_prefix}_norm_params.json")
             if os.path.exists(norm_params_file):
                 with open(norm_params_file, 'r') as f:
                     norm_params = json.load(f)
@@ -137,11 +156,16 @@ class ShardProcessor:
             if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
                 # if we are filtering to a specific cohort, we need to filter the dataset to only include that cohort
                 logger.info(f"Filtering dynamic deephit dataset to only include cohort: {config_manager._data_config['cohort']}")
-                self.filter_cohort(config_manager)            
+                self.filter_cohort(config_manager)       
+
+            if config_manager._data_config['unit'] is not None and config_manager._data_config['unit'] != 'all':
+                # if we are filtering to a specific unit, we need to filter the dataset to only include that unit
+                logger.info(f"Filtering dynamic deephit dataset to only include unit: {config_manager._data_config['unit']}")
+                self.filter_unit(config_manager)     
             
             return
-           
-        
+
+    
         # prepare for normalization
         self.norm_params = norm_params
         self.window_length = config_manager.training_config['window_length']
@@ -156,6 +180,9 @@ class ShardProcessor:
 
         raw_shard_files = [os.path.join(self.shard_dir, f) for f in all_files if 
                                 f.startswith(self.split) and f.endswith(".h5")]
+        # remove any files that contain "dynamic_deephit_dataset" in the name, as these are already processed files
+        raw_shard_files = [f for f in raw_shard_files if "dynamic_deephit_dataset" not in f]
+
         if len(raw_shard_files) == 0:
             raise ValueError(f"No shard files found for split {self.split} in directory {self.shard_dir}")
         elif len(raw_shard_files) > 1:
@@ -236,17 +263,17 @@ class ShardProcessor:
 
         
         # save the file
-        final_file_name = f"{self.split}_dynamic_deephit_dataset.h5"
+        final_file_name = f"{self.file_name_prefix}_dynamic_deephit_dataset.h5"
         final_file_path = os.path.join(self.shard_dir, final_file_name)
 
         # save the dynamic deephit dataset to h5 file for future use
         self.feature_dim = self.dynamic_deephit_dataset['trajectories'].shape[1]
         self.dynamic_deephit_dataset_to_h5(final_file_path)
         
-        if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
-            # filter the dataset to only include the specified cohort
-            logger.info(f"Filtering dynamic deephit dataset to only include cohort: {config_manager._data_config['cohort']}")
-            self.filter_cohort(config_manager)
+        # if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
+        #     # filter the dataset to only include the specified cohort
+        #     logger.info(f"Filtering dynamic deephit dataset to only include cohort: {config_manager._data_config['cohort']}")
+        #     self.filter_cohort(config_manager)
 
     
     def process_reward(self, config_manager, hyperparams, health_score_median=None):
@@ -688,6 +715,8 @@ class ShardProcessor:
                 dataset = self.dynamic_deephit_predictions
             elif dataset_type == 'bc_latents':
                 dataset = self.bc_latents
+            elif dataset_type == 'shard_data':
+                dataset = self.shard_data
             else:
                 raise ValueError(f"Invalid dataset type: {dataset_type}. Supported dataset types are: 'dynamic_deephit_dataset' and 'dynamic_deephit_predictions'.")
 
@@ -759,7 +788,7 @@ class ShardProcessor:
         return
 
 
-    def filter_cohort(self, config_manager):
+    def filter_cohort(self, config_manager, dataset_types=None):
         """
         Filters the dynamic_deephit_dataset to only include the specified cohort.
         """
@@ -776,8 +805,28 @@ class ShardProcessor:
         logger.info(f"Number of stays in cohort {cohort}: {len(cohort_stay_ids)}")
         logger.info(f"Filtering dynamic_deephit_dataset to only include these stay_ids.")
 
-        self.filter_by_stay_ids(cohort_stay_ids)    
+        self.filter_by_stay_ids(cohort_stay_ids, dataset_types=dataset_types)    
     
+
+    def filter_unit(self, config_manager, dataset_types=None):
+        """
+        Filters the dynamic_deephit_dataset to only include the specified unit.
+        """
+        unit = config_manager._data_config['unit']
+        if unit is None or unit == 'all':
+            return
+        
+        # load unit stay_ids from csv
+        stay_ids_path = config_manager.data_config['unit_stay_ids_path']
+        unit_df = pd.read_csv(stay_ids_path)
+        unit_stay_ids = set(unit_df['stay_id'].unique().tolist())
+        # sort unit_stay_ids
+        unit_stay_ids = sorted(unit_stay_ids)
+        logger.info(f"Number of stays in unit {unit}: {len(unit_stay_ids)}")
+        logger.info(f"Filtering dataset to only include these stay_ids.")
+
+        self.filter_by_stay_ids(unit_stay_ids, dataset_types=dataset_types)
+
     
     def add_to_dynamic_deephit_dataset_h5(self, file_path, key):
         # get dimensionality of data to be saved
@@ -886,35 +935,48 @@ class ShardProcessor:
 
             logger.info(f"Computing values for normalizing shard file: {self.raw_shard_file}")
             # load the shard file
+            self.shard_data = {}
             with h5py.File(self.raw_shard_file, 'r') as f:      
                 # convert feature_names from bytes to strings
-                feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]                
-                stay_ids = f['stay_ids'][:]
-                index_ptr = f['index_ptr'][:]
-                trajectories = f['trajectories'][:]             
+                self.shard_data['feature_names'] = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]                
+                self.shard_data['stay_ids'] = f['stay_ids'][:]
+                self.shard_data['index_ptr'] = f['index_ptr'][:]
+                self.shard_data['trajectories'] = f['trajectories'][:]             
                 
+            
+            if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
+                # if we are filtering to a specific cohort, we need to filter the dataset to only include that cohort
+                logger.info(f"Filtering shard file to only include cohort: {config_manager._data_config['cohort']}")
+                self.filter_cohort(config_manager, dataset_types = ['shard_data'])       
+
+            if config_manager._data_config['unit'] is not None and config_manager._data_config['unit'] != 'all':
+                # if we are filtering to a specific unit, we need to filter the dataset to only include that unit
+                logger.info(f"Filtering shard file to only include unit: {config_manager._data_config['unit']}")
+                self.filter_unit(config_manager, dataset_types = ['shard_data'])       
+
             # drop trajectories longer than max_time
             # remove long trajectories beyond max_time
-            trajectories, stay_ids, index_ptr = self.drop_long_trajectories(
-                trajectories, stay_ids, index_ptr)
+            self.shard_data['trajectories'], self.shard_data['stay_ids'], self.shard_data['index_ptr'] = self.drop_long_trajectories(
+                self.shard_data['trajectories'], self.shard_data['stay_ids'], self.shard_data['index_ptr'])
             
             if config_manager.data_config['add_time_col']:
                 # add time column to trajectories
-                trajectories, feature_names = self.add_time_column(trajectories, stay_ids, index_ptr, feature_names)
-            
+                self.shard_data['trajectories'], self.shard_data['feature_names'] = self.add_time_column(
+                    self.shard_data['trajectories'], self.shard_data['stay_ids'], self.shard_data['index_ptr'], self.shard_data['feature_names'])
+
             # get the index of the death feature, and drop it from the trajectories
             death_feature_name = config_manager.data_config['target_col']
-            death_feature_index = feature_names.index(death_feature_name)
+            death_feature_index = self.shard_data['feature_names'].index(death_feature_name)
             # update feature_names
-            feature_names.pop(death_feature_index)
-            trajectories = np.delete(trajectories, death_feature_index, axis=1)
-            
+            self.shard_data['feature_names'].pop(death_feature_index)
+            self.shard_data['trajectories'] = np.delete(self.shard_data['trajectories'], death_feature_index, axis=1)
+
             # compute sums, squared sums, counts, minima, maxima for 1 feature at a time to avoid floating point catastophic cancellation
-            for j, feature in enumerate(feature_names):
+            for j, feature in enumerate(self.shard_data['feature_names']):
                 self.obs_norm_dict[feature] = {}
 
-                feature_trajectories = trajectories[:, j]
-                
+                feature_trajectories = self.shard_data['trajectories'][:, j]
+
                 self.obs_norm_dict[feature]['min'] = np.min(feature_trajectories)
                 self.obs_norm_dict[feature]['max'] = np.max(feature_trajectories)
                 self.obs_norm_dict[feature]['mean'] = np.mean(feature_trajectories)
@@ -925,53 +987,63 @@ class ShardProcessor:
                 self.obs_norm_dict[feature]['log_max'] = np.max(np.log1p(feature_trajectories))
 
             # save the normalization parameters to a json file for future use when normalizing val and test sets
-            norm_params_file = os.path.join(self.shard_dir, f"{self.split}_norm_params.json")
+            norm_params_file = os.path.join(self.shard_dir, f"{self.file_name_prefix}_norm_params.json")
             with open(norm_params_file, 'w') as f:
                 json.dump({'obs_norm_dict': self.obs_norm_dict}, f)
             logger.info(f"Saved normalization parameters to {norm_params_file}")
-        
-        
-        
+               
         # now normalize the features with either the pre-computed normalization parameters from the training/tuning set, or the ones we just computed if this is the training/tuning set    
         logger.info(f"Normalizing shard file: {self.raw_shard_file}")
         # load the shard file
+        self.shard_data = {}
         with h5py.File(self.raw_shard_file, 'r') as f:      
             # convert feature_names from bytes to strings
-            feature_names = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]                
-            stay_ids = f['stay_ids'][:]
-            index_ptr = f['index_ptr'][:]
-            trajectories = f['trajectories'][:]
+            self.shard_data['feature_names'] = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]                
+            self.shard_data['stay_ids'] = f['stay_ids'][:]
+            self.shard_data['index_ptr'] = f['index_ptr'][:]
+            self.shard_data['trajectories'] = f['trajectories'][:]
+
+        if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
+            # if we are filtering to a specific cohort, we need to filter the dataset to only include that cohort
+            logger.info(f"Filtering shard file to only include cohort: {config_manager._data_config['cohort']}")
+            self.filter_cohort(config_manager, dataset_types = ['shard_data'])       
+
+        if config_manager._data_config['unit'] is not None and config_manager._data_config['unit'] != 'all':
+            # if we are filtering to a specific unit, we need to filter the dataset to only include that unit
+            logger.info(f"Filtering shard file to only include unit: {config_manager._data_config['unit']}")
+            self.filter_unit(config_manager, dataset_types = ['shard_data'])      
 
         # drop trajectories longer than max_time
         # remove long trajectories beyond max_time
-        trajectories, stay_ids, index_ptr = self.drop_long_trajectories(
-            trajectories, stay_ids, index_ptr)
-        
+        self.shard_data['trajectories'], self.shard_data['stay_ids'], self.shard_data['index_ptr'] = self.drop_long_trajectories(
+            self.shard_data['trajectories'], self.shard_data['stay_ids'], self.shard_data['index_ptr'])
+
         if config_manager.data_config['add_time_col']:
             # add time column to trajectories
-            trajectories, feature_names = self.add_time_column(trajectories, stay_ids, index_ptr, feature_names)        
+            self.shard_data['trajectories'], self.shard_data['feature_names'] = self.add_time_column(
+                self.shard_data['trajectories'], self.shard_data['stay_ids'], self.shard_data['index_ptr'], self.shard_data['feature_names'])
 
         # get the index of the death feature
         # death_feature_index = feature_names.index('death')
         death_feature_name = config_manager.data_config['target_col']
-        death_feature_index = feature_names.index(death_feature_name)
+        death_feature_index = self.shard_data['feature_names'].index(death_feature_name)
 
         # extract death feature values before removing
-        death_values = trajectories[:, death_feature_index]
+        death_values = self.shard_data['trajectories'][:, death_feature_index]
         
         # drop death and update feature_names
-        feature_names.pop(death_feature_index)
-        trajectories = np.delete(trajectories, death_feature_index, axis=1)
+        self.shard_data['feature_names'].pop(death_feature_index)
+        self.shard_data['trajectories'] = np.delete(self.shard_data['trajectories'], death_feature_index, axis=1)
 
         # normalize the trajectories
         # Note: the normalizatio_type column of features_to_use.csv specifies the type of normalization
         # to apply to each feature, except for time, which we have just created, and the delta and mask features,
         # which are normalized in a consistent way
-        for j, feature in enumerate(feature_names):   
+        for j, feature in enumerate(self.shard_data['feature_names']):   
             # TIME - log transform then min-max normalize using log_min and log_max
             if feature == 'time':
                 # we will log transform then min max it - note we need to add a window time feature when passing windows into the model.
-                trajectories[:, j] = self.log_min_max(trajectories[:, j], self.obs_norm_dict[feature])  
+                self.shard_data['trajectories'][:, j] = self.log_min_max(self.shard_data['trajectories'][:, j], self.obs_norm_dict[feature])  
             
             else:
                 if feature in self.features_to_use['feature'].values:
@@ -989,32 +1061,32 @@ class ShardProcessor:
                 if normalization_type == 'none':
                     continue
                 elif normalization_type == 'min_max':
-                    trajectories[:, j] = self.min_max(trajectories[:, j], self.obs_norm_dict[feature])  
+                    self.shard_data['trajectories'][:, j] = self.min_max(self.shard_data['trajectories'][:, j], self.obs_norm_dict[feature])  
                 elif normalization_type == 'log_min_max':
-                    trajectories[:, j] = self.log_min_max(trajectories[:, j], self.obs_norm_dict[feature])
+                    self.shard_data['trajectories'][:, j] = self.log_min_max(self.shard_data['trajectories'][:, j], self.obs_norm_dict[feature])
                 elif normalization_type == 'z_score':
-                    trajectories[:, j] = self.z_score(trajectories[:, j], self.obs_norm_dict[feature])
+                    self.shard_data['trajectories'][:, j] = self.z_score(self.shard_data['trajectories'][:, j], self.obs_norm_dict[feature])
                 elif normalization_type == 'robust_scaling':
-                    trajectories[:, j] = self.robust_scale(trajectories[:, j], self.obs_norm_dict[feature])
+                    self.shard_data['trajectories'][:, j] = self.robust_scale(self.shard_data['trajectories'][:, j], self.obs_norm_dict[feature])
                 else:
                     raise ValueError(f"Invalid normalization type {normalization_type} for feature {feature}. Please check your features_to_use.csv file.")
                
             # for binary features, do nothing
             # throw error if any nans, infs, or valeus greater than 1e6
-            if np.isnan(trajectories[:, j]).any():
+            if np.isnan(self.shard_data['trajectories'][:, j]).any():
                 raise ValueError(f"NaNs found in normalized feature {feature} in shard {self.raw_shard_file}")
-            if np.isinf(trajectories[:, j]).any():
+            if np.isinf(self.shard_data['trajectories'][:, j]).any():
                 raise ValueError(f"Infs found in normalized feature {feature} in shard {self.raw_shard_file}")
-            if np.abs(trajectories[:, j]).max() > 1e6:
+            if np.abs(self.shard_data['trajectories'][:, j]).max() > 1e6:
                 raise ValueError(f"Extreme values found in normalized feature {feature} in shard {self.raw_shard_file}")
            
         self.dynamic_deephit_dataset = {}
-        self.dynamic_deephit_dataset['feature_names'] = feature_names
-        self.dynamic_deephit_dataset['stay_ids'] = stay_ids
-        self.dynamic_deephit_dataset['index_ptr'] = index_ptr
-        self.dynamic_deephit_dataset['trajectories'] = trajectories.astype(np.float32)
+        self.dynamic_deephit_dataset['feature_names'] = self.shard_data['feature_names']
+        self.dynamic_deephit_dataset['stay_ids'] = self.shard_data['stay_ids']
+        self.dynamic_deephit_dataset['index_ptr'] = self.shard_data['index_ptr']
+        self.dynamic_deephit_dataset['trajectories'] = self.shard_data['trajectories'].astype(np.float32)
         
-        final_indices = index_ptr[1:] - 1    
+        final_indices = self.shard_data['index_ptr'][1:] - 1    
         final_events = death_values[final_indices].astype(int)
                 
         self.dynamic_deephit_dataset['event'] = final_events.astype(np.int32)

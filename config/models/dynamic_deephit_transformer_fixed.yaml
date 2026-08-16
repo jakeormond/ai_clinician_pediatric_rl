@@ -17,19 +17,18 @@ weight_decay: 5.e-4 # 1.1e-5 # 5e-3
 use_layernorm: True
 batch_size: 64  # Batch size for all networks
 
+
 d_model: 128  # Dimension of the model
 num_encoder_layers: 4  # Number of encoder layers
 ff_factor: 4  # Dimension of feedforward network in transformer
 nhead: 4  # Number of attention heads
 
-# hidden_dim: 32  # Hidden dimension for all networks
-# attn_hidden_dim: 32
-# n_layers: 1
 
 loss_metric: "weighted_multi_C" # "combined_loss"  # Which metric to use for early stopping
 max_val_samples: 5000  # Max samples to use for validation during training
 
 l1_lambda: 8e-06 # 1e-4  # L1 regularization weight for classification head
+
 logit_scale: 15.0  # Scale for logits in the ranking loss
 
 alpha_class: 0.1

@@ -29,6 +29,8 @@ max_val_samples: 5000  # Max samples to use for validation during training
 
 l1_lambda: "loguniform(1e-6, 1e-4)"  # L1 regularization weight for classification head
 
+logit_scale: 15.0  # Scale for logits in the ranking loss
+
 alpha_class: [0.1, 0.25, 0.5]  # Weight for classification loss
 alpha_rank: [1.0, 2.0]   # Weight for ranking loss
 alpha_pred: [1.0, 2.0, 5.0]  # Weight for prediction loss
@@ -37,6 +39,8 @@ sigma: [0.1, 0.2, 0.5, 1.0] # for ranking loss
 # gaussian sigma scheduling parameters
 start_sigma: 2.
 end_sigma: [0.3, 0.5, 0.7]
+
+alpha_logit_l2: 0.01  # start small; tune up if grad norm / logit scale still grows
 
 # learning rate scheduling parameters
 pct_start: [0.1, 0.3, 0.5]
@@ -48,6 +52,7 @@ eval_freq: 1       # Evaluate every 20 epochs
 min_delta: 0.0001   # Minimum improvement threshold
 
 grad_clip: [0.1, 0.5, 1.0, 5.0] # [0.5, 1]  # Gradient clipping value
+log_grad_norms_freq: 50  # Frequency of logging gradient norms
 
 # for controls
 shuffle_inputs: False  # Whether to shuffle feature columns to confirm transformer not looking ahead

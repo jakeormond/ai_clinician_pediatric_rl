@@ -1027,17 +1027,17 @@ def train_with_hyperparameters(
                     # for losses, lower is better
                     improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)
 
-                    if improvement > 0:
-                        best_model_state = copy_model_parameters(trainer, config_manager)
-                        
-                    #  Early stopping - stop training THIS hyperparameter combination
-                    if early_stopping['patience_counter'] >= early_stopping['patience']:                
-                        logger.info(f" Early stopping at epoch {epoch}/{n_epochs}")
-                        logger.info(f" Best validation loss: {best_val_loss:.4f}")
+                if improvement > 0:
+                    best_model_state = copy_model_parameters(trainer, config_manager)
+                    
+                #  Early stopping - stop training THIS hyperparameter combination
+                if early_stopping['patience_counter'] >= early_stopping['patience']:                
+                    logger.info(f" Early stopping at epoch {epoch}/{n_epochs}")
+                    logger.info(f" Best validation loss: {best_val_loss:.4f}")
 
-                        n_epochs = epoch + 1  # Update n_epochs to actual number run
+                    n_epochs = epoch + 1  # Update n_epochs to actual number run
 
-                        break
+                    break
     
     ########################## training complete ########################################
     # restore best model if using early stopping. 

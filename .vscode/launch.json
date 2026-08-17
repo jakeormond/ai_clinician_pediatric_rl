@@ -48,7 +48,6 @@
                 "--cohort", "sepsis",
                 "--unit", "PICU",
                 "--n_epochs", "200",
-                "--testing"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

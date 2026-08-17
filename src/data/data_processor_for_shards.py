@@ -168,7 +168,7 @@ class ShardProcessor:
                 self.filter_unit(config_manager)  
 
             if config_manager.hospital == 'choc':
-                logger.info(f"Filtering dynamic deephit dataset to only include age cohort: {config_manager._data_config['age_cohort']}")
+                logger.info(f"Filtering dynamic deephit dataset to only include choc pediatric age cohort")
                 self.filter_age_cohort(config_manager)   
             
             return

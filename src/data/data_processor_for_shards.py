@@ -139,6 +139,10 @@ class ShardProcessor:
                     logger.info(f"Filtering dynamic deephit dataset to only include unit: {config_manager._data_config['unit']}")
                     self.filter_unit(config_manager)    
 
+                # filter by age cohort if hospital is choc
+                if config_manager.hospital == 'choc':
+                    logger.info(f"Filtering dynamic deephit dataset to only include age cohort: {config_manager._data_config['age_cohort']}")
+                    self.filter_age_cohort(config_manager)
 
                 return
           
@@ -161,7 +165,11 @@ class ShardProcessor:
             if hasattr(config_manager._data_config, 'unit') and config_manager._data_config['unit'] is not None and config_manager._data_config['unit'] != 'all':
                 # if we are filtering to a specific unit, we need to filter the dataset to only include that unit
                 logger.info(f"Filtering dynamic deephit dataset to only include unit: {config_manager._data_config['unit']}")
-                self.filter_unit(config_manager)     
+                self.filter_unit(config_manager)  
+
+            if config_manager.hospital == 'choc':
+                logger.info(f"Filtering dynamic deephit dataset to only include age cohort: {config_manager._data_config['age_cohort']}")
+                self.filter_age_cohort(config_manager)   
             
             return
 
@@ -788,6 +796,23 @@ class ShardProcessor:
         return
 
 
+    def filter_age_cohort(self, config_manager, dataset_types=None):
+        """
+        Filters the dynamic_deephit_dataset to only include the specified age cohort.
+        """
+
+        # load age cohort stay_ids from csv
+        stay_ids_path = config_manager.data_config['age_stay_ids_path']
+        age_cohort_df = pd.read_csv(stay_ids_path)
+        age_cohort_stay_ids = set(age_cohort_df['stay_id'].unique().tolist())
+        # sort age_cohort_stay_ids
+        age_cohort_stay_ids = sorted(age_cohort_stay_ids)
+        logger.info(f"Number of stays in pediatric cohort: {len(age_cohort_stay_ids)}")
+        logger.info(f"Filtering dynamic_deephit_dataset to only include these stay_ids.")
+
+        self.filter_by_stay_ids(age_cohort_stay_ids, dataset_types=dataset_types)
+
+
     def filter_cohort(self, config_manager, dataset_types=None):
         """
         Filters the dynamic_deephit_dataset to only include the specified cohort.
@@ -952,7 +977,11 @@ class ShardProcessor:
             if config_manager._data_config['unit'] is not None and config_manager._data_config['unit'] != 'all':
                 # if we are filtering to a specific unit, we need to filter the dataset to only include that unit
                 logger.info(f"Filtering shard file to only include unit: {config_manager._data_config['unit']}")
-                self.filter_unit(config_manager, dataset_types = ['shard_data'])       
+                self.filter_unit(config_manager, dataset_types = ['shard_data'])     
+
+            if config_manager.hospital == 'choc':
+                logger.info(f"Filtering dynamic deephit dataset to only include pediatric patients")
+                self.filter_age_cohort(config_manager, dataset_types = ['shard_data'])  
 
             # drop trajectories longer than max_time
             # remove long trajectories beyond max_time
@@ -1013,6 +1042,10 @@ class ShardProcessor:
             logger.info(f"Filtering shard file to only include unit: {config_manager._data_config['unit']}")
             self.filter_unit(config_manager, dataset_types = ['shard_data'])      
 
+        if config_manager.hospital == 'choc':
+            logger.info(f"Filtering dynamic deephit dataset to only include pediatic patients")
+            self.filter_age_cohort(config_manager, dataset_types = ['shard_data'])
+        
         # drop trajectories longer than max_time
         # remove long trajectories beyond max_time
         self.shard_data['trajectories'], self.shard_data['stay_ids'], self.shard_data['index_ptr'] = self.drop_long_trajectories(

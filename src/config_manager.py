@@ -170,6 +170,16 @@ class ConfigManager:
             with open(cv_config_files[0], 'r') as f:
                 self.cv_config = yaml.safe_load(f)
 
+        if self.hospital == "choc":
+            self.data_config['age_stays_dir'] = os.path.join(
+                self.get_data_dir,
+                'cohorts',
+                'age' 
+            )
+            self.data_config['age_stay_ids_path'] = os.path.join(
+                self.data_config['age_stays_dir'],
+                'pediatric_stay_ids.csv'
+            )
 
         if self.cohort is not None and self.cohort != "all":
             self._data_config['cohort'] = self.cohort   

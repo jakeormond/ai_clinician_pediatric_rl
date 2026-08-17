@@ -185,7 +185,7 @@ class ConfigManager:
         else:
             self._data_config['cohort'] = 'all'
 
-        if self.unit is not None:
+        if hasattr(self, 'unit') and self.unit is not None:
             self._data_config['unit'] = self.unit.lower()
             self.data_config['unit_stay_ids_path'] = os.path.join(
                 self.get_data_dir, 'cohorts',

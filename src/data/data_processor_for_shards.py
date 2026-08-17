@@ -65,20 +65,20 @@ class ShardProcessor:
             self.shard_dir = os.path.join(shard_dir, 'training_set')
         
         # load processed data if it exists, otherwise process raw shard files and save the processed data for future use
-        if config_manager.cohort == 'sepsis' and config_manager.unit == 'PICU':
+        if config_manager.cohort == 'sepsis' and hasattr(config_manager, 'unit') and config_manager.unit == 'PICU':
             self.file_name_prefix = f"{self.split}_sepsis_picu"
             if config_manager.training_config['tuning']:
                 self.norm_params_prefix = "tuning_sepsis_picu"
             else:
                 self.norm_params_prefix = "train_sepsis_picu"
-        elif config_manager.cohort is None and config_manager.unit is None:
+        else:
             self.file_name_prefix = f"{self.split}"
             if config_manager.training_config['tuning']:
                 self.norm_params_prefix = "tuning"
             else:
                 self.norm_params_prefix = "train"
-        else:
-            raise ValueError(f"Invalid cohort and unit combination: {config_manager.cohort}, {config_manager.unit}. Supported combinations are: (None, None) and ('sepsis', 'PICU').")
+        # else:
+        #     raise ValueError(f"Invalid cohort and unit combination: {config_manager.cohort}, {config_manager.unit}. Supported combinations are: (None, None) and ('sepsis', 'PICU').")
 
         final_file_name = f"{self.file_name_prefix}_dynamic_deephit_dataset.h5"
         final_file_path = os.path.join(self.shard_dir, final_file_name)
@@ -105,9 +105,9 @@ class ShardProcessor:
                 if self.split == 'tuning':
                     pred_split = 'train' # the tuning set predictions are generated from the model trained on the training set, so we need to load the train_set_predictions.h5 file
 
-                if config_manager.cohort == 'sepsis' and config_manager.unit == 'PICU':
+                if config_manager.cohort == 'sepsis' and hasattr(config_manager, 'unit') and config_manager.unit == 'PICU':
                     pred_split_prefix = f"{pred_split}_sepsis_picu"
-                elif config_manager.cohort is None and config_manager.unit is None:
+                else:
                     pred_split_prefix = f"{pred_split}"
                 
                 prediction_file_path = os.path.join(final_model_dir, f"{pred_split_prefix}_predictions.h5")
@@ -134,7 +134,7 @@ class ShardProcessor:
                     logger.info(f"Filtering dynamic deephit predictions to only include cohort: {config_manager._data_config['cohort']}")
                     self.filter_cohort(config_manager)               
                 
-                if config_manager._data_config['unit'] is not None and config_manager._data_config['unit'] != 'all':
+                if hasattr(config_manager._data_config, 'unit') and config_manager._data_config['unit'] is not None and config_manager._data_config['unit'] != 'all':
                     # if we are filtering to a specific unit, we need to filter the dataset to only include that unit
                     logger.info(f"Filtering dynamic deephit dataset to only include unit: {config_manager._data_config['unit']}")
                     self.filter_unit(config_manager)    
@@ -153,12 +153,12 @@ class ShardProcessor:
             else:
                 raise ValueError(f"No normalization parameters file found at {norm_params_file}. This may cause issues if you are normalizing the validation or test set, as it should be normalized with the parameters from the training set. Please check that your training set was normalized and that the normalization parameters were saved correctly.")
 
-            if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
+            if hasattr(config_manager._data_config, 'cohort') and config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
                 # if we are filtering to a specific cohort, we need to filter the dataset to only include that cohort
                 logger.info(f"Filtering dynamic deephit dataset to only include cohort: {config_manager._data_config['cohort']}")
                 self.filter_cohort(config_manager)       
 
-            if config_manager._data_config['unit'] is not None and config_manager._data_config['unit'] != 'all':
+            if hasattr(config_manager._data_config, 'unit') and config_manager._data_config['unit'] is not None and config_manager._data_config['unit'] != 'all':
                 # if we are filtering to a specific unit, we need to filter the dataset to only include that unit
                 logger.info(f"Filtering dynamic deephit dataset to only include unit: {config_manager._data_config['unit']}")
                 self.filter_unit(config_manager)     

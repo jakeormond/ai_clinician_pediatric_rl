@@ -680,12 +680,17 @@ def train_with_hyperparameters(
 
     # get job_id and seed
     job_id = get_job_id(config_manager)
-    if hyperparams.get('use_fixed_seed', False):
-        seed = hyperparams.get('seed', 42)  # Default to 42 if not specified
+    # check if config_manager.training_conifg['seed'] is set
+    if config_manager.training_config.get('seed') is not None:
+        seed =  config_manager.training_config['seed']
     else:
-        seed = generate_run_seed(job_id, search_iteration)
+        if hyperparams.get('use_fixed_seed', False):
+            seed = hyperparams['seed']  # Default to 42 if not specified
+        else:
+            seed = generate_run_seed(job_id, search_iteration)
+        config_manager.seed = seed
+
     hyperparams['seed'] = seed
-    config_manager.seed = seed
     set_seed(seed)
    
     # initialize wandb for this training run

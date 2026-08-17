@@ -43,9 +43,11 @@
                 "--mode", "single_split", 
                 "--split_num", "0",
                 "--search_variant", "fixed_hyperparameters",
+                "--seeds", "0", "1", "2", "3", "4",
                 "--final_timestep_only", "True",                
-                "--cohort", "all",
-                "--n_epochs", "100",
+                "--cohort", "sepsis",
+                "--unit", "PICU",
+                "--n_epochs", "200",
                 "--testing"
             ],
             "console": "integratedTerminal",

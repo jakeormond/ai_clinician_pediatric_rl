@@ -590,15 +590,27 @@ def single_split_training(config_manager):
         # get fixed hyperparameters
         hyperparams = get_fixed_hyperparameters(config_manager)
 
-        # train final model
-        train_with_hyperparameters(
-            train_processor, 
-            val_processor, 
-            config_manager, 
-            hyperparams,
-        )
 
+        if config_manager.seeds is not None and len(config_manager.seeds) > 0:
+            logger.info(f"Training with multiple seeds: {config_manager.seeds}")
 
+            for seed in config_manager.seeds:
+                config_manager.training_config['seed'] = seed
+                logger.info(f"Training with seed: {seed}")
+                train_with_hyperparameters(
+                    train_processor, 
+                    val_processor, 
+                    config_manager, 
+                    hyperparams,
+                )
+        else:
+            # train final model
+            train_with_hyperparameters(
+                train_processor, 
+                val_processor, 
+                config_manager, 
+                hyperparams,
+            )
 
 
 def get_hyperparameter_space(config_manager):
@@ -792,9 +804,17 @@ def train_with_hyperparameters(
 
     # get job_id and seed
     job_id = get_job_id(config_manager)
-    seed = generate_run_seed(job_id, search_iteration)
+    # check if config_manager.training_config['seed'] is set
+    if config_manager.training_config.get('seed') is not None:
+        seed =  config_manager.training_config['seed']
+    else:
+        if hyperparams.get('use_fixed_seed', False):
+            seed = hyperparams['seed']  # Default to 42 if not specified
+        else:
+            seed = generate_run_seed(job_id, search_iteration)
+        config_manager.seed = seed
+
     hyperparams['seed'] = seed
-    config_manager.seed = seed
     set_seed(seed)
 
     # initialize wandb for this training run

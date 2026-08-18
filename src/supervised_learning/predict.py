@@ -486,7 +486,7 @@ def get_all_predictions(config_manager, model_type, experiment_dir):
     return predictions
 
 def get_predictions(config_manager, model_type, experiment_dir, set='test', stay_ids=None):
-    filename = f'{set}_set_predictions'
+    filename = f'{set}_predictions'
     filepath = os.path.join(experiment_dir, filename + '.h5')
     if os.path.exists(filepath):
         # load existing predictions
@@ -498,7 +498,13 @@ def get_predictions(config_manager, model_type, experiment_dir, set='test', stay
         # All possible windows will be computed
         processor = create_processor_from_shards(config_manager, normalize=True, set_to_return = set)
 
-        # instantiate the model
+        # list folders inside experiment_dir that begin local or unknown
+        # model_folders = [f for f in os.listdir(experiment_dir) if os.path.isdir(os.path.join(experiment_dir, f)) and (f.startswith('local') or f.startswith('unknown'))]
+        # if len(model_folders) != 1:
+        #     raise ValueError(f"Expected exactly one model folder in {experiment_dir}, but found {len(model_folders)}: {model_folders}")
+        # model_folder = model_folders[0]
+        # experiment_dir = os.path.join(experiment_dir, model_folder)
+        
         # load result.json from config_manager.experiment_dir to get hyperparameters
         with open(
             os.path.join(experiment_dir, 'results.json'), 'r'

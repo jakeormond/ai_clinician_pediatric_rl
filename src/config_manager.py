@@ -43,10 +43,19 @@ class ConfigManager:
                         "GRU", "final_model"
                     )
                 elif self.model_type == "dynamic_deephit_transformer" and self.cohort != 'all' and self.cohort is not None:
-                    results_dir = os.path.join(
-                        self.paths['final_model_dir'], 
-                        "transformer", "final_model"
-                    )
+                    if hasattr(self, 'unit'):
+                        results_dir = os.path.join(
+                            self.paths['supervised_final_model_dir'], 
+                            "five_splits", f"split_{self.split_num}", 
+                            self.cohort, "intake-vis", f"{self.cohort}_{self.unit.lower()}", "final_model"
+                        )
+                    else:
+                        results_dir = os.path.join(
+                            self.paths['supervised_final_model_dir'], 
+                            "five_splits", f"split_{self.split_num}", 
+                            self.cohort, "intake-vis","final_model"
+                        )
+
                 elif self.model_type == "dynamic_deephit_transformer" and self.split_num is not None:
                     if self.model_dir is not None:
                         results_dir = os.path.join(

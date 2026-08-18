@@ -157,12 +157,12 @@ class ShardProcessor:
             else:
                 raise ValueError(f"No normalization parameters file found at {norm_params_file}. This may cause issues if you are normalizing the validation or test set, as it should be normalized with the parameters from the training set. Please check that your training set was normalized and that the normalization parameters were saved correctly.")
 
-            if hasattr(config_manager._data_config, 'cohort') and config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
+            if hasattr(config_manager, 'cohort') and config_manager.cohort is not None and config_manager.cohort != 'all':
                 # if we are filtering to a specific cohort, we need to filter the dataset to only include that cohort
                 logger.info(f"Filtering dynamic deephit dataset to only include cohort: {config_manager._data_config['cohort']}")
                 self.filter_cohort(config_manager)       
 
-            if hasattr(config_manager._data_config, 'unit') and config_manager._data_config['unit'] is not None and config_manager._data_config['unit'] != 'all':
+            if hasattr(config_manager, 'unit') and config_manager.unit is not None and config_manager.unit != 'all':
                 # if we are filtering to a specific unit, we need to filter the dataset to only include that unit
                 logger.info(f"Filtering dynamic deephit dataset to only include unit: {config_manager._data_config['unit']}")
                 self.filter_unit(config_manager)  

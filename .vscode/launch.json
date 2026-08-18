@@ -262,7 +262,7 @@
                 "--split_num", "0",
                 "--model_dir", "sepsis/intake-vis",
                 "--cohort", "sepsis",
-                "unit", "PICU",
+                "--unit", "PICU",
                 "--experiment_variant", "prediction"
             ],
             "console": "integratedTerminal",

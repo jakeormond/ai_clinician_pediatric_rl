@@ -259,8 +259,10 @@
                 "--prediction_type", "discharge_mortality_tte",
                 "--model_type", "dynamic_deephit_transformer",
                 "--mode", "single_split", 
-                "--split_num", "3",
+                "--split_num", "0",
                 "--model_dir", "sepsis/intake-vis",
+                "--cohort", "sepsis",
+                "unit", "PICU",
                 "--experiment_variant", "prediction"
             ],
             "console": "integratedTerminal",

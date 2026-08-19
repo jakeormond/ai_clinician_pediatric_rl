@@ -114,7 +114,7 @@ class ShardProcessor:
                 prediction_file_path = os.path.join(final_model_dir, f"{pred_split}_predictions.h5")
 
                 self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
-                                                                        keys_to_exclude=['predictions', 'entropy', 'compressed_latents'])
+                                                                keys_to_exclude=['predictions', 'entropy', 'compressed_latents'])
 
                 # load behavioural cloning latents if using
                 if config_manager.data_config['use_behavior_cloning_latents']:
@@ -977,14 +977,13 @@ class ShardProcessor:
 
                             
             if hasattr(config_manager, 'cohort') and config_manager.cohort is not None and config_manager.cohort != 'all':
-                if hasattr(config_manager, 'unit') and config_manager.unit is not None and config_manager.unit != 'all':
+                # if we are filtering to a specific cohort, we need to filter the dataset to only include that cohort
+                logger.info(f"Filtering shard file to only include cohort: {config_manager._data_config['cohort']}")
+                self.filter_cohort(config_manager, dataset_types = ['shard_data'])       
 
-                    # if we are filtering to a specific cohort, we need to filter the dataset to only include that cohort
-                    logger.info(f"Filtering shard file to only include cohort: {config_manager._data_config['cohort']}")
-                    self.filter_cohort(config_manager, dataset_types = ['shard_data'])       
-
-                    logger.info(f"Filtering shard file to only include unit: {config_manager._data_config['unit']}")
-                    self.filter_unit(config_manager, dataset_types = ['shard_data'])     
+            if hasattr(config_manager, 'unit') and config_manager.unit is not None and config_manager.unit != 'all':
+                logger.info(f"Filtering shard file to only include unit: {config_manager._data_config['unit']}")
+                self.filter_unit(config_manager, dataset_types = ['shard_data'])     
 
             if config_manager.filter_old == 'True':
                 logger.info(f"Filtering dynamic deephit dataset to only include pediatric patients")
@@ -1039,14 +1038,13 @@ class ShardProcessor:
             self.shard_data['trajectories'] = f['trajectories'][:]
 
         if hasattr(config_manager, 'cohort') and config_manager.cohort is not None and config_manager.cohort != 'all':
-            if hasattr(config_manager, 'unit') and config_manager.unit is not None and config_manager.unit != 'all':
+            # if we are filtering to a specific cohort, we need to filter the dataset to only include that cohort
+            logger.info(f"Filtering shard file to only include cohort: {config_manager._data_config['cohort']}")
+            self.filter_cohort(config_manager, dataset_types = ['shard_data'])    
 
-                # if we are filtering to a specific cohort, we need to filter the dataset to only include that cohort
-                logger.info(f"Filtering shard file to only include cohort: {config_manager._data_config['cohort']}")
-                self.filter_cohort(config_manager, dataset_types = ['shard_data'])       
-
-                logger.info(f"Filtering shard file to only include unit: {config_manager._data_config['unit']}")
-                self.filter_unit(config_manager, dataset_types = ['shard_data'])
+        if hasattr(config_manager, 'unit') and config_manager.unit is not None and config_manager.unit != 'all':
+            logger.info(f"Filtering shard file to only include unit: {config_manager._data_config['unit']}")
+            self.filter_unit(config_manager, dataset_types = ['shard_data'])
 
         if config_manager.filter_old == 'True':
             logger.info(f"Filtering dynamic deephit dataset to only include pediatic patients")

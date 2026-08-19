@@ -236,7 +236,7 @@ def main():
                     # time_bins = [0, 45, 94, 154, 230, 329, 472, 696, 1441]
 
                     # if using only PICU sepsis stays - see get_time_bins.ipynb
-                    time_bins = [0, 50, 103, 164, 237, 328, 460, 669, 1398]
+                    time_bins = [0, 50, 103, 164, 237, 328, 460, 669, 1441]
 
                 else:            
                     time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
@@ -384,7 +384,7 @@ def main():
                 # using all data
                 # time_bins = [0, 45, 94, 154, 230, 329, 472, 696, 1441]
                 # using picu sepsis under 19 stays
-                time_bins = [0, 50, 103, 164, 237, 328, 460, 669, 1398]
+                time_bins = [0, 50, 103, 164, 237, 328, 460, 669, 1441]
             else:            
                 # time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
                 raise ValueError(f"Time bins for hospital {config_manager.hospital} not defined")

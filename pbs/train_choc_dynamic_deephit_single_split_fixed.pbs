@@ -73,6 +73,7 @@ python -u -m src.scripts.supervised.supervised_learning \
     --final_timestep_only True \
     --cohort sepsis \
     --unit PICU \
+    --filter_old True \
     --n_epochs 200 \
     --start_time $START_TIME 
 

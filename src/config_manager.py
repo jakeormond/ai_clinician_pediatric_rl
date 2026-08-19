@@ -342,9 +342,9 @@ class ConfigManager:
                     split_name = os.path.join(split_name, actions_name)   
                     self.actions = actions_name             
                 
-
-                if self.cohort is not None and hasattr(self, 'unit') and self.unit is not None:
-                    split_name = os.path.join(split_name, f"{self.cohort}_{self.unit.lower()}")
+                if self.reward_cohort == 'restricted':
+                    if self.cohort is not None and hasattr(self, 'unit') and self.unit is not None:
+                        split_name = os.path.join(split_name, f"{self.cohort}_{self.unit.lower()}")
 
                 final_model_dir = os.path.join(
                     reward_path,

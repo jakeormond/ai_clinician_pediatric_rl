@@ -123,7 +123,10 @@ def parse_arguments():
     parser.add_argument('--unit', type=str, default=None,
                         choices=['PICU', 'NICU', 'ICU'],
                         help='Unit to use for this experiment (overrides config file)')
-    
+
+    parser.add_argument('--filter_old', type=str, default='False',
+                        choices=['True', 'False'],
+                        help='Whether to filter out old data (overrides config file)')  
 
     parser.add_argument('--model_dir', type=str, default=None,
                         help='Directory of the model to load for prediction or feature evaluation (required for prediction and feature_evaluation experiment variants)')

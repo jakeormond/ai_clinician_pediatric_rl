@@ -130,18 +130,18 @@ class ShardProcessor:
                     tuning_stay_ids = self.dynamic_deephit_dataset['stay_ids']
                     self.filter_by_stay_ids(tuning_stay_ids, dataset_types = ['dynamic_deephit_predictions', 'bc_latents'])
 
-                if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
+                if hasattr(config_manager, 'cohort') and config_manager.cohort is not None and config_manager.cohort != 'all':
                     # if we are filtering to a specific cohort, we also need to filter the predictions to only include that cohort
                     logger.info(f"Filtering dynamic deephit predictions to only include cohort: {config_manager._data_config['cohort']}")
                     self.filter_cohort(config_manager)               
                 
-                if hasattr(config_manager._data_config, 'unit') and config_manager._data_config['unit'] is not None and config_manager._data_config['unit'] != 'all':
+                if hasattr(config_manager, 'unit') and config_manager.unit is not None and config_manager.unit != 'all':
                     # if we are filtering to a specific unit, we need to filter the dataset to only include that unit
                     logger.info(f"Filtering dynamic deephit dataset to only include unit: {config_manager._data_config['unit']}")
                     self.filter_unit(config_manager)    
 
                 # filter by age cohort if hospital is choc
-                if config_manager.hospital == 'choc':
+                if config_manager.filter_old == 'True':
                     logger.info(f"Filtering dynamic deephit dataset to only include age cohort - under 19s")
                     self.filter_age_cohort(config_manager)
 
@@ -168,7 +168,7 @@ class ShardProcessor:
                 logger.info(f"Filtering dynamic deephit dataset to only include unit: {config_manager._data_config['unit']}")
                 self.filter_unit(config_manager)  
 
-            if config_manager.hospital == 'choc':
+            if config_manager.filter_old == 'True':
                 logger.info(f"Filtering dynamic deephit dataset to only include choc pediatric age cohort")
                 self.filter_age_cohort(config_manager)   
             
@@ -865,28 +865,34 @@ class ShardProcessor:
                 chunks=chunks)
             
 
-    def drop_long_trajectories(self, trajectories, stay_ids, index_ptr):
+    def drop_long_trajectories(self):
         """
         Drops trajectories longer than max_time from the given trajectories, stay_ids, and index_ptr.
-        Returns the updated trajectories, stay_ids, and index_ptr.
+        Returns the updated trajectories, stay_ids, and index_ptr. Only used on og h5 file
         """
-        trajectory_lengths = index_ptr[1:] - index_ptr[:-1]
+        trajectory_lengths = self.shard_data['index_ptr'][1:] - self.shard_data['index_ptr'][:-1]
 
-        trajectories_to_remove = np.where(trajectory_lengths > self.max_time)[0]
-        stay_ids_to_remove = stay_ids[trajectories_to_remove]
+        # trajectories_to_remove = np.where(trajectory_lengths > self.max_time)[0]
+        # stay_ids_to_remove = self.shard_data['stay_ids'][trajectories_to_remove]
+    
+        trajectories_to_keep = np.where(trajectory_lengths <= self.max_time)[0]
+        stay_ids_to_keep = self.shard_data['stay_ids'][trajectories_to_keep]
+
+        self.filter_by_stay_ids(stay_ids_to_keep, dataset_types=['shard_data'])
+
+
+                # for stay_id in stay_ids_to_remove:
+                #     idx = np.where(stay_ids == stay_id)[0][0]
+                #     start_idx = index_ptr[idx]
+                #     end_idx = index_ptr[idx + 1]
+
+                #     trajectories = np.delete(trajectories, np.s_[start_idx:end_idx], axis=0)
+                #     stay_ids = np.delete(stay_ids, idx, axis=0)
+                #     index_ptr = np.delete(index_ptr, idx + 1, axis=0)
+                #     # update index_ptr
+                #     index_ptr[idx + 1:] -= (end_idx - start_idx)
                 
-        for stay_id in stay_ids_to_remove:
-            idx = np.where(stay_ids == stay_id)[0][0]
-            start_idx = index_ptr[idx]
-            end_idx = index_ptr[idx + 1]
-
-            trajectories = np.delete(trajectories, np.s_[start_idx:end_idx], axis=0)
-            stay_ids = np.delete(stay_ids, idx, axis=0)
-            index_ptr = np.delete(index_ptr, idx + 1, axis=0)
-            # update index_ptr
-            index_ptr[idx + 1:] -= (end_idx - start_idx)
-        
-        return trajectories, stay_ids, index_ptr
+                # return trajectories, stay_ids, index_ptr
 
     
     def add_time_column(self, trajectories, stay_ids, index_ptr, feature_names):
@@ -968,26 +974,25 @@ class ShardProcessor:
                 self.shard_data['stay_ids'] = f['stay_ids'][:]
                 self.shard_data['index_ptr'] = f['index_ptr'][:]
                 self.shard_data['trajectories'] = f['trajectories'][:]             
-                
-            
-            if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
-                # if we are filtering to a specific cohort, we need to filter the dataset to only include that cohort
-                logger.info(f"Filtering shard file to only include cohort: {config_manager._data_config['cohort']}")
-                self.filter_cohort(config_manager, dataset_types = ['shard_data'])       
 
-            if config_manager._data_config['unit'] is not None and config_manager._data_config['unit'] != 'all':
-                # if we are filtering to a specific unit, we need to filter the dataset to only include that unit
-                logger.info(f"Filtering shard file to only include unit: {config_manager._data_config['unit']}")
-                self.filter_unit(config_manager, dataset_types = ['shard_data'])     
+                            
+            if hasattr(config_manager, 'cohort') and config_manager.cohort is not None and config_manager.cohort != 'all':
+                if hasattr(config_manager, 'unit') and config_manager.unit is not None and config_manager.unit != 'all':
 
-            if config_manager.hospital == 'choc':
+                    # if we are filtering to a specific cohort, we need to filter the dataset to only include that cohort
+                    logger.info(f"Filtering shard file to only include cohort: {config_manager._data_config['cohort']}")
+                    self.filter_cohort(config_manager, dataset_types = ['shard_data'])       
+
+                    logger.info(f"Filtering shard file to only include unit: {config_manager._data_config['unit']}")
+                    self.filter_unit(config_manager, dataset_types = ['shard_data'])     
+
+            if config_manager.filter_old == 'True':
                 logger.info(f"Filtering dynamic deephit dataset to only include pediatric patients")
                 self.filter_age_cohort(config_manager, dataset_types = ['shard_data'])  
 
             # drop trajectories longer than max_time
             # remove long trajectories beyond max_time
-            self.shard_data['trajectories'], self.shard_data['stay_ids'], self.shard_data['index_ptr'] = self.drop_long_trajectories(
-                self.shard_data['trajectories'], self.shard_data['stay_ids'], self.shard_data['index_ptr'])
+            self.drop_long_trajectories()
             
             if config_manager.data_config['add_time_col']:
                 # add time column to trajectories
@@ -1033,24 +1038,23 @@ class ShardProcessor:
             self.shard_data['index_ptr'] = f['index_ptr'][:]
             self.shard_data['trajectories'] = f['trajectories'][:]
 
-        if config_manager._data_config['cohort'] is not None and config_manager._data_config['cohort'] != 'all':
-            # if we are filtering to a specific cohort, we need to filter the dataset to only include that cohort
-            logger.info(f"Filtering shard file to only include cohort: {config_manager._data_config['cohort']}")
-            self.filter_cohort(config_manager, dataset_types = ['shard_data'])       
+        if hasattr(config_manager, 'cohort') and config_manager.cohort is not None and config_manager.cohort != 'all':
+            if hasattr(config_manager, 'unit') and config_manager.unit is not None and config_manager.unit != 'all':
 
-        if config_manager._data_config['unit'] is not None and config_manager._data_config['unit'] != 'all':
-            # if we are filtering to a specific unit, we need to filter the dataset to only include that unit
-            logger.info(f"Filtering shard file to only include unit: {config_manager._data_config['unit']}")
-            self.filter_unit(config_manager, dataset_types = ['shard_data'])      
+                # if we are filtering to a specific cohort, we need to filter the dataset to only include that cohort
+                logger.info(f"Filtering shard file to only include cohort: {config_manager._data_config['cohort']}")
+                self.filter_cohort(config_manager, dataset_types = ['shard_data'])       
 
-        if config_manager.hospital == 'choc':
+                logger.info(f"Filtering shard file to only include unit: {config_manager._data_config['unit']}")
+                self.filter_unit(config_manager, dataset_types = ['shard_data'])
+
+        if config_manager.filter_old == 'True':
             logger.info(f"Filtering dynamic deephit dataset to only include pediatic patients")
             self.filter_age_cohort(config_manager, dataset_types = ['shard_data'])
         
         # drop trajectories longer than max_time
         # remove long trajectories beyond max_time
-        self.shard_data['trajectories'], self.shard_data['stay_ids'], self.shard_data['index_ptr'] = self.drop_long_trajectories(
-            self.shard_data['trajectories'], self.shard_data['stay_ids'], self.shard_data['index_ptr'])
+        self.drop_long_trajectories()
 
         if config_manager.data_config['add_time_col']:
             # add time column to trajectories

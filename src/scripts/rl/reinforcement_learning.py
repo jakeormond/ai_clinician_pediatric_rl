@@ -113,7 +113,9 @@ def parse_arguments():
         choices=['PICU', 'NICU', 'ICU'],
         help='Unit to use for this experiment (overrides config file)')
 
-    
+    parser.add_argument('--reward_cohort', type=str, default=None,
+            choices=['all', 'restricted'],
+            help='Cohort to use for rewards')    
     
     parser.add_argument('--model_dir', type=str, default=None,
         help='Directory of the model to load for prediction or feature evaluation (required for prediction and feature_evaluation experiment variants)')

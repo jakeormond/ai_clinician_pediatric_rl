@@ -1671,7 +1671,7 @@ def plot_random_predictions(
     else:
         dataset_name = "test_dynamic_deephit_dataset.h5"
     dataset_filepath = os.path.join(config_manager.get_data_dir, config_manager.data_config['shard_dir'], 
-                f"split_{config_manager.split_num}", "training_set", "test_dynamic_deephit_dataset.h5")    
+                f"split_{config_manager.split_num}", "training_set", dataset_name)    
     dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(dataset_filepath)
     
     # confirm that the predictions and dataset are aligned by index_ptr

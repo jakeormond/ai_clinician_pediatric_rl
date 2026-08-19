@@ -105,21 +105,22 @@ class ShardProcessor:
                 if self.split == 'tuning':
                     pred_split = 'train' # the tuning set predictions are generated from the model trained on the training set, so we need to load the train_set_predictions.h5 file
 
-                if config_manager.cohort == 'sepsis' and hasattr(config_manager, 'unit') and config_manager.unit == 'PICU':
-                    pred_split_prefix = f"{pred_split}_sepsis_picu"
-                else:
-                    pred_split_prefix = f"{pred_split}"
+                # if config_manager.cohort == 'sepsis' and hasattr(config_manager, 'unit') and config_manager.unit == 'PICU':
+                #     pred_split_prefix = f"{pred_split}_sepsis_picu"
+                # else:
+                #     pred_split_prefix = f"{pred_split}"
                 
-                prediction_file_path = os.path.join(final_model_dir, f"{pred_split_prefix}_predictions.h5")
+                # prediction_file_path = os.path.join(final_model_dir, f"{pred_split_prefix}_predictions.h5")
+                prediction_file_path = os.path.join(final_model_dir, f"{pred_split}_predictions.h5")
 
                 self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
-                                                                        keys_to_exclude=['predictions', 'entropy'])
+                                                                        keys_to_exclude=['predictions', 'entropy', 'compressed_latents'])
 
                 # load behavioural cloning latents if using
                 if config_manager.data_config['use_behavior_cloning_latents']:
                     self.use_behavior_cloning_latents = True
                     bc_model_file_dir = config_manager.data_config['bc_latents_path']
-                    bc_prediction_file_path = os.path.join(bc_model_file_dir, f"{pred_split_prefix}_predictions.h5")
+                    bc_prediction_file_path = os.path.join(bc_model_file_dir, f"{pred_split}_predictions.h5")
                     self.bc_latents = self.load_dynamic_deephit_predictions_from_h5(bc_prediction_file_path, 
                                                                         keys_to_load=['model_outputs', 'compressed_latents', 'index_ptr', 'stay_ids'])
                 else:
@@ -141,7 +142,7 @@ class ShardProcessor:
 
                 # filter by age cohort if hospital is choc
                 if config_manager.hospital == 'choc':
-                    logger.info(f"Filtering dynamic deephit dataset to only include age cohort: {config_manager._data_config['age_cohort']}")
+                    logger.info(f"Filtering dynamic deephit dataset to only include age cohort - under 19s")
                     self.filter_age_cohort(config_manager)
 
                 return

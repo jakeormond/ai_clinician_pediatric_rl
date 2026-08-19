@@ -527,7 +527,7 @@ def get_predictions(config_manager, model_type, experiment_dir, set='test', stay
             )
 
         # run inference on test set - this function also saves the predictions to file
-        filename = f'{set}_set_predictions'
+        filename = f'{set}_predictions'
         dynamic_deephit_predictions = inference_loop(
             dynamic_deephit_model, 
             processor, 
@@ -1532,14 +1532,18 @@ def plot_health_score_statistics(
         cohort='all',
     ):
 
-    filename = 'test_set_predictions'
+    filename = 'test_predictions'
     filepath = os.path.join(config_manager.experiment_dir, filename + '.h5')
     # load existing predictions
     print(f"Loading existing predictions from {filepath}")
     dynamic_deephit_predictions = ShardProcessor.load_dynamic_deephit_predictions_from_h5(filepath, keys_to_exclude=['compressed_latents'])
 
+    if hasattr(config_manager, 'unit') and config_manager.unit is not None:
+        dataset_name = f"test_{config_manager.cohort}_{config_manager.unit.lower()}_dynamic_deephit_dataset.h5"
+    else:
+        dataset_name = "test_dynamic_deephit_dataset.h5"       
     dataset_filepath = os.path.join(config_manager.get_data_dir, config_manager.data_config['shard_dir'], 
-                f"split_{config_manager.split_num}", "training_set", "test_dynamic_deephit_dataset.h5")    
+                f"split_{config_manager.split_num}", "training_set", dataset_name)    
     dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(dataset_filepath)
     # plot predictions for a random sample of 10 patients
     stay_ids = dynamic_deephit_dataset['stay_ids']
@@ -1642,10 +1646,6 @@ def plot_health_score_statistics(
 
     pass
 
-
-
-
-
 def plot_random_predictions(
         config_manager,
         model='transformer',
@@ -1659,13 +1659,17 @@ def plot_random_predictions(
     plot_dir = os.path.join(config_manager.experiment_dir, 'prediction_plots')
     os.makedirs(plot_dir, exist_ok=True)
 
-    filename = 'test_set_predictions'
+    filename = 'test_predictions'
     filepath = os.path.join(config_manager.experiment_dir, filename + '.h5')
     # load existing predictions
     print(f"Loading existing predictions from {filepath}")
     dynamic_deephit_predictions = ShardProcessor.load_dynamic_deephit_predictions_from_h5(filepath, keys_to_exclude=['compressed_latents'])
     
     # loading the dataset to get trajectories
+    if hasattr(config_manager, 'unit') and config_manager.unit is not None:
+        dataset_name = f"test_{config_manager.cohort}_{config_manager.unit.lower()}_dynamic_deephit_dataset.h5"
+    else:
+        dataset_name = "test_dynamic_deephit_dataset.h5"
     dataset_filepath = os.path.join(config_manager.get_data_dir, config_manager.data_config['shard_dir'], 
                 f"split_{config_manager.split_num}", "training_set", "test_dynamic_deephit_dataset.h5")    
     dynamic_deephit_dataset = ShardProcessor.load_dynamic_deephit_dataset_from_h5(dataset_filepath)
@@ -1692,9 +1696,10 @@ def plot_random_predictions(
 
     # randomly sample 50 of each event type
     np.random.seed(42)
-    n_samples_per_event = 50
-    sampled_death_indices = np.random.choice(death_events, size=n_samples_per_event, replace=False)
-    sampled_survival_indices = np.random.choice(survival_events, size=n_samples_per_event, replace=False)
+    n_samples_per_death = np.min([len(death_events), 50])
+    n_samples_per_survival = np.min([len(survival_events), 50])
+    sampled_death_indices = np.random.choice(death_events, size=n_samples_per_death, replace=False)
+    sampled_survival_indices = np.random.choice(survival_events, size=n_samples_per_survival, replace=False)
 
     sampled_indices = np.concatenate([sampled_death_indices, sampled_survival_indices])
 

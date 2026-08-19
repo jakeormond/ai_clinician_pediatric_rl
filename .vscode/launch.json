@@ -264,6 +264,7 @@
                 "--model_dir", "sepsis/intake-vis",
                 "--cohort", "sepsis",
                 "--unit", "PICU",
+                "--filter_old", "True",
                 "--experiment_variant", "prediction"
             ],
             "console": "integratedTerminal",
@@ -585,6 +586,7 @@
                 "--n_epochs", "100",
                 "--cohort", "sepsis",
                 "--unit", "PICU",
+                "--filter_old", "True",
                 "--reward_cohort", "all",
                 "--action_mode", "continuous_only",
             ],

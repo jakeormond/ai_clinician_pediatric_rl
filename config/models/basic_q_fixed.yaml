@@ -63,7 +63,7 @@
 
     # include next actions
     include_next_actions: True  # needed for SARSA
-    actions_shift: False # temporal shift to maintain causality.
+    actions_shift: True # temporal shift to maintain causality.
 
     # gradient clipping
     grad_clip: 1.

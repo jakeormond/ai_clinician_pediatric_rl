@@ -113,6 +113,10 @@ def parse_arguments():
         choices=['PICU', 'NICU', 'ICU'],
         help='Unit to use for this experiment (overrides config file)')
 
+    parser.add_argument('--filter_old', type=str, default=None,
+        choices=['True', 'False'],
+        help='Whether to filter out old data (overrides config file)')
+
     parser.add_argument('--reward_cohort', type=str, default=None,
             choices=['all', 'restricted'],
             help='Cohort to use for rewards')    

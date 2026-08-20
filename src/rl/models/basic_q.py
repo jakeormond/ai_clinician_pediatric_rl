@@ -164,8 +164,13 @@ def get_q_stats(current_Q1, current_Q2, mortality, random_action_sensitivity, ze
     max_random_sensitivity = random_action_sensitivity.max().item()
 
     # zero_action_sensitivity
-    mean_fluid_zero_sensitivity = zero_action_sensitivity['non_zero_fluid_sensitivity'].abs().mean().item() if len(zero_action_sensitivity['non_zero_fluid_sensitivity'].shape) > 0 else float('nan') # focus on fluid sensitivity for now, since vaso sensitivity is often very low due to many zero vaso actions
-    mean_vaso_zero_sensitivity = zero_action_sensitivity['non_zero_vaso_sensitivity'].abs().mean().item() if len(zero_action_sensitivity['non_zero_vaso_sensitivity'].shape) > 0 else float('nan')
+    fluid_value = zero_action_sensitivity['non_zero_fluid_sensitivity']
+    mean_fluid_zero_sensitivity = fluid_value.abs().mean().item() if isinstance(fluid_value, torch.Tensor) and fluid_value.numel() > 0 else float('nan')
+    # mean_fluid_zero_sensitivity = zero_action_sensitivity['non_zero_fluid_sensitivity'].abs().mean().item() if len(zero_action_sensitivity['non_zero_fluid_sensitivity'].shape) > 0 else float('nan') # focus on fluid sensitivity for now, since vaso sensitivity is often very low due to many zero vaso actions
+
+    vaso_value = zero_action_sensitivity['non_zero_vaso_sensitivity']
+    mean_vaso_zero_sensitivity = vaso_value.abs().mean().item() if isinstance(vaso_value, torch.Tensor) and vaso_value.numel() > 0 else float('nan')
+    # mean_vaso_zero_sensitivity = zero_action_sensitivity['non_zero_vaso_sensitivity'].abs().mean().item() if len(zero_action_sensitivity['non_zero_vaso_sensitivity'].shape) > 0 else float('nan')
 
     # masks and counts
     survival_mask = (mortality == 0)

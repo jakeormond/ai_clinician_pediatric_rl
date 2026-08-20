@@ -587,7 +587,7 @@
                 "--cohort", "sepsis",
                 "--unit", "PICU",
                 "--filter_old", "True",
-                "--reward_cohort", "all",
+                "--reward_cohort", "restricted",
                 "--action_mode", "continuous_only",
             ],
             "console": "integratedTerminal",

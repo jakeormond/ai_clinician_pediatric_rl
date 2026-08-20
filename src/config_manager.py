@@ -136,12 +136,20 @@ class ConfigManager:
                 self.create_single_split_dir()
 
                 if self.search_variant == "best_hyperparameters":
-                    self.best_results_path = os.path.join(
-                        self.paths["rl_models_dir"], self.model_type,
-                        f"split_{self.split_num}", self.cohort, self.actions,
-                        f"best_results_{self.reward_type}.json"
-                    )
-
+                    if self.reward_cohort == 'all':
+                        self.best_results_path = os.path.join(
+                            self.paths["rl_models_dir"], self.model_type,
+                            f"split_{self.split_num}", self.cohort, self.actions,
+                            f"{self.unit.lower()}_patients_health_score_from_full_dataset",
+                            f"best_results_{self.reward_type}.json"
+                        )
+                    else:
+                        self.best_results_path = os.path.join(
+                            self.paths["rl_models_dir"], self.model_type,
+                            f"split_{self.split_num}", self.cohort, self.actions,
+                            f"{self.unit}_patients_health_score_from_restricted_dataset",
+                            f"best_results_{self.reward_type}.json"
+                        )
 
         elif self.mode == "analyse_features":
             self.set_experiment_name()

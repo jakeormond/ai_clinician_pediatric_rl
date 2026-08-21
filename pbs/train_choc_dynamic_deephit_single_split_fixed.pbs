@@ -71,7 +71,7 @@ python -u -m src.scripts.supervised.supervised_learning \
     --search_variant fixed_hyperparameters \
     --seeds 0 1 2 3 4 \
     --final_timestep_only True \
-    --cohort sepsis \
+    --cohort all \
     --unit PICU \
     --filter_old True \
     --n_epochs 200 \

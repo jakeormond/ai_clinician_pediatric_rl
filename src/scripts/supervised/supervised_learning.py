@@ -231,15 +231,24 @@ def main():
                     time_bins = [0, 13, 28, 47, 75, 116, 185, 322, 1435]
                 elif config_manager.hospital == "choc":
 
-                    # calculated in get_time_bins.ipynb based on the distribution of trajectory lengths in the CHOC dataset, with a max trajectory length of 60 days (1440 hours)
-                    ####### if using all stays ###########
-                    # time_bins = [0, 45, 94, 154, 230, 329, 472, 696, 1441]
+                    if config_manager.cohort == "all" and config_manager.unit == "all" and config_manager.filter_old == "False":
+                        # did remove +1440 hour trajectories
+                        time_bins = [0, 46, 97, 159, 236, 337, 481, 707, 1441]
 
-                    # if using only PICU sepsis stays - see get_time_bins.ipynb
-                    time_bins = [0, 50, 103, 164, 237, 328, 460, 669, 1441]
+                    elif config_manager.cohort == "all" and config_manager.unit == "all" and config_manager.filter_old == "True":
+                        # did remove +1440 hour trajectories
+                        time_bins = [0, 46, 98, 160, 238, 340, 485, 711, 1441]
+
+                    elif config_manager.cohort == "all" and config_manager.unit == "PICU" and config_manager.filter_old == "True":
+                        time_bins = [0, 39, 82, 133, 197, 282, 406, 620, 1441]
+
+                    elif config_manager.cohort == "sepsis" and config_manager.unit == "PICU" and config_manager.filter_old == "True":
+                        time_bins = [0, 51, 105, 168, 242, 337, 475, 693, 1436]
 
                 else:            
-                    time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
+                    # time_bins = make_mixed_resolution_time_bins(max_time_hours=max_encounter_length)
+                    raise ValueError(f"Time bins for hospital {config_manager.hospital} not defined")
+                
                 config_manager.max_encounter_length = max_encounter_length
                 config_manager.time_bins = time_bins  
 

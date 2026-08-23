@@ -36,7 +36,7 @@
 
 
     # Early stopping parameters (fixed for all combinations)
-    early_stopping_flag: False  # Whether to use early stopping
+    early_stopping_flag: True  # Whether to use early stopping
     patience: 15       # Stop if no improvement for 15 evaluations
     eval_freq: 1        # Evaluate every 20 epochs  
     min_delta: 0.0001   # Minimum improvement threshold

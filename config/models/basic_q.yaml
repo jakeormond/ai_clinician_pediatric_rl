@@ -26,7 +26,7 @@
     add_reward_to_vaso_dosing: False  # Whether to add reward to vaso dosing as positive control expt - this is added as a reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
     vaso_reward_coefficient: [0.01, 0.05, 0.1, 0.2, 0.5] # [1.0, 5.0] # [0.2, 0.5, 1.0, 5.0]
 
-    learning_rate: [1.e-5, 3.e-5, 5.e-5, 1.e-4] # [1.e-3, 5.e-3] # [5.e-6, 1.e-5, 5.e-5, 1.e-4, 5.e-4, 1.e-3, 5.e-3] # 1.e-4 # 1.e-3 # "loguniform(1e-5, 1e-4)" # "loguniform(3e-5, 1e-4)"           #      [1e-6]
+    learning_rate: [5.e-5, 1.e-4, 5.e-4] # [1.e-3, 5.e-3] # [5.e-6, 1.e-5, 5.e-5, 1.e-4, 5.e-4, 1.e-3, 5.e-3] # 1.e-4 # 1.e-3 # "loguniform(1e-5, 1e-4)" # "loguniform(3e-5, 1e-4)"           #      [1e-6]
     dropout: 0.3 # 0.1 # "uniform(0.1, 0.3)"   # "uniform(0.0, 0.3)"
     tau: 0.001 # [0.01, 0.005, 0.001] # [0.005, 0.01]   # [0.0005, 0.001, 0.005, 0.01] # Target network update rate
     weight_decay: [1.e-3, 1.e-2, 1.e-1] # 1.e-5 # "loguniform(1e-4, 1e-3)" # "loguniform(1e-5, 1e-2)" # L2 regularization strength

@@ -1538,8 +1538,10 @@ def plot_health_score_statistics(
     print(f"Loading existing predictions from {filepath}")
     dynamic_deephit_predictions = ShardProcessor.load_dynamic_deephit_predictions_from_h5(filepath, keys_to_exclude=['compressed_latents'])
 
-    if hasattr(config_manager, 'unit') and config_manager.unit is not None:
+    if config_manager.unit != 'all' and config_manager.cohort != 'all':
         dataset_name = f"test_{config_manager.cohort}_{config_manager.unit.lower()}_dynamic_deephit_dataset.h5"
+    elif config_manager.unit != 'all' and config_manager.cohort == 'all':
+        dataset_name = f"test_{config_manager.unit.lower()}_dynamic_deephit_dataset.h5"
     else:
         dataset_name = "test_dynamic_deephit_dataset.h5"       
     dataset_filepath = os.path.join(config_manager.get_data_dir, config_manager.data_config['shard_dir'], 
@@ -1666,8 +1668,10 @@ def plot_random_predictions(
     dynamic_deephit_predictions = ShardProcessor.load_dynamic_deephit_predictions_from_h5(filepath, keys_to_exclude=['compressed_latents'])
     
     # loading the dataset to get trajectories
-    if hasattr(config_manager, 'unit') and config_manager.unit is not None:
+    if config_manager.cohort != 'all' and config_manager.unit != 'all':
         dataset_name = f"test_{config_manager.cohort}_{config_manager.unit.lower()}_dynamic_deephit_dataset.h5"
+    elif config_manager.cohort == 'all' and config_manager.unit == 'PICU':
+        dataset_name = f"test_{config_manager.unit.lower()}_dynamic_deephit_dataset.h5"
     else:
         dataset_name = "test_dynamic_deephit_dataset.h5"
     dataset_filepath = os.path.join(config_manager.get_data_dir, config_manager.data_config['shard_dir'], 

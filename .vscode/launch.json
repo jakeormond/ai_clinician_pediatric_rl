@@ -262,7 +262,7 @@
                 "--mode", "single_split", 
                 "--split_num", "0",
                 "--model_dir", "sepsis/intake-vis",
-                "--cohort", "sepsis",
+                "--cohort", "all",
                 "--unit", "PICU",
                 "--filter_old", "True",
                 "--experiment_variant", "prediction"
@@ -587,7 +587,7 @@
                 "--cohort", "sepsis",
                 "--unit", "PICU",
                 "--filter_old", "True",
-                "--reward_cohort", "restricted",
+                "--reward_cohort", "picu",
                 "--action_mode", "continuous_only",
             ],
             "console": "integratedTerminal",

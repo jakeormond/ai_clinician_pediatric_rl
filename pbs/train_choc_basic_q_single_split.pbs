@@ -70,12 +70,12 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --split_num 0 \
     --search_variant random_search \
     --n_search_iterations 5 \
-    --n_epochs 300 \
+    --n_epochs 200 \
     --action_mode continuous_only \
     --cohort sepsis \
     --unit PICU \
     --filter_old True \
-    --reward_cohort restricted \
+    --reward_cohort picu \
     --start_time $START_TIME \
 
 exit_code=$?

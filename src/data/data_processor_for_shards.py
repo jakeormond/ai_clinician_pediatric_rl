@@ -75,6 +75,8 @@ class ShardProcessor:
             self.file_name_prefix = f"{self.split}_picu"
             if config_manager.training_config['tuning']:
                 self.norm_params_prefix = "tuning_picu"
+            else:
+                self.norm_params_prefix = "train_picu"
         else:
             self.file_name_prefix = f"{self.split}"
             if config_manager.training_config['tuning']:

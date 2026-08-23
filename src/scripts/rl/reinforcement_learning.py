@@ -118,7 +118,7 @@ def parse_arguments():
         help='Whether to filter out old data (overrides config file)')
 
     parser.add_argument('--reward_cohort', type=str, default=None,
-            choices=['all', 'restricted'],
+            choices=['all', 'restricted', 'picu'],
             help='Cohort to use for rewards')    
     
     parser.add_argument('--model_dir', type=str, default=None,

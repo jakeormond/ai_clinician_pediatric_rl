@@ -42,12 +42,18 @@ class ConfigManager:
                         self.paths['final_model_dir'], 
                         "GRU", "final_model"
                     )
-                elif self.model_type == "dynamic_deephit_transformer" and self.cohort != 'all' and self.cohort is not None:
-                    if hasattr(self, 'unit'):
+                elif self.model_type == "dynamic_deephit_transformer":
+                    if self.unit != 'all' and self.cohort != 'all':
                         results_dir = os.path.join(
                             self.paths['supervised_final_model_dir'], 
                             "five_splits", f"split_{self.split_num}", 
                             self.cohort, "intake-vis", f"{self.cohort}_{self.unit.lower()}", "final_model"
+                        )
+                    elif self.unit == 'PICU' and self.cohort == 'all':
+                        results_dir = os.path.join(
+                            self.paths['supervised_final_model_dir'], 
+                            "five_splits", f"split_{self.split_num}", 
+                            "sepsis", "intake-vis", f"{self.unit.lower()}", "final_model"
                         )
                     else:
                         results_dir = os.path.join(
@@ -144,12 +150,20 @@ class ConfigManager:
                             f"best_results_{self.reward_type}.json"
                         )
                     else:
-                        self.best_results_path = os.path.join(
-                            self.paths["rl_models_dir"], self.model_type,
-                            f"split_{self.split_num}", self.cohort, self.actions,
-                            f"{self.unit}_patients_health_score_from_restricted_dataset",
-                            f"best_results_{self.reward_type}.json"
-                        )
+                        if self.reward_cohort == 'restricted':
+                            self.best_results_path = os.path.join(
+                                self.paths["rl_models_dir"], self.model_type,
+                                f"split_{self.split_num}", self.cohort, self.actions,
+                                f"{self.unit}_patients_health_score_from_restricted_dataset",
+                                f"best_results_{self.reward_type}.json"
+                            )
+                        elif self.reward_cohort.lower() == 'picu':
+                            self.best_results_path = os.path.join(
+                                self.paths["rl_models_dir"], self.model_type,
+                                f"split_{self.split_num}", self.cohort, self.actions,
+                                f"{self.unit}_patients_health_score_from_picu_dataset",
+                                f"best_results_{self.reward_type}.json"
+                            )
 
         elif self.mode == "analyse_features":
             self.set_experiment_name()
@@ -351,8 +365,10 @@ class ConfigManager:
                     self.actions = actions_name             
                 
                 if self.reward_cohort == 'restricted':
-                    if self.cohort is not None and hasattr(self, 'unit') and self.unit is not None:
+                    if self.cohort != 'all' and self.unit != 'all':                    
                         split_name = os.path.join(split_name, f"{self.cohort}_{self.unit.lower()}")
+                elif self.reward_cohort == 'picu':
+                    split_name = os.path.join(split_name, f"{self.unit.lower()}")
 
                 final_model_dir = os.path.join(
                     reward_path,

@@ -145,7 +145,7 @@ class ConfigManager:
                     if self.reward_cohort == 'all':
                         self.best_results_path = os.path.join(
                             self.paths["rl_models_dir"], self.model_type,
-                            f"split_{self.split_num}", self.cohort, self.actions,
+                            f"split_{self.split_num}", self.cohort.lower(), self.actions,
                             f"{self.unit.lower()}_patients_health_score_from_full_dataset",
                             f"best_results_{self.reward_type}.json"
                         )
@@ -153,15 +153,15 @@ class ConfigManager:
                         if self.reward_cohort == 'restricted':
                             self.best_results_path = os.path.join(
                                 self.paths["rl_models_dir"], self.model_type,
-                                f"split_{self.split_num}", self.cohort, self.actions,
-                                f"{self.unit}_patients_health_score_from_restricted_dataset",
+                                f"split_{self.split_num}", self.cohort.lower(), self.actions,
+                                f"{self.unit.lower()}_patients_health_score_from_restricted_dataset",
                                 f"best_results_{self.reward_type}.json"
                             )
                         elif self.reward_cohort.lower() == 'picu':
                             self.best_results_path = os.path.join(
                                 self.paths["rl_models_dir"], self.model_type,
-                                f"split_{self.split_num}", self.cohort, self.actions,
-                                f"{self.unit}_patients_health_score_from_picu_dataset",
+                                f"split_{self.split_num}", self.cohort.lower(), self.actions,
+                                f"{self.unit.lower()}_patients_health_score_from_picu_dataset",
                                 f"best_results_{self.reward_type}.json"
                             )
 

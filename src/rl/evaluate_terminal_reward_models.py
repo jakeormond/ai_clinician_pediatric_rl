@@ -101,7 +101,7 @@ def create_test_rl_dataset(train_processor, test_processor, config_manager, hype
     return train_processor, test_processor, scaler
 
 
-def load_sarsa_critic(model_dir=None, shifted_actions=True, reward_type='terminal'):
+def load_sarsa_critic(model_dir=None, shifted_actions=True, reward_type='terminal', state_dim=128):
     if model_dir is None:
         if reward_type == 'terminal':
             sarsa_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/basic_q/split_0/sepsis/intake-vis/terminal_only/final_model_terminal_discount_0.998"
@@ -146,7 +146,7 @@ def load_sarsa_critic(model_dir=None, shifted_actions=True, reward_type='termina
     final_model_path = os.path.join(model_dir, "final_model.pt")
     hidden_dim = hyperparams["hidden_dim"]
 
-    sarsa_critic = Critic(512,2, hidden_dim=hidden_dim).to(device)
+    sarsa_critic = Critic(state_dim, 2, hidden_dim=hidden_dim).to(device)
     sarsa_critic.to(device)
     checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
     state_dict = checkpoint['critic_state_dict'] 

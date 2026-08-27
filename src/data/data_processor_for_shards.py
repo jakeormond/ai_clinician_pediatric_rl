@@ -134,12 +134,12 @@ class ShardProcessor:
 
                 if hasattr(config_manager, 'cohort') and config_manager.cohort is not None and config_manager.cohort != 'all':
                     # if we are filtering to a specific cohort, we also need to filter the predictions to only include that cohort
-                    logger.info(f"Filtering dynamic deephit predictions to only include cohort: {config_manager._data_config['cohort']}")
+                    logger.info(f"Filtering dynamic deephit predictions to only include cohort: {config_manager.cohort}")
                     self.filter_cohort(config_manager)               
                 
                 if hasattr(config_manager, 'unit') and config_manager.unit is not None and config_manager.unit != 'all':
                     # if we are filtering to a specific unit, we need to filter the dataset to only include that unit
-                    logger.info(f"Filtering dynamic deephit dataset to only include unit: {config_manager._data_config['unit']}")
+                    logger.info(f"Filtering dynamic deephit dataset to only include unit: {config_manager.unit}")
                     self.filter_unit(config_manager)    
 
                 # filter by age cohort if hospital is choc
@@ -840,7 +840,7 @@ class ShardProcessor:
         """
         Filters the dynamic_deephit_dataset to only include the specified unit.
         """
-        unit = config_manager._data_config['unit']
+        unit = config_manager.unit
         if unit is None or unit == 'all':
             return
         

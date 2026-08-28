@@ -231,7 +231,7 @@ class ConfigManager:
             self.data_config['unit_stay_ids_path'] = os.path.join(
                 self.get_data_dir, 'cohorts',
                 'icu_units',
-                f"{self._data_config['unit']}_stay_ids.csv"
+                f"{self._data_config['unit'].lower()}_stay_ids.csv"
             )
         else:
             self._data_config['unit'] = None

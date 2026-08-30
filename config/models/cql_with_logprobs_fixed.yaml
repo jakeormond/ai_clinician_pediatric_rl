@@ -68,10 +68,10 @@
     actor_loss_bc_scale: 0.
     actor_loss_q_scale: 10.
     # actor_loss_entropy_scale: 0.02 # 5.e-4
-    actor_loss_gate_entropy_scale: 0.02 # 5.e-4
-    actor_loss_mag_entropy_scale: 5.e-4
+    actor_loss_gate_entropy_scale: 0. # 0.02 # 5.e-4
+    actor_loss_mag_entropy_scale: 0. # 5.e-4
 
-    vaso_mean_reg_scale: 0.0005  
+    vaso_mean_reg_scale: 0. # 0.0005  
 
 
     n_step: 0  # Number of steps to use for n-step returns (set to 1 or None to disable n-step returns)

@@ -1,5 +1,6 @@
 from typing import Dict, List, Tuple
 import copy
+from ... import config_manager
 import numpy as np
 import torch
 import torch.nn as nn
@@ -600,18 +601,29 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 
 
 def get_evaluator(state_dim, action_dim, config_manager):
-    
-    
-    if config_manager.reward_type == 'terminal':
-        terminal_discount = config_manager.training_config['terminal_discount']
-        # model_path = os.path.join(config_manager.paths['rl_models_dir'], 
-        #     'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
-        #     config_manager.actions, "terminal_only", f'final_model_terminal_discount_{terminal_discount}')
 
-        model_path = os.path.join(config_manager.paths['rl_models_dir'], 
-                        'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
-                        config_manager.actions)
-        
+    reward_type = config_manager.reward_type
+    cohort = config_manager.cohort
+    unit = config_manager.unit
+    reward_cohort = config_manager.reward_cohort
+    
+    model_path = os.path.join(config_manager.paths['rl_models_dir'], 
+        'basic_q', f'split_{config_manager.split_num}', cohort, 
+        config_manager.actions)
+
+    if unit.lower() == 'picu':
+        if reward_cohort.lower() == 'picu':
+            model_path = os.path.join(model_path, 
+            "picu_patients_health_score_from_picu_dataset")
+        elif reward_cohort.lower() == 'restricted':
+            model_path = os.path.join(model_path, 
+            "picu_patients_health_score_from_restricted_dataset")
+        else:
+            raise ValueError(f"Unknown reward_cohort: {reward_cohort}. Must be 'picu' or 'restricted'.")
+    else:
+        raise ValueError(f"Unknown unit: {unit}. Must be 'picu'.")
+
+    if reward_type == 'terminal':             
         # load sorted_runs_health_score.csv
         sorted_runs_path = os.path.join(model_path, "sorted_runs_terminal.csv")
         if os.path.exists(sorted_runs_path):
@@ -621,46 +633,18 @@ def get_evaluator(state_dim, action_dim, config_manager):
             best_run_folder = best_run['run_dir']
             model_path = os.path.join(model_path, best_run_folder)
 
-    elif config_manager.reward_type == 'health_score':
-        discount = config_manager.training_config['discount']
-        if config_manager.training_config['health_score_scale'] == 0.0:    
-            # model_path = os.path.join(config_manager.paths['rl_models_dir'], 
-            #     'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
-            #     config_manager.actions, "health_score_change_only", f'final_model_discount_{discount}')
-
-            model_path = os.path.join(config_manager.paths['rl_models_dir'], 
-                'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
-                config_manager.actions)
-
-            # load sorted_runs_health_score.csv
-            sorted_runs_path = os.path.join(model_path, "sorted_runs_health_score.csv")
-            if os.path.exists(sorted_runs_path):
-                sorted_runs = pd.read_csv(sorted_runs_path)
-                # get the last row, which has the best run
-                best_run = sorted_runs.iloc[0]
-                best_run_folder = best_run['run_dir']
-                model_path = os.path.join(model_path, best_run_folder)
+    elif reward_type == 'health_score':
+        # load sorted_runs_health_score.csv
+        sorted_runs_path = os.path.join(model_path, "sorted_runs_health_score.csv")
+        if os.path.exists(sorted_runs_path):
+            sorted_runs = pd.read_csv(sorted_runs_path)
+            # get the last row, which has the best run
+            best_run = sorted_runs.iloc[0]
+            best_run_folder = best_run['run_dir']
+            model_path = os.path.join(model_path, best_run_folder)
         else:
             #### not using ######
             raise ValueError("Health score scale is not 0.0, but this is not supported in the current implementation.")
-            model_path = os.path.join(config_manager.paths['rl_models_dir'], 
-                'basic_q', f'split_{config_manager.split_num}', config_manager.cohort, 
-                config_manager.actions, "raw_health_score_only", f'final_model_discount_{discount}')
-    
-    # model_folder = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))][0]
-    # model_path = os.path.join(model_path, model_folder)
-
-    # check if there is a folder inside model_path, if so, use that as the model_path
-    # while True:
-    #     if os.path.isdir(model_path):
-    #         subfolders = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f))]
-    #         if subfolders:
-    #             model_folder = subfolders[0]
-    #             model_path = os.path.join(model_path, model_folder)
-    #         else:
-    #             break
-    #     else:
-    #         break
     
     critic, hyperparams = load_critic(state_dim, action_dim,model_path=model_path)
 

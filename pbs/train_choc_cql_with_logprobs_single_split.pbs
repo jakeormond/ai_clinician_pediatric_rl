@@ -65,13 +65,17 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --hospital choc \
     --experiment_type reinforcement_learning \
     --model_type cql_with_logprobs \
+    --reward_type health_score \
     --mode single_split \
     --split_num 0 \
     --search_variant random_search \
     --n_search_iterations 3 \
-    --n_epochs 600 \
+    --n_epochs 500 \
     --action_mode continuous_only \
     --cohort sepsis \
+    --unit PICU \
+    --filter_old True \
+    --reward_cohort picu \
     --start_time $START_TIME 
     
 exit_code=$?

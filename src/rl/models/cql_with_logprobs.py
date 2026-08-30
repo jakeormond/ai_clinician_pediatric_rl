@@ -1263,7 +1263,7 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 	actor = Actor(
 		state_dim=state_dim, 
 		action_dim=action_dim, 
-		# hidden_dim=hyperparams['hidden_dim'], 
+		hidden_dim=hyperparams['actor_hidden_dim'], 
 		dropout=hyperparams['dropout']
 	).to(config_manager.training_config['device'])
 	
@@ -1279,13 +1279,11 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		eta_min=learning_rate_actor * .10
 	)
 	
-	hidden_dim = hyperparams['hidden_dim']
-	dropout = hyperparams['dropout']
 	critic = Critic(
 		state_dim, 
 		action_dim,
-		hidden_dim=hidden_dim,
-		dropout=dropout
+		hidden_dim=hyperparams['critic_hidden_dim'],
+		dropout=hyperparams['dropout']
 	).to(config_manager.training_config['device'])
 
 	critic_optimizer = torch.optim.AdamW(

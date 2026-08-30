@@ -175,6 +175,7 @@ def plot_dose_response_shapes(
 
     return fig, proportions, example_curves
 
+
 def fit_quadratic_shape(q_at_grid, grid, non_monotonic_mask):
     """
     For each timestep flagged non-monotonic, fits Q ~ a*dose^2 + b*dose + c
@@ -197,8 +198,8 @@ def fit_quadratic_shape(q_at_grid, grid, non_monotonic_mask):
         r2 = 1 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
  
         vertex = -b / (2 * a) if abs(a) > 1e-10 else np.nan
-        if not np.isnan(vertex) and not (0.0 <= vertex <= 1.0):
-            vertex = np.nan # not a genuine interior extremum — edge-dominated shape
+        if vertex is not np.nan and not (0.0 <= vertex <= 1.0):
+            vertex = np.nan  # not a genuine interior extremum — edge-dominated shape
  
         a_vals.append(a)
         vertex_vals.append(vertex)
@@ -210,6 +211,7 @@ def fit_quadratic_shape(q_at_grid, grid, non_monotonic_mask):
         "vertex_location": np.array(vertex_vals),
         "r2": np.array(r2_vals),
     }
+ 
  
  
 def occupancy_support_at_vertex(
@@ -245,9 +247,11 @@ def occupancy_support_at_vertex(
     return counts
  
  
+
 def analyze_non_monotonic_states(
         model, processor, clinician_actions, sweep_dim,
         test_health_score, training_actions, training_health_score,
+        mortality=None,
         rho_threshold=0.8, flat_range_pct=5.0,
         n_severity_bins=20, n_action_bins=10, min_count=10,
         label="",
@@ -313,10 +317,21 @@ def analyze_non_monotonic_states(
     axes[0].spines[["top", "right"]].set_visible(False)
  
     if interior_vertex_mask.sum() > 0:
-        axes[1].hist(quad["vertex_location"][interior_vertex_mask], bins=20, color="#2471a3", alpha=0.8)
+        vertex_vals = quad["vertex_location"][interior_vertex_mask]
+        curvature_vals = quad["curvature_a"][interior_vertex_mask]
+        convex_interior = curvature_vals > 0
+        concave_interior = curvature_vals < 0
+ 
+        axes[1].hist(vertex_vals[convex_interior], bins=20, range=(0, 1),
+                     color=CURVATURE_COLORS["convex (U-shaped)"], alpha=0.6,
+                     label=f"convex (U-shaped), n={convex_interior.sum()}")
+        axes[1].hist(vertex_vals[concave_interior], bins=20, range=(0, 1),
+                     color=CURVATURE_COLORS["concave (inverted-U)"], alpha=0.6,
+                     label=f"concave (inverted-U), n={concave_interior.sum()}")
         axes[1].set_xlabel("Fitted vertex location (normalized dose)")
         axes[1].set_ylabel("Count")
         axes[1].set_title(f"{label}: where interior extrema sit", fontsize=10, fontweight="bold")
+        axes[1].legend(frameon=False, fontsize=9)
         axes[1].spines[["top", "right"]].set_visible(False)
  
     fig.tight_layout()

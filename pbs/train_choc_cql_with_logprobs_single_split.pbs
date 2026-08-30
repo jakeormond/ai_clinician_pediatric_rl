@@ -65,7 +65,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --hospital choc \
     --experiment_type reinforcement_learning \
     --model_type cql_with_logprobs \
-    --reward_type terminal \
+    --reward_type health_score \
     --mode single_split \
     --split_num 0 \
     --search_variant random_search \
@@ -75,7 +75,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --cohort sepsis \
     --unit PICU \
     --filter_old True \
-    --reward_cohort picu \
+    --reward_cohort restricted \
     --start_time $START_TIME 
     
 exit_code=$?

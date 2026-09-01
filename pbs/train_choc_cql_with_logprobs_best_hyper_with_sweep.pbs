@@ -76,7 +76,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --cohort sepsis \
     --unit PICU \
     --filter_old True \
-    --reward_cohort restricted \
+    --reward_cohort picu \
     --start_time $START_TIME 
     
 exit_code=$?

@@ -2,7 +2,7 @@
 # pbs/train_choc_cql_with_logprobs_single_split_best_hyper_with_seeds.pbs
 
 # Job name
-#PBS -N mimiciv_dynamic_deephit
+#PBS -N cql_with_logprobs_best_hyper_with_seeds
 
 # Output and error files
 #PBS -o /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs

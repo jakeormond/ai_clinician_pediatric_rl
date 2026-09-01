@@ -142,28 +142,36 @@ class ConfigManager:
                 self.create_single_split_dir()
 
                 if self.search_variant == "best_hyperparameters" or self.search_variant == "single_hyperparameter_sweep":
-                    if self.reward_cohort == 'all':
+                    if self.model_type == "bc_with_logprobs":
                         self.best_results_path = os.path.join(
                             self.paths["rl_models_dir"], self.model_type,
                             f"split_{self.split_num}", self.cohort.lower(), self.actions,
-                            f"{self.unit.lower()}_patients_health_score_from_full_dataset",
-                            f"best_results_{self.reward_type}.json"
+                            f"{self.unit.lower()}_patients",
+                            "best_results.json"
                         )
                     else:
-                        if self.reward_cohort == 'restricted':
+                        if self.reward_cohort == 'all':
                             self.best_results_path = os.path.join(
                                 self.paths["rl_models_dir"], self.model_type,
                                 f"split_{self.split_num}", self.cohort.lower(), self.actions,
-                                f"{self.unit.lower()}_patients_health_score_from_restricted_dataset",
+                                f"{self.unit.lower()}_patients_health_score_from_full_dataset",
                                 f"best_results_{self.reward_type}.json"
                             )
-                        elif self.reward_cohort.lower() == 'picu':
-                            self.best_results_path = os.path.join(
-                                self.paths["rl_models_dir"], self.model_type,
-                                f"split_{self.split_num}", self.cohort.lower(), self.actions,
-                                f"{self.unit.lower()}_patients_health_score_from_picu_dataset",
-                                f"best_results_{self.reward_type}.json"
-                            )
+                        else:
+                            if self.reward_cohort == 'restricted':
+                                self.best_results_path = os.path.join(
+                                    self.paths["rl_models_dir"], self.model_type,
+                                    f"split_{self.split_num}", self.cohort.lower(), self.actions,
+                                    f"{self.unit.lower()}_patients_health_score_from_restricted_dataset",
+                                    f"best_results_{self.reward_type}.json"
+                                )
+                            elif self.reward_cohort.lower() == 'picu':
+                                self.best_results_path = os.path.join(
+                                    self.paths["rl_models_dir"], self.model_type,
+                                    f"split_{self.split_num}", self.cohort.lower(), self.actions,
+                                    f"{self.unit.lower()}_patients_health_score_from_picu_dataset",
+                                    f"best_results_{self.reward_type}.json"
+                                )
 
         elif self.mode == "analyse_features":
             self.set_experiment_name()

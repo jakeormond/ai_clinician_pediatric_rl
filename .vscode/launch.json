@@ -858,21 +858,44 @@
                 "--split_num", "0",
                 "--model_dir", "sepsis_models/intake_vis",
                 "--search_variant", "random_search",
-                "--n_search_iterations", "3",
+                "--n_search_iterations", "20",
                 "--cohort", "sepsis",
                 "--unit", "PICU",
                 "--filter_old", "True",
                 "--reward_cohort", "picu",
-                "--n_epochs", "2",
+                "--n_epochs", "500",
                 "--action_mode", "continuous_only",
-                "--testing"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env"
         },
 
-
+        {
+            "name": "choc_bc_with_logprobs_best_with_seeds",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.rl.reinforcement_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "reinforcement_learning",
+                "--model_type", "bc_with_logprobs", 
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--model_dir", "sepsis_models/intake_vis",
+                "--search_variant", "best_hyperparameters",
+                "--seeds", "0", "1", "2", "3", "4",
+                "--cohort", "sepsis",
+                "--unit", "PICU",
+                "--filter_old", "True",
+                "--reward_cohort", "picu",
+                "--n_epochs", "500",
+                "--action_mode", "continuous_only",
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
 
 
         {

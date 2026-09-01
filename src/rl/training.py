@@ -491,6 +491,21 @@ def single_split_training(config_manager):
         else:
             logger.warning("No valid validation losses were recorded during hyperparameter optimization.")
 
+    elif config_manager.search_variant == 'single_hyperparameter_sweep':
+        logger.info(" Single hyperparameter sweep mode enabled.")
+
+        for value in config_manager.values:
+            hyperparams = get_fixed_hyperparameters(config_manager)
+            hyperparams[config_manager.hyperparameter_to_sweep] = value
+            logger.info(f"Training with {config_manager.hyperparameter_to_sweep}={value}...")
+
+            # train model
+            train_with_hyperparameters(
+                train_processor, 
+                val_processor, 
+                config_manager, 
+                hyperparams,
+            )        
 
     elif config_manager.search_variant == 'best_hyperparameters' and \
         config_manager.seeds is not None and len(config_manager.seeds) > 0:

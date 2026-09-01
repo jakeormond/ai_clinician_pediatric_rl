@@ -81,6 +81,10 @@ def parse_arguments():
     # seeds is a list if not None, but argparse doesn't support list of ints, so we use nargs='+' and convert to list of ints
     parser.add_argument('--seeds', type=int, nargs='+', default=None,
                         help='Random seeds to use for training (default: None, which means use the default seed in the config file)')
+
+    # values is a list if not None
+    parser.add_argument('--values', type=float, nargs='+', default=None,
+        help='Values to sweep (default: None)')        
     
     # mode-specific arguments    
     parser.add_argument('--fold', type=int, default=None,
@@ -88,8 +92,14 @@ def parse_arguments():
 
     parser.add_argument('--search_variant', 
                         default='random_search', 
-                        choices=['random_search', 'grid_search', 'fixed_hyperparameters', 'best_hyperparameters'],
+                        choices=['random_search', 'grid_search', 
+                                 'fixed_hyperparameters', 'best_hyperparameters',
+                                 'single_hyperparameter_sweep'],
                         help='Variant of the search to use (default: random_search)')
+
+    parser.add_argument('--hyperparameter_to_sweep',
+                        default=None,
+                        help='The hyperparameter to sweep (default: None)')
 
     parser.add_argument('--n_search_iterations', type=int, default=2,
                         help='Number of search iterations to run (default: 2)')

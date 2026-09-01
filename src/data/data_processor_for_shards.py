@@ -377,14 +377,15 @@ class ShardProcessor:
             health_score_total = health_score + hourly_health_change
 
             # to address the issue that current hourly_health_change based models prefer zero vaso at all timesteps, we can run a positive control by adding vaso_dose based reward
-            if hyperparams['add_reward_to_vaso_dosing']:
-                vaso_dose_ind = self.dynamic_deephit_dataset['feature_names'].index('vis')
-                vaso_dose = self.dynamic_deephit_dataset['trajectories'][:, vaso_dose_ind]
-                # scale vaso_dose to [0, 1] by dividing by max value
-                vaso_dose = vaso_dose / np.max(vaso_dose)
-                # scale by hyperparameter
-                vaso_dose *= hyperparams['vaso_reward_coefficient']
-                health_score_total += vaso_dose
+            if hyperparams.get('add_reward_to_vaso_dosing', False):
+                if hyperparams['add_reward_to_vaso_dosing']:
+                    vaso_dose_ind = self.dynamic_deephit_dataset['feature_names'].index('vis')
+                    vaso_dose = self.dynamic_deephit_dataset['trajectories'][:, vaso_dose_ind]
+                    # scale vaso_dose to [0, 1] by dividing by max value
+                    vaso_dose = vaso_dose / np.max(vaso_dose)
+                    # scale by hyperparameter
+                    vaso_dose *= hyperparams['vaso_reward_coefficient']
+                    health_score_total += vaso_dose
 
 
             # # apply scaling to total

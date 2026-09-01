@@ -91,7 +91,10 @@ def create_buffer(
     # should correct output to include processor as it gets modified by the call to .create_rl_dataset
 
     use_compressed_latents = hyperparams['use_compressed_latents']
-    n_step = hyperparams['n_step']
+    if hyperparams.get('n_step') is None:
+        n_step = 1
+    else:
+        n_step = hyperparams['n_step']
     gamma = hyperparams['discount']
     actions_shift = hyperparams.get('actions_shift', 0.0)  # Default to 0.0 if not provided
 
@@ -462,8 +465,9 @@ def single_split_training(config_manager):
         logger.info(f"HPC wandb connectivity check: mode set to '{config_manager.training_config['wandb_mode']}'")
     
     logger.info("Starting single split training...")
-    logger.info("Discount set to: " + str(config_manager.training_config['discount']))
-
+    if config_manager.training_config.get('discount') is not None:
+        logger.info("Discount set to: " + str(config_manager.training_config['discount']))
+        
     # create processors
     # NEED TO ADD CONFIGURATION OPTION TO USE THE FEATURE DATA OR THE TRANSFORMER OUTPUT FROM DYNAMIC DEEPHIT MODEL
     # NEED TO ADD REWARD PROCESSING HERE

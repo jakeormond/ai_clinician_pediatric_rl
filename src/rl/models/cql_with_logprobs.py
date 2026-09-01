@@ -19,6 +19,20 @@ logger = logging.getLogger(__name__)
 """
 Gemini is suggesting training only the Actor for first 1000 steps, claims this can allow can prevent the policy
 from "overreacting" to initial, noisy Critic estimates. 
+
+Claude: Hurdle-model changes to Actor + BC.
+ 
+Core idea: instead of one squashed Gaussian per action trying to represent
+both "P(dose=0)" and "how much, given dose>0" at once, split each action
+into:
+  1. a Bernoulli GATE head:      P(dose > 0 | state)
+  2. a magnitude head (as before): Normal-in-logit-space, but its loss is
+     now only evaluated/backpropagated on timesteps where dose > 0.
+ 
+This stops the ~96%-zero vaso targets (and ~55%-zero fluid targets) from
+dragging the magnitude mean/std toward the zero cluster. It also fixes the
+std-floor bug: the old log_std bias (-2.25) sat outside the clamp range
+[-2, 1], so torch.clamp zeroed its gradient from step 0. Fixed below.
 """
 
 
@@ -31,7 +45,6 @@ class Actor(nn.Module):
 		hidden_dim: int = 64,
 		log_std_min: float = -2,
 		log_std_max: float = 1.,
-		action_dim: int = 2,
 		dropout: float = 0.1,
 		zero_threshold: float = 1e-4,
 		gate_temperature: float = 1.0,   # relaxation temperature for differentiable gate sampling
@@ -256,13 +269,15 @@ class Actor(nn.Module):
 		doctor variability), not re-derived from CQL's own training dynamics,
 		which is exactly the decoupling we want.
 		"""
+		bc_actor.eval()  # ensure BC actor is in eval mode to avoid Dropout interference
+
 		f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, _, _ = self._dists(state)
 		f_p = torch.sigmoid(f_gate_logit)
 		v_p = torch.sigmoid(v_gate_logit)
 
 		# pull BC's per-state std for this same batch of states
-		_, _, (_, _, _, _, bc_f_std, bc_v_std) = bc_actor(
-			state, deterministic=True, return_dist=True
+		_, _, _, (_, _, _, _, bc_f_std, bc_v_std) = bc_actor(
+			state, return_dist=True
 		)
 
 		f_dose, v_dose = action[:, 0:1], action[:, 1:2]

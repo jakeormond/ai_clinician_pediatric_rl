@@ -64,14 +64,16 @@ def load_data(config_manager, hyperparams):
     # process the reward
     health_score_median = train_processor.process_reward(config_manager, hyperparams)
     test_processor.process_reward(config_manager, hyperparams, health_score_median=health_score_median)
+    val_processor.process_reward(config_manager, hyperparams, health_score_median=health_score_median)
     
     # create rl dataset
-    train_processor, test_processor, _ = create_test_rl_dataset(train_processor, test_processor, config_manager, hyperparams)
+    train_processor, val_processor, test_processor, _ = create_test_rl_dataset(train_processor, val_processor, test_processor, config_manager, hyperparams)
 
-    return train_processor, test_processor
+    return train_processor, val_processor, test_processor
 
 
-def create_test_rl_dataset(train_processor, test_processor, config_manager, hyperparams):
+
+def create_test_rl_dataset(train_processor, val_processor, test_processor, config_manager, hyperparams):
     action_names=config_manager.data_config['actions']
     n_step = hyperparams['n_step']
     gamma = hyperparams['discount']
@@ -98,7 +100,17 @@ def create_test_rl_dataset(train_processor, test_processor, config_manager, hype
         actions_shift=actions_shift
     )
 
-    return train_processor, test_processor, scaler
+    _ = val_processor.create_rl_dataset(
+        states="model_outputs",
+        scaler=scaler,
+        action_names=action_names,
+        use_compressed_latents=use_compressed_latents,
+        n_step=n_step,
+        gamma=gamma,
+        actions_shift=actions_shift
+    )
+
+    return train_processor, val_processor, test_processor, scaler
 
 
 def load_sarsa_critic(model_dir=None, shifted_actions=True, reward_type='terminal', state_dim=128):
@@ -163,7 +175,7 @@ def load_sarsa_critic(model_dir=None, shifted_actions=True, reward_type='termina
     return sarsa_critic, config_manager, sarsa_hyperparams
 
 
-def load_actor_and_critic(model_dir=None, model_type='cql'):
+def load_actor_and_critic(model_dir=None, model_type='cql', state_dim=None):
     if model_dir is None:
         terminal_cql_dir = "/home/jake/Documents/AI_Clinician/models/rl_models/choc/cql_with_log_probs/split_0/sepsis/intake-vis/terminal_only/final_model_terminal_discount_0.998"
         inner_directories = [f for f in os.listdir(terminal_cql_dir) if os.path.isdir(os.path.join(terminal_cql_dir, f))]
@@ -201,8 +213,8 @@ def load_actor_and_critic(model_dir=None, model_type='cql'):
     final_model_path = os.path.join(model_dir, "final_model.pt")
     
     if model_type == "cql":
-        actor = CQLActor(512, hyperparams["hidden_dim"]).to(device)
-        critic = CQLCritic(512, 2, hidden_dim=hyperparams["hidden_dim"]).to(device)
+        actor = CQLActor(state_dim=state_dim, hidden_dim=hyperparams["actor_hidden_dim"]).to(device)
+        critic = CQLCritic(state_dim=state_dim, action_dim=2, hidden_dim=hyperparams["critic_hidden_dim"]).to(device)
     else:
         raise ValueError(f"Unsupported model_type: {model_type}. Supported types are 'cql' and 'iql'.")
 
@@ -885,6 +897,8 @@ def plot_action_sensitivity_by_condition(
     fig.savefig(save_path, dpi=300, bbox_inches="tight")
     print(f"Saved to {save_path}")
     return fig, results
+
+
 def normalize_sensitivity(q_range, reference_q_real):
     """
     Expresses per-timestep action-sensitivity (q_range) as a percentage

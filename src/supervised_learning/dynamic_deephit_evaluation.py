@@ -1,15 +1,130 @@
 import numpy as np
+import os
+import json
+import h5py
 import psutil
 import torch
 import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score, precision_recall_curve, \
     average_precision_score, roc_curve, precision_recall_curve
 
+from src.config_manager import load_configuration
+
 from typing import Dict
 
 
 import logging
 logger = logging.getLogger(__name__)
+
+
+
+
+def load_dynamic_deephit_dataset(model_dir=None, split='test', keys_to_load=None, keys_to_exclude=None):
+    dynamic_deephit_dataset = {}
+    
+    if keys_to_load is None:
+        keys_to_load = ['stay_ids', 'trajectories', 'index_ptr', 'feature_names', 'physiological_feature_ind', 
+                        'physiological_feature_type', 'feature_dim', 'response_zero_ind', 'carry_forward_ind',
+                        'event', 'time_to_event_raw', 'time_to_event']
+    if keys_to_exclude is not None:
+        keys_to_load = [key for key in keys_to_load if key not in keys_to_exclude]
+
+    file_path = os.path.join(model_dir, f"{split}_picu_dynamic_deephit_dataset.h5")
+    with h5py.File(file_path, 'r') as f:
+        dynamic_deephit_dataset['stay_ids'] = f['stay_ids'][:]
+        dynamic_deephit_dataset['trajectories'] = f['trajectories'][:].astype(np.float32)
+        dynamic_deephit_dataset['index_ptr'] = f['index_ptr'][:]
+                    
+        dynamic_deephit_dataset['feature_names'] = [f['feature_names'][i].decode('utf-8') for i in range(len(f['feature_names']))]
+        dynamic_deephit_dataset['physiological_feature_ind'] = f['physiological_feature_ind'][:].astype(np.int32).tolist()
+        dynamic_deephit_dataset['physiological_feature_type'] = [f['physiological_feature_type'][i].decode('utf-8') for i in range(len(f['physiological_feature_type']))]
+        dynamic_deephit_dataset['feature_dim'] = f['feature_dim'][()]
+        dynamic_deephit_dataset['response_zero_ind'] = f['response_zero_ind'][:].astype(np.int32).tolist()
+        dynamic_deephit_dataset['carry_forward_ind'] = f['carry_forward_ind'][:].astype(np.int32).tolist()
+        
+        dynamic_deephit_dataset['event'] = f['event'][:].astype(np.int32)
+        dynamic_deephit_dataset['time_to_event_raw'] = f['time_to_event_raw'][:].astype(np.int32)
+        dynamic_deephit_dataset['time_to_event'] = f['time_to_event'][:].astype(np.int32)
+
+    return dynamic_deephit_dataset
+
+
+
+
+def load_dynamic_deephit_predictions(model_dir=None, split='test', keys_to_load=None, keys_to_exclude=None):
+    predictions_path = os.path.join(model_dir, f"{split}_predictions.h5")
+    if not os.path.exists(predictions_path):
+        raise FileNotFoundError(f"{split}_predictions.npz not found in {model_dir}")
+
+    if keys_to_load is None:
+        keys_to_load = ['predictions', 'stay_ids', 'index_ptr', 'model_outputs', 'health_score', 'entropy', 'carry_forward_ind', 'response_zero_ind', "compressed_latents"]
+    if keys_to_exclude is not None:
+        keys_to_load = [key for key in keys_to_load if key not in keys_to_exclude]
+
+    dynamic_deephit_predictions = {}
+    with h5py.File(predictions_path, 'r') as f:
+        if 'event' in keys_to_load:
+            dynamic_deephit_predictions['event'] = f['event'][:].astype(np.int32)
+        if 'predictions' in keys_to_load:
+            dynamic_deephit_predictions['predictions'] = f['predictions'][:].astype(np.float32)
+        if 'targets' in keys_to_load:
+            dynamic_deephit_predictions['targets'] = f['targets'][:].astype(np.float32)
+        if 'stay_ids' in keys_to_load:
+            dynamic_deephit_predictions['stay_ids'] = f['stay_ids'][:]
+        if 'index_ptr' in keys_to_load:
+            dynamic_deephit_predictions['index_ptr'] = f['index_ptr'][:]
+        if 'model_outputs' in keys_to_load:
+            dynamic_deephit_predictions['model_outputs'] = f['model_outputs'][:].astype(np.float32)
+        if 'compressed_latents' in keys_to_load:
+            dynamic_deephit_predictions['compressed_latents'] = f['compressed_latents'][:].astype(np.float32)
+        if 'health_score' in keys_to_load:    
+            dynamic_deephit_predictions['health_score'] = f['health_score'][:].astype(np.float32)
+        if 'entropy' in keys_to_load:  
+            dynamic_deephit_predictions['entropy'] = f['entropy'][:].astype(np.float32)
+        if 'carry_forward_ind' in keys_to_load:   
+            dynamic_deephit_predictions['carry_forward_ind'] = f['carry_forward_ind'][:].astype(np.int32)
+        if 'response_zero_ind' in keys_to_load:    
+            dynamic_deephit_predictions['response_zero_ind'] = f['response_zero_ind'][:].astype(np.int32)
+    
+    return dynamic_deephit_predictions
+
+
+
+def expand_event_labels(dynamic_deephit_dataset):
+    event = dynamic_deephit_dataset['event']
+    event_labels = np.zeros(dynamic_deephit_dataset['trajectories'].shape[0], dtype=np.int32)
+    for i in range(len(dynamic_deephit_dataset['index_ptr']) - 1):
+        start_idx = dynamic_deephit_dataset['index_ptr'][i]
+        end_idx = dynamic_deephit_dataset['index_ptr'][i + 1]
+        event_label = event[i]
+        event_labels[start_idx:end_idx] = event_label
+
+    dynamic_deephit_dataset['event_labels'] = event_labels
+
+    return dynamic_deephit_dataset
+
+
+def load_dynamic_deephit_model(model_dir=None):
+    configuration_path = os.path.join(model_dir, "config_manager.pkl")
+    # check if config_manager.pkl exists
+    if not os.path.exists(configuration_path):
+        # then it's in the parent directory
+        configuration_path = os.path.join(os.path.dirname(model_dir), "config_manager.pkl")
+    
+    config_manager = load_configuration(configuration_path)
+
+    hyperparams_path = os.path.join(model_dir, "results.json")
+    if not os.path.exists(hyperparams_path):
+        raise FileNotFoundError(f"results.json not found in {model_dir}")
+    with open(hyperparams_path, "r") as f:
+        results = json.load(f)
+        hyperparams = results["hyperparameters"]   
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    ####### NOT FINISHED #############################
+
+
 
 
 def calculate_probabilities(
@@ -130,184 +245,7 @@ def calculate_c_index(logits, time_to_event, event_label, random_sample=True) ->
             "C_weighted_multi": C_weighted_multi.item()
         }
 
-# def calculate_c_index(
-#     logits: torch.Tensor,
-#     time_to_event: torch.Tensor,
-#     event_label: torch.Tensor,
-# ) -> Dict[str, float]:
-    
-#     # Compute CIF first
-#     B, K, T = logits.shape
-#     device = logits.device
 
-#     with torch.no_grad():
-#         cif = calculate_cif(logits)  # [B, K, T]
-#         C = torch.empty(K, T, device='cpu')  # store on CPU to limit GPU mem
-
-#         # Precompute on CPU to reduce memory pressure
-#         tt = time_to_event.to('cpu')
-#         ev = event_label.to('cpu')
-#         cif_cpu = cif.to('cpu')
-
-#         # Tunable chunk size to bound memory usage: memory ~ chunk_size * B
-#         # For B=100k and chunk=512 => ~50M bools (~50–100MB)
-#         chunk_size = 16384
-
-#         for k in range(K):
-#             for t in range(T):
-#                 # Cases: patients with event k and event time <= t
-#                 cases_mask = (ev == k) & (tt <= t)
-#                 num_cases = int(cases_mask.sum())
-#                 if num_cases == 0:
-#                     C[k, t] = torch.nan
-#                     continue
-
-#                 s_t = cif_cpu[:, k, t]  # [B]
-#                 idx_cases = torch.nonzero(cases_mask, as_tuple=False).squeeze(1)
-
-#                 conc_total = 0.0
-#                 comp_total = 0.0
-
-#                 for start in range(0, num_cases, chunk_size):
-#                     idx_i = idx_cases[start:start + chunk_size]            # [C]
-#                     tt_i = tt[idx_i].unsqueeze(1)                          # [C,1]
-#                     s_i = s_t[idx_i].unsqueeze(1)                          # [C,1]
-
-#                     # Valid comparators j for each i: (time_j >= time_i) OR (event_j != k)
-#                     # Shape [C,B], computed in chunks to control memory
-#                     valid_j = (tt.unsqueeze(0) >= tt_i) | (ev.unsqueeze(0) != k)  # [C,B]
-
-#                     # Concordant: s_i > s_j among valid_j
-#                     # Broadcast s_t -> [1,B], s_i -> [C,1]
-#                     conc = ((s_i > s_t.unsqueeze(0)) & valid_j).sum(dim=1).float()  # [C]
-#                     comp = valid_j.sum(dim=1).float()                                # [C]
-
-#                     conc_total += float(conc.sum())
-#                     comp_total += float(comp.sum())
-
-#                 if comp_total > 0:
-#                     C[k, t] = conc_total / comp_total
-#                 else:
-#                     C[k, t] = torch.nan
-
-#         # integrated cause-specific C-index
-#         C_integrated_k = torch.nanmean(C, dim=1)  # [K]
-
-#         # event-weighted
-#         true_time_onehot = torch.zeros(B, T)
-#         true_time_onehot.scatter_(1, tt.long().view(B, 1), 1.0)  # [B,T]
-
-#         true_cause_onehot = torch.zeros(B, K)
-#         true_cause_onehot.scatter_(1, ev.view(B, 1).long(), 1.0)  # [B, K]
-
-#         event_occ = true_cause_onehot.unsqueeze(2) * true_time_onehot.unsqueeze(1)  # [B,K,T]
-#         E_k_t = event_occ.sum(dim=0)  # [K, T]
-#         denom_k = E_k_t.sum(dim=1)    # [K]
-#         # Guard against zero division
-#         denom_k = torch.where(denom_k == 0, torch.tensor(1.0), denom_k)
-#         C_weighted_k = (torch.nan_to_num(C) * E_k_t).sum(dim=1) / denom_k  # [K]
-
-#         denom_all = denom_k.sum()
-#         C_weighted_multi = (C_weighted_k * denom_k).sum() / denom_all
-
-#         c_index_results = {
-#             "C_k_t": C,                     # [K, T] on CPU
-#             "C_integrated_k": C_integrated_k,       # [K]
-#             "C_weighted_k": C_weighted_k,   # [K]
-#             "C_weighted_multi": C_weighted_multi.item()  # scalar
-#         }
-#         return c_index_results
-      
-    # # Convert logits to probabilities using softmax over time dimension
-    # # Shape: [batch_size, num_risks, num_time_bins]
-    # # compute joint pmf
-    # B, K, T = logits.shape
-    # device = logits.device    
-    
-    # cif = calculate_cif(logits)    # [B, K, T]       
-    
-    # # ---------------------- C-index Calculation ----------------------
-    # # For C-index, we need a risk score (higher = higher risk)
-    # # Use predicted probability of event by the actual event time
-    # # Sum over all risks and time bins up to observed time
-
-    # C = torch.zeros(K, T)
-
-    # for k in range(K):
-    #     is_k = (event_label == k)             # [B]
-        
-    #     # Event times for cause k patients
-    #     tt_k = time_to_event[is_k]              # [num_k]
-
-    #     if tt_k.numel() == 0:
-    #         continue  # no patients with this cause
-
-    #     # CIF for cause k, shape [B, T]
-    #     cif_k = cif[:, k, :]
-        
-    #     for t in range(T):
-    #         # Patients who had event k at or before t
-    #         # These are the "cases" in C-index
-    #         cases = is_k & (time_to_event <= t)
-    #         if cases.sum() == 0:
-    #             continue
-
-    #         # For each case i, we compare them to all others j
-    #         # whose event time is >= event time of i OR had competing event
-    #         #
-    #         # Create pairwise comparison matrix:
-    #         #
-    #         # For vectorization, expand risk scores
-    #         R_i = cif_k[cases, t].view(-1, 1)    # shape [Nc, 1]
-    #         R_j = cif_k[:, t].view(1, -1)        # shape [1, B]
-            
-
-    #         # Valid comparators j:
-    #         # j must not have event k before time of i
-    #         tt_cases = time_to_event[cases].view(-1, 1)     # [Nc,1]
-    #         valid_j = (time_to_event >= tt_cases) | (event_label != k)  # [Nc,B]
-            
-    #         # Concordance condition: R_i > R_j
-    #         concordant = (R_i > R_j) & valid_j
-
-    #         # Comparable pairs count
-    #         comparable = valid_j.sum().float()
-
-    #         if comparable > 0:
-    #             C[k, t] = concordant.sum().float() / comparable
-    #         else:
-    #             C[k, t] = torch.nan
-    
-    # # integrated C-index
-    # C_integrated_k = C.mean(dim=1)   
-
-    # # integrated multiclass C-index
-
-    # # event weighted
-    # true_time_onehot = torch.zeros(B, T, device=device)
-    # true_time_onehot.scatter_(1, (time_to_event).long().view(B,1), 1.0)  # [B,T]
-    
-    # true_cause_onehot = torch.zeros(B, K, device=device)
-    # true_cause_onehot.scatter_(1, event_label.view(B,1).long(), 1.0)  # [B, K]
-    
-    # # ew cause specific
-    # event_occ = true_cause_onehot.unsqueeze(2) * true_time_onehot.unsqueeze(1)  # [B, K, T]
-    # E_k_t = event_occ.sum(dim=0)  # [K, T] number of events of cause k at time t
-    # denom_k = E_k_t.sum(dim=1)  # [K]
-    # C_weighted_k = (C * E_k_t).sum(dim=1) / denom_k   # [K]
-
-    # # ew multiclass
-    # denom_all = denom_k.sum()
-    # C_weighted_multi = (C_weighted_k * denom_k).sum() / denom_all
-
-    # c_index_results = {
-    #     "C_k_t": C,                     # [K, T]
-    #     "C_integrated_k": C_integrated_k,       # [K]
-    #     "C_weighted_k": C_weighted_k,   # [K]
-    #     "C_weighted_multi": C_weighted_multi  # scalar
-    # }
-
-    # return c_index_results
 
 
 def calculate_brier_score(

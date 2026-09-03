@@ -338,11 +338,22 @@ def analyze_non_monotonic_states(
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
         print(f"Saved to {save_path}")
+
+
+    summary = {
+        "pct_non_monotonic": n_non_mono / len(shapes['label']) * 100,
+        "pct_convex": convex_mask.mean() * 100 if len(convex_mask) > 0 else np.nan,
+        "pct_concave": concave_mask.mean() * 100 if len(concave_mask) > 0 else np.nan,
+        "pct_interior_vertex": interior_vertex_mask.mean() * 100 if len(interior_vertex_mask) > 0 else np.nan,
+        "mean_r2": quad["r2"].mean() if len(quad["r2"]) > 0 else np.nan,
+        "pct_well_supported": pct_well_supported * 100 if interior_vertex_mask.sum() > 0 else np.nan,
+    }
  
     return {
         "shapes": shapes,
         "quad": quad,
         "joint_counts": joint_counts,
         "severity_edges": severity_edges,
+        "summary": summary,
     }
 

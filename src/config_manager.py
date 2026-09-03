@@ -3,6 +3,7 @@ import yaml
 import time
 import shutil
 from pathlib import Path
+import pickle
 from .setup_environment import load_paths
 
 class ConfigManager:
@@ -621,3 +622,23 @@ class ConfigManager:
         if self._wandb_config is None:
             raise ValueError("W&B config not set. Call _build_wandb_config() first.")
         return self._wandb_config
+
+
+
+def load_configuration(config_manager_path):
+    if not os.path.exists(config_manager_path):
+        print(f"Config manager not found in: {config_manager_path}, skipping evaluation.")
+        raise FileNotFoundError(f"Config manager not found in: {config_manager_path}")
+    else:
+        print(f"Loading config manager from: {config_manager_path}")
+        with open(config_manager_path, "rb") as cfg_file:
+            config_manager = pickle.load(cfg_file)
+    
+    # set paths 
+    config_manager.paths, config_manager.environment = load_paths(config_manager.hospital)
+    if config_manager.environment == "local":
+        config_manager.config_dir = Path(config_manager.paths['config_dir'])
+    config_manager.set_data()
+    config_manager.reset_cohort(config_manager.cohort)
+
+    return config_manager

@@ -328,8 +328,7 @@ def calculate_prediction_entropy(risk_logits):
 
 def calculate_comprehensive_health_score(risk_logits):
     """
-    risk_logits: List [Death_Logits, Discharge_Logits] 
-                 Each is [Batch, Seq, 8]
+    risk_logits...
     """
     # 1. Combine into a single distribution [Batch, Seq, 16]
     # Dim 2 is [Death_0...Death_7, Disc_0...Disc_7]

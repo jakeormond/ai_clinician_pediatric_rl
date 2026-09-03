@@ -27,6 +27,8 @@ from sklearn.metrics import roc_auc_score
 
 from ..setup_environment import load_paths
 
+from src.config_manager import load_configuration
+
 
 SURVIVE_COLOR = "#2471a3"
 DIE_COLOR = "#c0392b"
@@ -38,23 +40,46 @@ SAVE_DIR = "/home/jake/Documents/AI_Clinician/models/analysis/terminal_reward_ze
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 
-def load_configuration(config_manager_path):
-    if not os.path.exists(config_manager_path):
-        print(f"Config manager not found in: {config_manager_path}, skipping evaluation.")
-        raise FileNotFoundError(f"Config manager not found in: {config_manager_path}")
-    else:
-        print(f"Loading config manager from: {config_manager_path}")
-        with open(config_manager_path, "rb") as cfg_file:
-            config_manager = pickle.load(cfg_file)
+# def load_configuration(config_manager_path):
+#     if not os.path.exists(config_manager_path):
+#         print(f"Config manager not found in: {config_manager_path}, skipping evaluation.")
+#         raise FileNotFoundError(f"Config manager not found in: {config_manager_path}")
+#     else:
+#         print(f"Loading config manager from: {config_manager_path}")
+#         with open(config_manager_path, "rb") as cfg_file:
+#             config_manager = pickle.load(cfg_file)
     
-    # set paths 
-    config_manager.paths, config_manager.environment = load_paths(config_manager.hospital)
-    if config_manager.environment == "local":
-        config_manager.config_dir = Path(config_manager.paths['config_dir'])
-    config_manager.set_data()
-    config_manager.reset_cohort(config_manager.cohort)
+#     # set paths 
+#     config_manager.paths, config_manager.environment = load_paths(config_manager.hospital)
+#     if config_manager.environment == "local":
+#         config_manager.config_dir = Path(config_manager.paths['config_dir'])
+#     config_manager.set_data()
+#     config_manager.reset_cohort(config_manager.cohort)
 
-    return config_manager
+#     return config_manager
+
+
+
+def get_model_dirs(base_dir):
+    model_dirs = []
+    # find directories in base_dir that begin with choc
+    choc_dirs = [d for d in os.listdir(base_dir) if d.startswith("choc")]
+
+    if choc_dirs == []:
+        print(f"No choc directories found in {base_dir}")
+        # look for directories that begin with unknown or local
+        sub_dirs = [d for d in os.listdir(base_dir) if d.startswith("unknown") or d.startswith("local")]
+        for sub_dir in sub_dirs:
+            model_dirs.append(os.path.join(base_dir, sub_dir))
+            print(f"Found model directory: {os.path.join(base_dir, sub_dir)}")
+    else:
+        for choc_dir in choc_dirs:
+            # find directories that begin with unknown or local
+            sub_dirs = [d for d in os.listdir(os.path.join(base_dir, choc_dir)) if d.startswith("unknown") or d.startswith("local")]
+            for sub_dir in sub_dirs:
+                model_dirs.append(os.path.join(base_dir, choc_dir, sub_dir))
+                print(f"Found model directory: {os.path.join(base_dir, choc_dir, sub_dir)}")
+    return model_dirs    
 
 
 def load_data(config_manager, hyperparams):

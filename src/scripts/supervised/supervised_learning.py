@@ -261,11 +261,11 @@ def main():
                 experiment_dir = config_manager.experiment_dir
 
 
-                predictions = get_all_predictions(
-                    config_manager, 
-                    model_type, 
-                    experiment_dir
-                ) # generates the predictions, need to modify to get entropy and health score
+                # predictions = get_all_predictions(
+                #     config_manager, 
+                #     model_type, 
+                #     experiment_dir
+                # ) # generates the predictions, need to modify to get entropy and health score
 
                 # dynamic_deephit_datasets.append(dynamic_deephit_dataset)
 
@@ -276,7 +276,7 @@ def main():
                 # ) # generates the bootstrap evaluation results for the predictions
 
                 
-                plot_health_score_statistics(config_manager)
+                # plot_health_score_statistics(config_manager)
                 plot_random_predictions(config_manager)
         
             # after generating predictions for all specified splits, we can aggregate the results

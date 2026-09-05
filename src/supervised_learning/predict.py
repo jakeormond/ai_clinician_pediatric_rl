@@ -1735,10 +1735,10 @@ def plot_random_predictions(
         print(f"Prediction plot for patient {stay_id} saved to {plot_dir}")
 
 
-
 def plot_individual_patient_predictions(        
         patient_data,
-        plot_dir = None
+        plot_dir = None,
+        plot_entropy=False,
     ):
     stay_id = patient_data['stay_id']
     event = patient_data['event']
@@ -1762,10 +1762,8 @@ def plot_individual_patient_predictions(
         for i in range(len(bin_edges) - 1):
             y_labels.append(f"{event} [{bin_edges[i]}-{bin_edges[i+1]}h]")
 
-    # 3. Create 2 subplots: predictions heatmap (top) + dual-axis entropy/health_score (bottom)
-    # fig, axes = plt.subplots(2, 1, figsize=(14, 10), gridspec_kw={'height_ratios': [2, 1]})
-    
-    fig = plt.figure(figsize=(14, 10))
+    # 3. Create 2 subplots: predictions heatmap (top) + health score / entropy (bottom)
+    fig = plt.figure(figsize=(10, 6))
     gs = fig.add_gridspec(
         2, 2,
         width_ratios=[40, 1],   # main plots, colorbar
@@ -1775,21 +1773,10 @@ def plot_individual_patient_predictions(
     )
 
     # ===== SUBPLOT 1: Predictions Heatmap =====
-    # ax_heatmap = axes[0]
     ax_heatmap = fig.add_subplot(gs[0, 0])
     ax_entropy = fig.add_subplot(gs[1, 0])   # same-width column as heatmap
     cax = fig.add_subplot(gs[0, 1])          # separate colorbar axis
-    
-    # sns.heatmap(
-    #     heatmap_data, 
-    #     xticklabels=False,
-    #     yticklabels=y_labels,
-    #     cmap="YlGnBu", 
-    #     norm=LogNorm(vmin=1e-4, vmax=heatmap_data.max()),
-    #     cbar_kws={'label': 'Joint Probability $P(T, E)$'},
-    #     ax=ax_heatmap
-    # )
-    
+
     sns.heatmap(
         heatmap_data,
         xticklabels=False,
@@ -1801,82 +1788,225 @@ def plot_individual_patient_predictions(
         cbar_kws={"label": "Joint Probability $P(T, E)$"},
         ax=ax_heatmap
     )
-    
-    
+
     ax_heatmap.axhline(y=8, color='red', linewidth=2, linestyle='--')
     ax_heatmap.set_title(f"Model Predictions - {plot_title}", fontsize=12, fontweight='bold')
     ax_heatmap.set_ylabel("Event & Forecast Horizon", fontsize=11)
-    
-    # ===== SUBPLOT 2: Dual-Axis Entropy & Health Score =====
-   #  ax_entropy = axes[1]
-    
-    # Convert tensors to numpy if needed
-    entropy_np = entropy.cpu().numpy() if isinstance(entropy, torch.Tensor) else entropy
+
+    # ===== SUBPLOT 2: Health Score (+ optional Entropy on secondary axis) =====
     health_score_np = health_score.cpu().numpy() if isinstance(health_score, torch.Tensor) else health_score
-    
-    # Plot entropy on left y-axis
-    color_entropy = 'steelblue'
+
+    x = np.arange(len(health_score_np)) + 0.5
+
     ax_entropy.set_xlabel('ICU Stay Duration (Hours)', fontsize=11, fontweight='bold')
-    ax_entropy.set_ylabel('Entropy', color=color_entropy, fontsize=11, fontweight='bold')
-    
-    # x = np.arange(len(entropy_np))
-    x = np.arange(len(entropy_np)) + 0.5
-    
-    # line1 = ax_entropy.plot(entropy_np, color=color_entropy, linewidth=2.5, label='Entropy', zorder=3)
-    line1 = ax_entropy.plot(x, entropy_np, color=color_entropy, linewidth=2.5, label='Entropy', zorder=3)
-    
-    # ax_entropy.fill_between(range(len(entropy_np)), entropy_np, alpha=0.2, color=color_entropy)
-    ax_entropy.fill_between(x, entropy_np, entropy_np, alpha=0.2, color=color_entropy)
-        
-    ax_entropy.tick_params(axis='y', labelcolor=color_entropy)
-    ax_entropy.grid(True, alpha=0.3, zorder=0)
-    
-    # Create second y-axis for health_score
-    ax_health = ax_entropy.twinx()
-    color_health = 'coral'
-    ax_health.set_ylabel('Health Score (0-100)', color=color_health, fontsize=11, fontweight='bold')
-    
-    # line2 = ax_health.plot(health_score_np, color=color_health, linewidth=2.5, label='Health Score', zorder=3)
-    line2 = ax_health.plot(x, health_score_np, color=color_health, linewidth=2.5, label='Health Score', zorder=3)
-    
-    # ax_health.fill_between(range(len(health_score_np)), health_score_np, alpha=0.2, color=color_health)
-    ax_health.fill_between(x, health_score_np, health_score_np, alpha=0.2, color=color_health)
-        
-    ax_health.tick_params(axis='y', labelcolor=color_health)
-    ax_health.set_ylim([0, 100])
-    
-    # Add legend combining both axes
-    lines = line1 + line2
-    labels = [l.get_label() for l in lines]
-    ax_entropy.legend(lines, labels, loc='upper left', fontsize=10)
-    
+
+    ax_health = None
+    if plot_entropy:
+        entropy_np = entropy.cpu().numpy() if isinstance(entropy, torch.Tensor) else entropy
+
+        # Plot entropy on left y-axis
+        color_entropy = 'steelblue'
+        ax_entropy.set_ylabel('Entropy', color=color_entropy, fontsize=11, fontweight='bold')
+
+        line1 = ax_entropy.plot(x, entropy_np, color=color_entropy, linewidth=2.5, label='Entropy', zorder=3)
+        ax_entropy.fill_between(x, entropy_np, entropy_np, alpha=0.2, color=color_entropy)
+
+        ax_entropy.tick_params(axis='y', labelcolor=color_entropy)
+        ax_entropy.grid(True, alpha=0.3, zorder=0)
+
+        # Create second y-axis for health_score
+        ax_health = ax_entropy.twinx()
+        color_health = 'coral'
+        ax_health.set_ylabel('Health Score (0-100)', color=color_health, fontsize=11, fontweight='bold')
+
+        line2 = ax_health.plot(x, health_score_np, color=color_health, linewidth=2.5, label='Health Score', zorder=3)
+        ax_health.fill_between(x, health_score_np, health_score_np, alpha=0.2, color=color_health)
+
+        ax_health.tick_params(axis='y', labelcolor=color_health)
+        ax_health.set_ylim([0, 100])
+
+        # Add legend combining both axes
+        lines = line1 + line2
+        labels = [l.get_label() for l in lines]
+        ax_entropy.legend(lines, labels, loc='upper left', fontsize=10)
+    else:
+        # Single-axis health score only
+        color_health = 'coral'
+        ax_entropy.set_ylabel('Health Score (0-100)', color=color_health, fontsize=11, fontweight='bold')
+
+        line2 = ax_entropy.plot(x, health_score_np, color=color_health, linewidth=2.5, label='Health Score', zorder=3)
+        ax_entropy.fill_between(x, health_score_np, health_score_np, alpha=0.2, color=color_health)
+
+        ax_entropy.tick_params(axis='y', labelcolor=color_health)
+        ax_entropy.set_ylim([0, 100])
+        ax_entropy.grid(True, alpha=0.3, zorder=0)
+        ax_entropy.legend(loc='upper left', fontsize=10)
+
     # Configure X-axis for both
     num_timesteps = heatmap_data.shape[1]
     ax_entropy.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
-    
+
     @ticker.FuncFormatter
     def major_formatter(x, pos):
         return f"{int(x)}"
-    
+
     ax_entropy.xaxis.set_major_formatter(major_formatter)
     ax_entropy.tick_params(axis='x', which='major', bottom=True, labelbottom=True, rotation=0)
-    
-    # Align x-axis between both subplots
-    # ax_heatmap.set_xlim(ax_entropy.get_xlim())
 
     # Remove default 5% x padding on line plots
     ax_entropy.margins(x=0)
-    ax_health.margins(x=0)
+    if ax_health is not None:
+        ax_health.margins(x=0)
 
-    # ax_entropy.set_xlim(x[0], x[-1])
-    ax_entropy.set_xlim(0, len(entropy_np))
-    
-    # Match bottom plot limits to heatmap limits (tight, aligned)
-    # ax_entropy.set_xlim(ax_heatmap.get_xlim())          
-    
+    ax_entropy.set_xlim(0, len(health_score_np))
+
     plt.tight_layout()
     plt.savefig(os.path.join(plot_dir, f"{stay_id}_{event_type}_prediction_heatmap.png"), dpi=150, bbox_inches='tight')
     plt.close()
+
+
+# def plot_individual_patient_predictions(        
+#         patient_data,
+#         plot_dir = None,
+#         plot_entropy=False,
+#     ):
+#     stay_id = patient_data['stay_id']
+#     event = patient_data['event']
+#     bin_edges = patient_data['time_bins']
+#     probs = patient_data['probabilities']
+#     entropy = patient_data['entropy']
+#     health_score = patient_data['health_score']
+
+#     event_types = ['Survival', 'Death']
+#     event_type = event_types[event]
+
+#     plot_title = f"Patient ID: {stay_id} | Event: {event_type}"
+
+#     # 1. Reshape for heatmap: (16 bins) x (timesteps)
+#     timesteps = probs.shape[0]
+#     heatmap_data = probs.permute(1, 2, 0).reshape(16, -1).detach().cpu().numpy()
+
+#     # 2. Create Labels for the Y-axis
+#     y_labels = []
+#     for event in event_types:
+#         for i in range(len(bin_edges) - 1):
+#             y_labels.append(f"{event} [{bin_edges[i]}-{bin_edges[i+1]}h]")
+
+#     # 3. Create 2 subplots: predictions heatmap (top) + dual-axis entropy/health_score (bottom)
+#     # fig, axes = plt.subplots(2, 1, figsize=(14, 10), gridspec_kw={'height_ratios': [2, 1]})
+    
+#     fig = plt.figure(figsize=(10, 6))
+#     gs = fig.add_gridspec(
+#         2, 2,
+#         width_ratios=[40, 1],   # main plots, colorbar
+#         height_ratios=[2, 1],
+#         hspace=0.25,
+#         wspace=0.05
+#     )
+
+#     # ===== SUBPLOT 1: Predictions Heatmap =====
+#     # ax_heatmap = axes[0]
+#     ax_heatmap = fig.add_subplot(gs[0, 0])
+#     ax_entropy = fig.add_subplot(gs[1, 0])   # same-width column as heatmap
+#     cax = fig.add_subplot(gs[0, 1])          # separate colorbar axis
+    
+#     # sns.heatmap(
+#     #     heatmap_data, 
+#     #     xticklabels=False,
+#     #     yticklabels=y_labels,
+#     #     cmap="YlGnBu", 
+#     #     norm=LogNorm(vmin=1e-4, vmax=heatmap_data.max()),
+#     #     cbar_kws={'label': 'Joint Probability $P(T, E)$'},
+#     #     ax=ax_heatmap
+#     # )
+    
+#     sns.heatmap(
+#         heatmap_data,
+#         xticklabels=False,
+#         yticklabels=y_labels,
+#         cmap="YlGnBu",
+#         norm=LogNorm(vmin=1e-4, vmax=heatmap_data.max()),
+#         cbar=True,
+#         cbar_ax=cax,
+#         cbar_kws={"label": "Joint Probability $P(T, E)$"},
+#         ax=ax_heatmap
+#     )
+    
+    
+#     ax_heatmap.axhline(y=8, color='red', linewidth=2, linestyle='--')
+#     ax_heatmap.set_title(f"Model Predictions - {plot_title}", fontsize=12, fontweight='bold')
+#     ax_heatmap.set_ylabel("Event & Forecast Horizon", fontsize=11)
+    
+#     # ===== SUBPLOT 2: Dual-Axis Entropy & Health Score =====
+#    #  ax_entropy = axes[1]
+    
+#     # Convert tensors to numpy if needed
+#     entropy_np = entropy.cpu().numpy() if isinstance(entropy, torch.Tensor) else entropy
+#     health_score_np = health_score.cpu().numpy() if isinstance(health_score, torch.Tensor) else health_score
+    
+#     # Plot entropy on left y-axis
+#     color_entropy = 'steelblue'
+#     ax_entropy.set_xlabel('ICU Stay Duration (Hours)', fontsize=11, fontweight='bold')
+#     ax_entropy.set_ylabel('Entropy', color=color_entropy, fontsize=11, fontweight='bold')
+    
+#     # x = np.arange(len(entropy_np))
+#     x = np.arange(len(entropy_np)) + 0.5
+    
+#     # line1 = ax_entropy.plot(entropy_np, color=color_entropy, linewidth=2.5, label='Entropy', zorder=3)
+#     line1 = ax_entropy.plot(x, entropy_np, color=color_entropy, linewidth=2.5, label='Entropy', zorder=3)
+    
+#     # ax_entropy.fill_between(range(len(entropy_np)), entropy_np, alpha=0.2, color=color_entropy)
+#     ax_entropy.fill_between(x, entropy_np, entropy_np, alpha=0.2, color=color_entropy)
+        
+#     ax_entropy.tick_params(axis='y', labelcolor=color_entropy)
+#     ax_entropy.grid(True, alpha=0.3, zorder=0)
+    
+#     # Create second y-axis for health_score
+#     ax_health = ax_entropy.twinx()
+#     color_health = 'coral'
+#     ax_health.set_ylabel('Health Score (0-100)', color=color_health, fontsize=11, fontweight='bold')
+    
+#     # line2 = ax_health.plot(health_score_np, color=color_health, linewidth=2.5, label='Health Score', zorder=3)
+#     line2 = ax_health.plot(x, health_score_np, color=color_health, linewidth=2.5, label='Health Score', zorder=3)
+    
+#     # ax_health.fill_between(range(len(health_score_np)), health_score_np, alpha=0.2, color=color_health)
+#     ax_health.fill_between(x, health_score_np, health_score_np, alpha=0.2, color=color_health)
+        
+#     ax_health.tick_params(axis='y', labelcolor=color_health)
+#     ax_health.set_ylim([0, 100])
+    
+#     # Add legend combining both axes
+#     lines = line1 + line2
+#     labels = [l.get_label() for l in lines]
+#     ax_entropy.legend(lines, labels, loc='upper left', fontsize=10)
+    
+#     # Configure X-axis for both
+#     num_timesteps = heatmap_data.shape[1]
+#     ax_entropy.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    
+#     @ticker.FuncFormatter
+#     def major_formatter(x, pos):
+#         return f"{int(x)}"
+    
+#     ax_entropy.xaxis.set_major_formatter(major_formatter)
+#     ax_entropy.tick_params(axis='x', which='major', bottom=True, labelbottom=True, rotation=0)
+    
+#     # Align x-axis between both subplots
+#     # ax_heatmap.set_xlim(ax_entropy.get_xlim())
+
+#     # Remove default 5% x padding on line plots
+#     ax_entropy.margins(x=0)
+#     ax_health.margins(x=0)
+
+#     # ax_entropy.set_xlim(x[0], x[-1])
+#     ax_entropy.set_xlim(0, len(entropy_np))
+    
+#     # Match bottom plot limits to heatmap limits (tight, aligned)
+#     # ax_entropy.set_xlim(ax_heatmap.get_xlim())          
+    
+#     plt.tight_layout()
+#     plt.savefig(os.path.join(plot_dir, f"{stay_id}_{event_type}_prediction_heatmap.png"), dpi=150, bbox_inches='tight')
+#     plt.close()
 
 
 def plot_individual_patient_predictions_old(        

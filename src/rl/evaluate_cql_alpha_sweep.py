@@ -22,7 +22,7 @@ from .models.iql import ValueNetwork as IQLValue
 from .training import create_processor_from_shards
 from .replay_buffer import RLDataset
 
-from .models.evaluate_terminal_reward_models import generate_model_outputs
+from .evaluate_terminal_reward_models import generate_model_outputs
 
 
 from torch.utils.data import DataLoader, TensorDataset

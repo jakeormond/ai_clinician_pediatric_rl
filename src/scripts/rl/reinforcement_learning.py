@@ -94,7 +94,7 @@ def parse_arguments():
                         default='random_search', 
                         choices=['random_search', 'grid_search', 
                                  'fixed_hyperparameters', 'best_hyperparameters',
-                                 'single_hyperparameter_sweep'],
+                                 'best_hyperparameters_fixed_cql_alpha', 'single_hyperparameter_sweep'],
                         help='Variant of the search to use (default: random_search)')
 
     parser.add_argument('--hyperparameter_to_sweep',
@@ -112,7 +112,10 @@ def parse_arguments():
     
     parser.add_argument('--n_epochs', type=int, default = 10,                  
                     help='Number of epochs to train for - should be 1000, but for testing we set to 10')
-    
+
+    parser.add_argument('--cql_alpha', type=float, default = None,
+                        help='CQL alpha parameter (default: None)')
+
     parser.add_argument('--cohort', type=str, default=None,
         choices=['all', 'sepsis_strict', 'sepsis_broad', 'sepsis',
             'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad'],

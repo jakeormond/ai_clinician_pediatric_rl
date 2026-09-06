@@ -142,7 +142,9 @@ class ConfigManager:
             else:
                 self.create_single_split_dir()
 
-                if self.search_variant == "best_hyperparameters" or self.search_variant == "single_hyperparameter_sweep":
+                if self.search_variant == "best_hyperparameters" or \
+                    self.search_variant == "best_hyperparameters_fixed_cql_alpha" or \
+                    self.search_variant == "single_hyperparameter_sweep":
                     if self.model_type == "bc_with_logprobs":
                         self.best_results_path = os.path.join(
                             self.paths["rl_models_dir"], self.model_type,
@@ -483,7 +485,9 @@ class ConfigManager:
         return n_outer_folds, n_inner_folds, target_fold     
 
     def set_training_config(self):
-        if self.search_variant == 'best_hyperparameters' or self.search_variant == 'single_hyperparameter_sweep':
+        if self.search_variant == 'best_hyperparameters' or \
+            self.search_variant == 'single_hyperparameter_sweep' or \
+            self.search_variant == 'best_hyperparameters_fixed_cql_alpha':
             # load best hyperparameters from f"best_results_{self.reward_type}.json" in the model_dir
             if not os.path.exists(self.best_results_path):
                 raise FileNotFoundError(f"Best results file not found: {self.best_results_path}")

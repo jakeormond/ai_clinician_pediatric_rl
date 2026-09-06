@@ -799,6 +799,35 @@
         },
 
         {
+            "name": "choc_cql_with_logprobs_best_hyperparameters_fixed_cql_alpha",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.rl.reinforcement_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "reinforcement_learning",
+                "--model_type", "cql_with_logprobs", 
+                "--reward_type", "health_score",
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--model_dir", "sepsis_models/intake_vis",
+                "--search_variant", "best_hyperparameters_fixed_cql_alpha",
+                "--cql_alpha", "0.006",
+                "--seeds", "0", "1", "2", "3", "4",
+                "--cohort", "sepsis",
+                "--unit", "PICU",
+                "--filter_old", "True",
+                "--reward_cohort", "picu",
+                "--n_epochs", "2",
+                "--action_mode", "continuous_only",  
+                "--testing"          
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
             "name": "choc_conservative_q_learning_random_search", 
             "type": "debugpy",
             "request": "launch",

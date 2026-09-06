@@ -9,6 +9,8 @@ import h5py as h5
 import seaborn as sns
 import time
 
+from kneed import KneeLocator
+
 import torch
 import numpy as np
 from ..config_manager import ConfigManager   
@@ -22,7 +24,9 @@ from .models.iql import ValueNetwork as IQLValue
 from .training import create_processor_from_shards
 from .replay_buffer import RLDataset
 
-from .evaluate_terminal_reward_models import generate_model_outputs
+# from .evaluate_terminal_reward_models import generate_model_outputs
+from src.rl.evaluate_terminal_reward_models import generate_model_outputs, \
+    build_joint_state_action_occupancy_counts, _bin_index, action_sensitivity_sweep
 
 
 from torch.utils.data import DataLoader, TensorDataset
@@ -32,6 +36,11 @@ from sklearn.metrics import roc_auc_score
 from ..setup_environment import load_paths
 
 ALPHA_COLOR = "#2471a3"
+
+OWN_COLOR = "#c0392b"
+SARSA_COLOR = "#2471a3"
+OCC_COLOR = "#229954"
+KNEE_COLOR = "#7d3c98"
 
 
 def get_model_dirs(base_dir):
@@ -243,4 +252,86 @@ def run_alpha_sweep_analysis(
         print(f"Saved to {save_path}")
  
     return results, fig
+
+
+ 
+def find_knee_alpha(results, metric="sarsa_advantage", curve="convex", direction="decreasing", S=1.0, alpha_min=None):
+    """
+    ... (same docstring as before) ...
+    alpha_min: if set, restricts the fit to alphas >= alpha_min -- use this
+        when the full curve isn't monotonic in the expected direction
+        (e.g., an early noisy dip before the real increasing trend starts).
+    """
+    alphas = sorted(results.keys())
+    if alpha_min is not None:
+        alphas = [a for a in alphas if a >= alpha_min]
+
+    if metric == "sarsa_advantage":
+        y = [results[a]["sarsa_advantage_means"].mean() for a in alphas]
+    elif metric == "own_advantage":
+        y = [results[a]["own_advantage_mean"] for a in alphas]
+    elif metric == "occupancy":
+        y = [results[a]["occupancy_support_frac"] * 100 for a in alphas]
+    else:
+        raise ValueError(f"Unknown metric '{metric}'")
+
+    kl = KneeLocator(alphas, y, curve=curve, direction=direction, S=S)
+    return kl.elbow
+ 
+def plot_combined_alpha_sweep(results, title="", save_path=None, mark_knee=True):
+    """
+    results: the dict returned by run_alpha_sweep_analysis, i.e.
+        {alpha: {"own_advantage_mean": ..., "sarsa_advantage_means": array of 5,
+                 "occupancy_support_frac": ...}, ...}
+    """
+    alphas = sorted(results.keys())
+ 
+    own_vals = np.array([results[a]["own_advantage_mean"] for a in alphas])
+    sarsa_mean_vals = np.array([results[a]["sarsa_advantage_means"].mean() for a in alphas])
+    sarsa_min_vals = np.array([results[a]["sarsa_advantage_means"].min() for a in alphas])
+    sarsa_max_vals = np.array([results[a]["sarsa_advantage_means"].max() for a in alphas])
+    occ_vals = np.array([results[a]["occupancy_support_frac"] * 100 for a in alphas])
+ 
+    fig, ax1 = plt.subplots(figsize=(8, 5.5))
+ 
+    # left axis: both advantage curves, same units
+    l1, = ax1.plot(alphas, own_vals, marker="o", color=OWN_COLOR, label="Own-critic advantage")
+    l2, = ax1.plot(alphas, sarsa_mean_vals, marker="o", color=SARSA_COLOR, label="SARSA-critic advantage (mean)")
+    ax1.fill_between(alphas, sarsa_min_vals, sarsa_max_vals, color=SARSA_COLOR, alpha=0.15,
+                      label="SARSA min-max across 5 seeds")
+    ax1.axhline(0, color="grey", linewidth=0.8, linestyle="--")
+    ax1.set_xlabel(r"cql_$\alpha$")
+    ax1.set_ylabel("Advantage (Q units)")
+    ax1.spines[["top"]].set_visible(False)
+ 
+    # right axis: occupancy support, different units (%)
+    ax2 = ax1.twinx()
+    l3, = ax2.plot(alphas, occ_vals, marker="s", color=OCC_COLOR, linestyle="--", label="Occupancy support (%)")
+    ax2.set_ylabel("% of chosen actions well-supported", color=OCC_COLOR)
+    ax2.tick_params(axis="y", colors=OCC_COLOR)
+    ax2.spines["right"].set_color(OCC_COLOR)
+    ax2.spines[["top"]].set_visible(False)
+ 
+    lines = [l1, l2, l3]
+    labels = [l.get_label() for l in lines]
+ 
+    if mark_knee:
+        knee_alpha = find_knee_alpha(results)
+        if knee_alpha is not None:
+            l4 = ax1.axvline(knee_alpha, color=KNEE_COLOR, linewidth=1.5, linestyle=":",
+                              label=f"Knee (Kneedle): $\\alpha$={knee_alpha}")
+            lines.append(l4)
+            labels.append(l4.get_label())
+        else:
+            print("Kneedle did not identify a knee for this curve.")
+ 
+    ax1.legend(lines, labels, loc="upper right", frameon=False, fontsize=9)
+    ax1.set_title(title or "CQL alpha sweep: advantage vs. occupancy support trade-off", fontsize=12, fontweight="bold")
+    fig.tight_layout()
+ 
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Saved to {save_path}")
+ 
+    return fig
  

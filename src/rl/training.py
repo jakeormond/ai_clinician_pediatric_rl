@@ -529,7 +529,29 @@ def single_split_training(config_manager):
                 val_processor, 
                 config_manager, 
                 hyperparams,
-            )            
+            )       
+
+    elif config_manager.search_variant == 'best_hyperparameters_fixed_cql_alpha' and \
+        config_manager.seeds is not None and len(config_manager.seeds) > 0:
+        logger.info(" Best hyperparameter training mode enabled.")
+
+        # train model with best hyperparameters for each seed
+        for seed in config_manager.seeds:
+            config_manager.training_config['seed'] = seed
+            logger.info(f"Training with best hyperparameters for seed {seed}...")
+
+            # get fixed hyperparameters
+            hyperparams = get_fixed_hyperparameters(config_manager)
+            hyperparams['cql_alpha'] = config_manager.cql_alpha  # override cql_alpha with fixed value
+            config_manager.training_config['cql_alpha'] = config_manager.cql_alpha  # also set in training_config for logging
+
+            # train model
+            train_with_hyperparameters(
+                train_processor, 
+                val_processor, 
+                config_manager, 
+                hyperparams,
+            )                 
 
     else:
         logger.info(" Fixed hyperparameter training mode enabled.")

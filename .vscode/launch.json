@@ -818,9 +818,8 @@
                 "--unit", "PICU",
                 "--filter_old", "True",
                 "--reward_cohort", "picu",
-                "--n_epochs", "2",
+                "--n_epochs", "400",
                 "--action_mode", "continuous_only",  
-                "--testing"          
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

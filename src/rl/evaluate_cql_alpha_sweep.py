@@ -113,14 +113,38 @@ def get_critic(model_entry):
         return model_entry[1] if len(model_entry) >= 2 and hasattr(model_entry[0], "gate_temperature") else model_entry[0]
     return model_entry
  
- 
+
+def _iqr_normalize(values, reference_q):
+    """
+    Normalizes `values` (e.g. an advantage array) by the interquartile range
+    of `reference_q` (that critic's own Q-values under real clinician
+    actions) -- same principle as normalize_sensitivity elsewhere in this
+    pipeline, so advantage is comparable across critics with very different
+    absolute Q scales (e.g. terminal vs. health-score).
+    """
+    q25, q75 = torch.quantile(reference_q, 0.25), torch.quantile(reference_q, 0.75)
+    iqr = (q75 - q25).clamp(min=1e-6)
+    return (values / iqr)
+
+
 def compute_model_advantage(
         model_entry, processor, sarsa_models,
         batch_size=1024, device="cuda" if torch.cuda.is_available() else "cpu",
     ):
     """
-    Returns a dict: own_advantage (per-timestep array), sarsa_advantages
-    (list of 5 per-timestep arrays, one per SARSA seed), actor_actions.
+    Returns a dict with both RAW and IQR-NORMALIZED advantage:
+      own_advantage / own_advantage_normalized       (per-timestep arrays)
+      sarsa_advantages / sarsa_advantages_normalized  (lists of 5 per-timestep arrays)
+      actor_actions
+ 
+    Normalization divides each critic's advantage by the interquartile
+    range of THAT SAME critic's own Q-values under real clinician actions
+    -- so own-critic advantage is normalized by the own critic's IQR, and
+    each SARSA critic's advantage is normalized by that SAME SARSA critic's
+    own IQR (not shared across seeds or across own/SARSA). This puts
+    advantage on a comparable, scale-free footing across critics/reward
+    types that otherwise sit on very different absolute Q scales (e.g.
+    terminal's MC-return-based Q vs. health-score's summed-difference Q).
     """
     own_critic = get_critic(model_entry)
  
@@ -134,9 +158,11 @@ def compute_model_advantage(
         processor, model=own_critic, actions_to_use=actor_actions, model_type="critic",
         reduction='mean', batch_size=batch_size, device=device,
     )
-    own_advantage = (q_own_actor - q_own_clinician).cpu().numpy()
+    own_advantage_raw = q_own_actor - q_own_clinician
+    own_advantage_normalized = _iqr_normalize(own_advantage_raw, q_own_clinician)
  
-    sarsa_advantages = []
+    sarsa_advantages_raw = []
+    sarsa_advantages_normalized = []
     for seed_idx, sarsa_entry in enumerate(sarsa_models):
         sarsa_critic = get_critic(sarsa_entry)
         q_sarsa_clinician = generate_model_outputs(
@@ -147,15 +173,42 @@ def compute_model_advantage(
             processor, model=sarsa_critic, actions_to_use=actor_actions, model_type="critic",
             reduction='mean', batch_size=batch_size, device=device,
         )
-        sarsa_advantages.append((q_sarsa_actor - q_sarsa_clinician).cpu().numpy())
+        sarsa_adv_raw = q_sarsa_actor - q_sarsa_clinician
+        sarsa_advantages_raw.append(sarsa_adv_raw.cpu().numpy())
+        sarsa_advantages_normalized.append(_iqr_normalize(sarsa_adv_raw, q_sarsa_clinician).cpu().numpy())
  
     return {
-        "own_advantage": own_advantage,
-        "sarsa_advantages": sarsa_advantages,  # list of 5 arrays
+        "own_advantage": own_advantage_raw.cpu().numpy(),
+        "own_advantage_normalized": own_advantage_normalized.cpu().numpy(),
+        "sarsa_advantages": sarsa_advantages_raw,
+        "sarsa_advantages_normalized": sarsa_advantages_normalized,
         "actor_actions": actor_actions,
     }
+
  
+def compute_occupancy_support_of_actions(
+        actions, test_health_score, training_actions, training_health_score,
+        n_severity_bins=20, n_action_bins=10, min_count=10,
+    ):
+    """
+    Fraction of timesteps where the actor's ACTUAL chosen (fluid, vaso)
+    combination, given that timestep's own severity bin, was well-supported
+    (count >= min_count) in the training data.
+    """
+    joint_counts, severity_edges, fluid_edges, vaso_edges = build_joint_state_action_occupancy_counts(
+        training_health_score, training_actions, n_severity_bins=n_severity_bins, n_action_bins=n_action_bins
+    )
+    actions_np = actions.cpu().numpy() if torch.is_tensor(actions) else np.asarray(actions)
+    hs_np = test_health_score.cpu().numpy() if torch.is_tensor(test_health_score) else np.asarray(test_health_score)
  
+    sev_bin = _bin_index(hs_np, severity_edges)
+    fluid_bin = _bin_index(actions_np[:, 0], fluid_edges)
+    vaso_bin = _bin_index(actions_np[:, 1], vaso_edges)
+    counts = joint_counts[sev_bin, fluid_bin, vaso_bin]
+ 
+    return (counts >= min_count).mean(), counts
+ 
+
 def compute_occupancy_support_of_actions(
         actions, test_health_score, training_actions, training_health_score,
         n_severity_bins=20, n_action_bins=10, min_count=10,
@@ -201,15 +254,20 @@ def run_alpha_sweep_analysis(
         )
  
         sarsa_means = [a.mean() for a in adv["sarsa_advantages"]]
+        sarsa_means_normalized = [a.mean() for a in adv["sarsa_advantages_normalized"]]
         results[alpha] = {
             "own_advantage_mean": adv["own_advantage"].mean(),
-            "sarsa_advantage_means": np.array(sarsa_means),  # 5 values, one per SARSA seed
+            "own_advantage_mean_normalized": adv["own_advantage_normalized"].mean(),
+            "sarsa_advantage_means": np.array(sarsa_means),
+            "sarsa_advantage_means_normalized": np.array(sarsa_means_normalized),
             "occupancy_support_frac": occ_frac,
         }
  
-        print(f"  own-critic advantage:   {adv['own_advantage'].mean():.4f}")
-        print(f"  SARSA-critic advantage: mean={np.mean(sarsa_means):.4f}, "
-              f"per-seed={np.round(sarsa_means, 4)}")
+        print(f"  own-critic advantage:   raw={adv['own_advantage'].mean():.4f}, "
+              f"normalized={adv['own_advantage_normalized'].mean():.4f}")
+        print(f"  SARSA-critic advantage: raw mean={np.mean(sarsa_means):.4f}, "
+              f"normalized mean={np.mean(sarsa_means_normalized):.4f} "
+              f"(normalized per-seed={np.round(sarsa_means_normalized, 4)})")
         print(f"  occupancy support of chosen actions: {occ_frac*100:.1f}%")
         print(f"  done in {time.time()-t0:.1f}s\n", flush=True)
  

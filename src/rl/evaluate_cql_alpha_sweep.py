@@ -161,6 +161,9 @@ def compute_model_advantage(
     own_advantage_raw = q_own_actor - q_own_clinician
     own_advantage_normalized = _iqr_normalize(own_advantage_raw, q_own_clinician)
  
+    own_iqr = torch.quantile(q_own_clinician, 0.75) - torch.quantile(q_own_clinician, 0.25)
+    print(f"    own-critic Q IQR (real clinician actions): {own_iqr.item():.4f}")
+ 
     sarsa_advantages_raw = []
     sarsa_advantages_normalized = []
     for seed_idx, sarsa_entry in enumerate(sarsa_models):
@@ -174,6 +177,8 @@ def compute_model_advantage(
             reduction='mean', batch_size=batch_size, device=device,
         )
         sarsa_adv_raw = q_sarsa_actor - q_sarsa_clinician
+        sarsa_iqr = torch.quantile(q_sarsa_clinician, 0.75) - torch.quantile(q_sarsa_clinician, 0.25)
+        print(f"    SARSA seed {seed_idx+1} Q IQR (real clinician actions): {sarsa_iqr.item():.4f}")
         sarsa_advantages_raw.append(sarsa_adv_raw.cpu().numpy())
         sarsa_advantages_normalized.append(_iqr_normalize(sarsa_adv_raw, q_sarsa_clinician).cpu().numpy())
  
@@ -184,6 +189,7 @@ def compute_model_advantage(
         "sarsa_advantages_normalized": sarsa_advantages_normalized,
         "actor_actions": actor_actions,
     }
+ 
 
  
 def compute_occupancy_support_of_actions(
@@ -231,7 +237,7 @@ def compute_occupancy_support_of_actions(
  
     return (counts >= min_count).mean(), counts
  
- 
+
 def run_alpha_sweep_analysis(
         cql_models_by_alpha,   # dict: {alpha_value: model_entry}
         processor, sarsa_models,
@@ -271,26 +277,28 @@ def run_alpha_sweep_analysis(
         print(f"  occupancy support of chosen actions: {occ_frac*100:.1f}%")
         print(f"  done in {time.time()-t0:.1f}s\n", flush=True)
  
-    # --- plot: 3 panels vs alpha ---
+    # --- plot: 3 panels vs alpha (IQR-normalized advantage, comparable across
+    #     alphas whose own-critic Q-scale may drift, and across reward types
+    #     on different absolute Q scales) ---
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
  
-    own_vals = [results[a]["own_advantage_mean"] for a in alphas]
+    own_vals = [results[a]["own_advantage_mean_normalized"] for a in alphas]
     axes[0].plot(alphas, own_vals, marker="o", color="#c0392b")
     axes[0].set_xscale("log")
     axes[0].set_xlabel("cql_alpha")
-    axes[0].set_ylabel("Own-critic advantage")
+    axes[0].set_ylabel("Own-critic advantage\n(% of critic's own Q IQR)")
     axes[0].set_title("Own-critic advantage\n(exploitation red-flag, not positive evidence)", fontsize=10)
     axes[0].axhline(0, color="grey", linewidth=0.8, linestyle="--")
     axes[0].spines[["top", "right"]].set_visible(False)
  
-    sarsa_mean_vals = [results[a]["sarsa_advantage_means"].mean() for a in alphas]
-    sarsa_min_vals = [results[a]["sarsa_advantage_means"].min() for a in alphas]
-    sarsa_max_vals = [results[a]["sarsa_advantage_means"].max() for a in alphas]
+    sarsa_mean_vals = [results[a]["sarsa_advantage_means_normalized"].mean() for a in alphas]
+    sarsa_min_vals = [results[a]["sarsa_advantage_means_normalized"].min() for a in alphas]
+    sarsa_max_vals = [results[a]["sarsa_advantage_means_normalized"].max() for a in alphas]
     axes[1].plot(alphas, sarsa_mean_vals, marker="o", color=ALPHA_COLOR, label="mean across 5 SARSA seeds")
     axes[1].fill_between(alphas, sarsa_min_vals, sarsa_max_vals, color=ALPHA_COLOR, alpha=0.2, label="min-max across seeds")
     axes[1].set_xscale("log")
     axes[1].set_xlabel("cql_alpha")
-    axes[1].set_ylabel("SARSA-critic advantage")
+    axes[1].set_ylabel("SARSA-critic advantage\n(% of critic's own Q IQR)")
     axes[1].set_title("SARSA-critic advantage\n(primary evidence of real improvement)", fontsize=10)
     axes[1].axhline(0, color="grey", linewidth=0.8, linestyle="--")
     axes[1].legend(frameon=False, fontsize=8)
@@ -310,7 +318,7 @@ def run_alpha_sweep_analysis(
         print(f"Saved to {save_path}")
  
     return results, fig
- 
+
  
 def find_knee_alpha(results, metric="sarsa_advantage", curve="convex", direction="decreasing", S=1.0,
                      alpha_min=None, normalized=False):

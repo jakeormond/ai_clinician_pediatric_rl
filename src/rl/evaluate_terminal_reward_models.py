@@ -355,6 +355,7 @@ def generate_model_outputs(
 
             # run inference
             with torch.no_grad():
+                model.eval()
                 if model_type == "critic":
                     q1, q2 = model(states_batch, actions_batch)
                     if reduction == 'mean':

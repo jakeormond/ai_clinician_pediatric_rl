@@ -310,44 +310,72 @@ def run_alpha_sweep_analysis(
         print(f"Saved to {save_path}")
  
     return results, fig
-
-
  
-def find_knee_alpha(results, metric="sarsa_advantage", curve="convex", direction="decreasing", S=1.0, alpha_min=None):
+ 
+def find_knee_alpha(results, metric="sarsa_advantage", curve="convex", direction="decreasing", S=1.0,
+                     alpha_min=None, normalized=False):
     """
-    ... (same docstring as before) ...
+    Identifies the knee/elbow of a chosen metric vs. alpha, directly from
+    the results dict (no need to hand-copy values out).
+ 
+    metric: which curve to run Kneedle on --
+        "sarsa_advantage" -- mean SARSA-critic advantage (default)
+        "own_advantage"   -- own-critic advantage
+        "occupancy"       -- occupancy support (%) -- this one INCREASES,
+                              so direction should be "increasing" if used
+    normalized: if True, uses the IQR-normalized advantage values
+        (own_advantage_mean_normalized / sarsa_advantage_means_normalized)
+        instead of raw Q-unit advantage. Has no effect on "occupancy",
+        which is never normalized (it's already a %). Use normalized=True
+        when comparing knees across critics/reward types on different
+        absolute Q scales (e.g. terminal vs. health-score).
+    curve/direction: passed straight to KneeLocator -- see its docs for
+        the four curve/direction combinations (convex/concave x
+        increasing/decreasing). Must match the actual shape of the chosen
+        metric or the result will be meaningless.
     alpha_min: if set, restricts the fit to alphas >= alpha_min -- use this
         when the full curve isn't monotonic in the expected direction
         (e.g., an early noisy dip before the real increasing trend starts).
+    S: KneeLocator's sensitivity parameter -- higher S finds fewer, more
+        conservative knees; lower S is more sensitive to smaller bends.
+        Default (1.0) is KneeLocator's own default.
+ 
+    Returns the alpha value at the identified knee (or None if Kneedle
+    doesn't find one for this curve/direction/S combination).
     """
     alphas = sorted(results.keys())
     if alpha_min is not None:
         alphas = [a for a in alphas if a >= alpha_min]
-
+ 
+    suffix = "_normalized" if normalized else ""
     if metric == "sarsa_advantage":
-        y = [results[a]["sarsa_advantage_means"].mean() for a in alphas]
+        y = [results[a][f"sarsa_advantage_means{suffix}"].mean() for a in alphas]
     elif metric == "own_advantage":
-        y = [results[a]["own_advantage_mean"] for a in alphas]
+        y = [results[a][f"own_advantage_mean{suffix}"] for a in alphas]
     elif metric == "occupancy":
         y = [results[a]["occupancy_support_frac"] * 100 for a in alphas]
     else:
         raise ValueError(f"Unknown metric '{metric}'")
-
+ 
     kl = KneeLocator(alphas, y, curve=curve, direction=direction, S=S)
     return kl.elbow
  
-def plot_combined_alpha_sweep(results, title="", save_path=None, mark_knee=True):
+ 
+def plot_combined_alpha_sweep(results, title="", save_path=None, mark_knee=True, normalized=False):
     """
-    results: the dict returned by run_alpha_sweep_analysis, i.e.
-        {alpha: {"own_advantage_mean": ..., "sarsa_advantage_means": array of 5,
-                 "occupancy_support_frac": ...}, ...}
+    results: the dict returned by run_alpha_sweep_analysis, containing both
+        raw and IQR-normalized advantage keys.
+    normalized: if True, plots IQR-normalized advantage (comparable across
+        critics/reward types on different absolute Q scales) instead of
+        raw Q-unit advantage. Occupancy support is unaffected either way.
     """
     alphas = sorted(results.keys())
+    suffix = "_normalized" if normalized else ""
  
-    own_vals = np.array([results[a]["own_advantage_mean"] for a in alphas])
-    sarsa_mean_vals = np.array([results[a]["sarsa_advantage_means"].mean() for a in alphas])
-    sarsa_min_vals = np.array([results[a]["sarsa_advantage_means"].min() for a in alphas])
-    sarsa_max_vals = np.array([results[a]["sarsa_advantage_means"].max() for a in alphas])
+    own_vals = np.array([results[a][f"own_advantage_mean{suffix}"] for a in alphas])
+    sarsa_mean_vals = np.array([results[a][f"sarsa_advantage_means{suffix}"].mean() for a in alphas])
+    sarsa_min_vals = np.array([results[a][f"sarsa_advantage_means{suffix}"].min() for a in alphas])
+    sarsa_max_vals = np.array([results[a][f"sarsa_advantage_means{suffix}"].max() for a in alphas])
     occ_vals = np.array([results[a]["occupancy_support_frac"] * 100 for a in alphas])
  
     fig, ax1 = plt.subplots(figsize=(8, 5.5))
@@ -359,7 +387,7 @@ def plot_combined_alpha_sweep(results, title="", save_path=None, mark_knee=True)
                       label="SARSA min-max across 5 seeds")
     ax1.axhline(0, color="grey", linewidth=0.8, linestyle="--")
     ax1.set_xlabel(r"cql_$\alpha$")
-    ax1.set_ylabel("Advantage (Q units)")
+    ax1.set_ylabel("Advantage (% of critic's own Q IQR)" if normalized else "Advantage (raw Q units)")
     ax1.spines[["top"]].set_visible(False)
  
     # right axis: occupancy support, different units (%)
@@ -374,7 +402,7 @@ def plot_combined_alpha_sweep(results, title="", save_path=None, mark_knee=True)
     labels = [l.get_label() for l in lines]
  
     if mark_knee:
-        knee_alpha = find_knee_alpha(results)
+        knee_alpha = find_knee_alpha(results, normalized=normalized)
         if knee_alpha is not None:
             l4 = ax1.axvline(knee_alpha, color=KNEE_COLOR, linewidth=1.5, linestyle=":",
                               label=f"Knee (Kneedle): $\\alpha$={knee_alpha}")
@@ -384,7 +412,8 @@ def plot_combined_alpha_sweep(results, title="", save_path=None, mark_knee=True)
             print("Kneedle did not identify a knee for this curve.")
  
     ax1.legend(lines, labels, loc="upper right", frameon=False, fontsize=9)
-    ax1.set_title(title or "CQL alpha sweep: advantage vs. occupancy support trade-off", fontsize=12, fontweight="bold")
+    default_title = "CQL alpha sweep: advantage vs. occupancy support trade-off"
+    ax1.set_title(title or (default_title + (" (normalized)" if normalized else "")), fontsize=12, fontweight="bold")
     fig.tight_layout()
  
     if save_path:
@@ -392,4 +421,3 @@ def plot_combined_alpha_sweep(results, title="", save_path=None, mark_knee=True)
         print(f"Saved to {save_path}")
  
     return fig
- 

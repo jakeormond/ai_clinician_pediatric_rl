@@ -1,3 +1,4 @@
+
 """
 Diagnostic: actor action distribution (fluid, vaso) across the CQL alpha
 sweep. Complements the advantage/occupancy analysis by directly showing
@@ -17,11 +18,11 @@ Expects, already in your session (or importable):
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-
 from src.rl.evaluate_terminal_reward_models import generate_model_outputs
 
 FLUID_COLOR = "#2471a3"
 VASO_COLOR = "#c0392b"
+
 
 
 def get_actor_actions(model_entry, processor, batch_size=1024, device="cuda" if torch.cuda.is_available() else "cpu"):
@@ -49,6 +50,7 @@ def compute_action_distribution_stats(actions, zero_threshold=1e-4):
 
 def run_action_distribution_sweep(
         cql_models_by_alpha, processor,
+        clinician_baseline=None,
         zero_threshold=1e-4, batch_size=1024,
         device="cuda" if torch.cuda.is_available() else "cpu",
         title="", save_path=None,
@@ -56,7 +58,14 @@ def run_action_distribution_sweep(
     """
     Runs compute_action_distribution_stats for every alpha in
     cql_models_by_alpha, prints a per-alpha summary, and plots fire rate /
-    mean dose / mean non-zero dose vs. alpha for both fluid and vaso.
+    mean dose / mean non-zero dose vs. alpha, as 3 panels with fluid and
+    vaso overlaid in each (color-coded), plus a color-matched dashed
+    clinician reference line per drug.
+
+    clinician_baseline: optional dict from compute_clinician_baseline(),
+        e.g. {"fluid_fire_rate": ..., "fluid_mean_dose": ..., ...}.
+        If given, drawn as a horizontal reference line, color-matched to
+        each drug, on each panel.
     """
     alphas = sorted(cql_models_by_alpha.keys())
     results = {}
@@ -73,32 +82,30 @@ def run_action_distribution_sweep(
               f"vaso[rate={stats['vaso_fire_rate']*100:.1f}%, mean={stats['vaso_mean_dose']:.4f}, "
               f"nonzero_mean={stats['vaso_mean_nonzero_dose']:.4f}]")
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 
-    for name, color in [("fluid", FLUID_COLOR), ("vaso", VASO_COLOR)]:
-        rate_vals = [results[a][f"{name}_fire_rate"] * 100 for a in alphas]
-        mean_vals = [results[a][f"{name}_mean_dose"] for a in alphas]
-        nonzero_vals = [results[a][f"{name}_mean_nonzero_dose"] for a in alphas]
+    panel_specs = [
+        ("fire_rate", "Firing rate (%)", 100.0),
+        ("mean_dose", "Mean dose (all timesteps)", 1.0),
+        ("mean_nonzero_dose", "Mean dose (fired timesteps only)", 1.0),
+    ]
 
-        axes[0].plot(alphas, rate_vals, marker="o", color=color, label=name)
-        axes[1].plot(alphas, mean_vals, marker="o", color=color, label=name)
-        axes[2].plot(alphas, nonzero_vals, marker="o", color=color, label=name)
+    for col, (stat_suffix, ylabel, mult) in enumerate(panel_specs):
+        ax = axes[col]
+        for name, color in [("fluid", FLUID_COLOR), ("vaso", VASO_COLOR)]:
+            key = f"{name}_{stat_suffix}"
+            vals = [results[a][key] * mult for a in alphas]
+            ax.plot(alphas, vals, marker="o", color=color, label=f"{name} (CQL actor)")
 
-    axes[0].set_xlabel("cql_alpha")
-    axes[0].set_ylabel("Fire rate (%)")
-    axes[0].set_title("Firing rate", fontsize=10)
-    axes[0].legend(frameon=False, fontsize=9)
-    axes[0].spines[["top", "right"]].set_visible(False)
+            if clinician_baseline is not None and key in clinician_baseline:
+                baseline_val = clinician_baseline[key] * mult
+                ax.axhline(baseline_val, color=color, linewidth=1.2, linestyle="--", alpha=0.6,
+                           label=f"{name} (clinician)")
 
-    axes[1].set_xlabel("cql_alpha")
-    axes[1].set_ylabel("Mean dose (all timesteps)")
-    axes[1].set_title("Mean dose", fontsize=10)
-    axes[1].spines[["top", "right"]].set_visible(False)
-
-    axes[2].set_xlabel("cql_alpha")
-    axes[2].set_ylabel("Mean dose (fired timesteps only)")
-    axes[2].set_title("Mean non-zero dose", fontsize=10)
-    axes[2].spines[["top", "right"]].set_visible(False)
+        ax.set_xlabel("cql_alpha")
+        ax.set_title(ylabel, fontsize=10)
+        ax.legend(frameon=False, fontsize=8)
+        ax.spines[["top", "right"]].set_visible(False)
 
     fig.suptitle(title or "Actor action distribution across alpha sweep", fontsize=12, fontweight="bold")
     fig.tight_layout()
@@ -110,10 +117,99 @@ def run_action_distribution_sweep(
     return results, fig
 
 
+def run_action_distribution_stage3(
+        models_by_seed,   # list of 5 model_entry tuples/objects, one per seed, at the FIXED final alpha
+        processor,
+        clinician_baseline=None,
+        zero_threshold=1e-4, batch_size=1024,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        title="", save_path=None,
+    ):
+    """
+    Stage 3 variant: seeds (at a single, fixed final alpha) as the unit of
+    replication, rather than sweeping alpha. Plots the same 3 stats
+    (fire rate, mean dose, mean non-zero dose), fluid+vaso overlaid, but
+    as a beeswarm of per-seed points rather than a connected line -- seeds
+    have no natural order, so a line would misleadingly imply one.
+
+    models_by_seed: list of 5 model_entry tuples/objects (e.g.
+        cql_health_score_models filtered to the final alpha, or the Stage 3
+        list directly if it only contains that one alpha).
+    """
+    n_seeds = len(models_by_seed)
+    per_seed_stats = []
+
+    for seed_idx, model_entry in enumerate(models_by_seed):
+        actions = get_actor_actions(model_entry, processor, batch_size=batch_size, device=device)
+        stats = compute_action_distribution_stats(actions, zero_threshold=zero_threshold)
+        per_seed_stats.append(stats)
+
+        print(f"seed {seed_idx+1}/{n_seeds}: "
+              f"fluid[rate={stats['fluid_fire_rate']*100:.1f}%, mean={stats['fluid_mean_dose']:.4f}, "
+              f"nonzero_mean={stats['fluid_mean_nonzero_dose']:.4f}]  "
+              f"vaso[rate={stats['vaso_fire_rate']*100:.1f}%, mean={stats['vaso_mean_dose']:.4f}, "
+              f"nonzero_mean={stats['vaso_mean_nonzero_dose']:.4f}]")
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+
+    panel_specs = [
+        ("fire_rate", "Firing rate (%)", 100.0),
+        ("mean_dose", "Mean dose (all timesteps)", 1.0),
+        ("mean_nonzero_dose", "Mean dose (fired timesteps only)", 1.0),
+    ]
+
+    rng = np.random.default_rng(0)  # fixed seed, reproducible jitter
+
+    for col, (stat_suffix, ylabel, mult) in enumerate(panel_specs):
+        ax = axes[col]
+        for x_center, (name, color) in enumerate([("fluid", FLUID_COLOR), ("vaso", VASO_COLOR)]):
+            key = f"{name}_{stat_suffix}"
+            vals = np.array([s[key] * mult for s in per_seed_stats])
+            jitter = rng.uniform(-0.08, 0.08, size=n_seeds)
+            ax.scatter(x_center + jitter, vals, color=color, s=60, alpha=0.85,
+                       edgecolors="white", linewidths=0.7, zorder=3,
+                       label=f"{name} (CQL actor, per seed)")
+
+            if clinician_baseline is not None and key in clinician_baseline:
+                baseline_val = clinician_baseline[key] * mult
+                ax.hlines(baseline_val, x_center - 0.25, x_center + 0.25, color=color,
+                          linewidth=1.5, linestyle="--", alpha=0.7,
+                          label=f"{name} (clinician)")
+
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels(["Fluid", "Vaso"])
+        ax.set_xlim(-0.5, 1.5)
+        ax.set_title(ylabel, fontsize=10)
+        ax.legend(frameon=False, fontsize=8, loc="best")
+        ax.spines[["top", "right"]].set_visible(False)
+
+    fig.suptitle(title or f"Actor action distribution across {n_seeds} seeds (final alpha)", fontsize=12, fontweight="bold")
+    fig.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Saved to {save_path}")
+
+    return per_seed_stats, fig
+
+
 if __name__ == "__main__":
-    results_actions_terminal, fig_actions_terminal = run_action_distribution_sweep(
-        cql_terminal_by_alpha,
-        processors['val'],
-        title="Terminal reward: actor action distribution vs. alpha",
-        save_path="cql_alpha_sweep_actions_terminal.png",
+    from src.rl.clinician_baseline import compute_clinician_baseline
+
+    clinician_baseline_test = compute_clinician_baseline(processors['test'].rl_dataset["actions"])
+
+    stats_health_score, fig_health_score = run_action_distribution_stage3(
+        cql_health_score_models,  # the 5 final Stage 3 models at alpha=0.006
+        processors['test'],
+        clinician_baseline=clinician_baseline_test,
+        title="Health-score reward: final policy action distribution (5 seeds, test set)",
+        save_path="stage3_actions_health_score.png",
+    )
+
+    stats_terminal, fig_terminal = run_action_distribution_stage3(
+        cql_terminal_models,  # the 5 final Stage 3 models at terminal's final alpha
+        processors['test'],
+        clinician_baseline=clinician_baseline_test,
+        title="Terminal reward: final policy action distribution (5 seeds, test set)",
+        save_path="stage3_actions_terminal.png",
     )

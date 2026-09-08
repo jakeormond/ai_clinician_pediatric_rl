@@ -69,9 +69,11 @@ def compare_reward_by_vaso(
                 results[f"sem_reward_{prefix}"].append(np.nan)
             results[f"n_{prefix}"].append(int(n))
 
+    count_keys = {"n_vaso", "n_no_vaso"}
     for key in results:
-        if key != "bin_edges":
-            results[key] = np.array(results[key], dtype=float) if "n_" not in key else np.array(results[key], dtype=int)
+        if key == "bin_edges":
+            continue
+        results[key] = np.array(results[key], dtype=int) if key in count_keys else np.array(results[key], dtype=float)
 
     return results
 
@@ -93,26 +95,31 @@ def matched_effect_estimate(results):
 
 
 def plot_reward_by_vaso(results, title="", save_path=None):
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 7), sharex=True, gridspec_kw={"height_ratios": [3, 1]})
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7.5), sharex=True, gridspec_kw={"height_ratios": [3, 1.3]})
 
-    x = results["bin_center_health_score"]
+    n_bins = len(results["bin_center_health_score"])
+    x_pos = np.arange(n_bins)  # evenly-spaced categorical positions -- avoids uneven quantile-bin spacing issues
+    x_labels = [f"{v:.0f}" for v in results["bin_center_health_score"]]
 
-    ax1.errorbar(x, results["mean_reward_vaso"], yerr=results["sem_reward_vaso"],
-                 marker="o", color=VASO_GIVEN_COLOR, label="Vaso given", capsize=3)
-    ax1.errorbar(x, results["mean_reward_no_vaso"], yerr=results["sem_reward_no_vaso"],
-                 marker="o", color=NO_VASO_COLOR, label="No vaso", capsize=3)
+    ax1.errorbar(x_pos, results["mean_reward_vaso"], yerr=results["sem_reward_vaso"],
+                 marker="o", color=VASO_GIVEN_COLOR, label="Vaso given", capsize=3, linewidth=1.5)
+    ax1.errorbar(x_pos, results["mean_reward_no_vaso"], yerr=results["sem_reward_no_vaso"],
+                 marker="o", color=NO_VASO_COLOR, label="No vaso", capsize=3, linewidth=1.5)
     ax1.axhline(0, color="grey", linewidth=0.8, linestyle="--")
-    ax1.set_ylabel("Mean hourly health-score change\n(reward)")
+    ax1.set_ylabel("Mean hourly health-score change\n(reward) $\\pm$ SEM")
     ax1.set_title(title or "Health-score change, vaso vs. no vaso, matched by severity", fontsize=12, fontweight="bold")
     ax1.legend(frameon=False, fontsize=9)
     ax1.spines[["top", "right"]].set_visible(False)
+    ax1.grid(axis="y", alpha=0.2)
 
-    width = (x[1] - x[0]) * 0.4 if len(x) > 1 else 1.0
-    ax2.bar(x - width/2, results["n_vaso"], width=width, color=VASO_GIVEN_COLOR, alpha=0.7, label="n (vaso)")
-    ax2.bar(x + width/2, results["n_no_vaso"], width=width, color=NO_VASO_COLOR, alpha=0.7, label="n (no vaso)")
+    width = 0.38
+    ax2.bar(x_pos - width/2, results["n_vaso"], width=width, color=VASO_GIVEN_COLOR, alpha=0.8, label="n (vaso)")
+    ax2.bar(x_pos + width/2, results["n_no_vaso"], width=width, color=NO_VASO_COLOR, alpha=0.8, label="n (no vaso)")
     ax2.set_yscale("log")
     ax2.set_ylabel("n per bin\n(log scale)")
     ax2.set_xlabel("Health score (severity), bin center")
+    ax2.set_xticks(x_pos)
+    ax2.set_xticklabels(x_labels, rotation=45, ha="right", fontsize=8)
     ax2.legend(frameon=False, fontsize=8)
     ax2.spines[["top", "right"]].set_visible(False)
 

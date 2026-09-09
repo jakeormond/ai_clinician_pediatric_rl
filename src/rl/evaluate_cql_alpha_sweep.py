@@ -35,36 +35,6 @@ from sklearn.metrics import roc_auc_score
 
 from ..setup_environment import load_paths
 
-ALPHA_COLOR = "#2471a3"
-
-OWN_COLOR = "#c0392b"
-SARSA_COLOR = "#2471a3"
-OCC_COLOR = "#229954"
-KNEE_COLOR = "#7d3c98"
-
-
-def get_model_dirs(base_dir):
-    model_dirs = []
-    # find directories in base_dir that begin with choc
-    choc_dirs = [d for d in os.listdir(base_dir) if d.startswith("choc")]
-
-    if choc_dirs == []:
-        print(f"No choc directories found in {base_dir}")
-        # look for directories that begin with unknown or local
-        sub_dirs = [d for d in os.listdir(base_dir) if d.startswith("unknown") or d.startswith("local")]
-        for sub_dir in sub_dirs:
-            model_dirs.append(os.path.join(base_dir, sub_dir))
-            print(f"Found model directory: {os.path.join(base_dir, sub_dir)}")
-    else:
-        for choc_dir in choc_dirs:
-            # find directories that begin with unknown or local
-            sub_dirs = [d for d in os.listdir(os.path.join(base_dir, choc_dir)) if d.startswith("unknown") or d.startswith("local")]
-            for sub_dir in sub_dirs:
-                model_dirs.append(os.path.join(base_dir, choc_dir, sub_dir))
-                print(f"Found model directory: {os.path.join(base_dir, choc_dir, sub_dir)}")
-    return model_dirs      
-
-
 """
 Stage 2 CQL alpha sweep analysis, run on the VAL set only (alpha selection
 is a modeling decision — test set stays reserved for the final Stage 3
@@ -94,6 +64,35 @@ Expects, already in your session:
     training_actions, training_health_score           (for the occupancy histogram)
 """
 
+
+ALPHA_COLOR = "#2471a3"
+
+OWN_COLOR = "#c0392b"
+SARSA_COLOR = "#2471a3"
+OCC_COLOR = "#229954"
+KNEE_COLOR = "#7d3c98"
+
+
+def get_model_dirs(base_dir):
+    model_dirs = []
+    # find directories in base_dir that begin with choc
+    choc_dirs = [d for d in os.listdir(base_dir) if d.startswith("choc")]
+
+    if choc_dirs == []:
+        print(f"No choc directories found in {base_dir}")
+        # look for directories that begin with unknown or local
+        sub_dirs = [d for d in os.listdir(base_dir) if d.startswith("unknown") or d.startswith("local")]
+        for sub_dir in sub_dirs:
+            model_dirs.append(os.path.join(base_dir, sub_dir))
+            print(f"Found model directory: {os.path.join(base_dir, sub_dir)}")
+    else:
+        for choc_dir in choc_dirs:
+            # find directories that begin with unknown or local
+            sub_dirs = [d for d in os.listdir(os.path.join(base_dir, choc_dir)) if d.startswith("unknown") or d.startswith("local")]
+            for sub_dir in sub_dirs:
+                model_dirs.append(os.path.join(base_dir, choc_dir, sub_dir))
+                print(f"Found model directory: {os.path.join(base_dir, choc_dir, sub_dir)}")
+    return model_dirs      
 
  
 def get_actor_actions(model_entry, processor, batch_size=1024, device="cuda" if torch.cuda.is_available() else "cpu"):
@@ -369,15 +368,38 @@ def find_knee_alpha(results, metric="sarsa_advantage", curve="convex", direction
     return kl.elbow
  
  
-def plot_combined_alpha_sweep(results, title="", save_path=None, mark_knee=True, normalized=False):
+def plot_combined_alpha_sweep(results, title="", save_path=None, mark_knee=True, normalized=False,
+                                log_scale=False, alpha_range=None):
     """
     results: the dict returned by run_alpha_sweep_analysis, containing both
         raw and IQR-normalized advantage keys.
     normalized: if True, plots IQR-normalized advantage (comparable across
         critics/reward types on different absolute Q scales) instead of
         raw Q-unit advantage. Occupancy support is unaffected either way.
+    log_scale: if True, plots the x-axis (cql_alpha) on a log scale --
+        useful when the swept range spans multiple orders of magnitude.
+        NOTE: alpha=0 cannot be shown on a log axis (log(0) is undefined);
+        if alpha=0 is in `results`, it is silently dropped from the plot
+        when log_scale=True (a warning is printed), but the knee-finding
+        step below is unaffected unless you also restrict alpha_range.
+    alpha_range: optional (min, max) tuple to restrict which alphas are
+        plotted (inclusive). Useful for zooming into a sub-range of a wide
+        sweep, e.g. alpha_range=(0.001, 0.01) to see the original sweep's
+        resolution within a much wider combined sweep.
     """
     alphas = sorted(results.keys())
+ 
+    if alpha_range is not None:
+        lo, hi = alpha_range
+        alphas = [a for a in alphas if lo <= a <= hi]
+ 
+    if log_scale and 0 in alphas:
+        print("Note: alpha=0 excluded from plot (log scale can't show it).")
+        alphas = [a for a in alphas if a != 0]
+ 
+    if len(alphas) == 0:
+        raise ValueError("No alpha values remain after applying alpha_range/log_scale filtering.")
+ 
     suffix = "_normalized" if normalized else ""
  
     own_vals = np.array([results[a][f"own_advantage_mean{suffix}"] for a in alphas])
@@ -394,9 +416,11 @@ def plot_combined_alpha_sweep(results, title="", save_path=None, mark_knee=True,
     ax1.fill_between(alphas, sarsa_min_vals, sarsa_max_vals, color=SARSA_COLOR, alpha=0.15,
                       label="SARSA min-max across 5 seeds")
     ax1.axhline(0, color="grey", linewidth=0.8, linestyle="--")
-    ax1.set_xlabel(r"cql_$\alpha$")
+    ax1.set_xlabel(r"cql_$\alpha$" + (" (log scale)" if log_scale else ""))
     ax1.set_ylabel("Advantage (% of critic's own Q IQR)" if normalized else "Advantage (raw Q units)")
     ax1.spines[["top"]].set_visible(False)
+    if log_scale:
+        ax1.set_xscale("log")
  
     # right axis: occupancy support, different units (%)
     ax2 = ax1.twinx()
@@ -405,12 +429,17 @@ def plot_combined_alpha_sweep(results, title="", save_path=None, mark_knee=True,
     ax2.tick_params(axis="y", colors=OCC_COLOR)
     ax2.spines["right"].set_color(OCC_COLOR)
     ax2.spines[["top"]].set_visible(False)
+    if log_scale:
+        ax2.set_xscale("log")
  
     lines = [l1, l2, l3]
     labels = [l.get_label() for l in lines]
  
     if mark_knee:
-        knee_alpha = find_knee_alpha(results, normalized=normalized)
+        # knee is computed over the SAME filtered alpha range being plotted,
+        # so the marked knee always matches what's visible on this particular plot
+        filtered_results = {a: results[a] for a in alphas}
+        knee_alpha = find_knee_alpha(filtered_results, normalized=normalized)
         if knee_alpha is not None:
             l4 = ax1.axvline(knee_alpha, color=KNEE_COLOR, linewidth=1.5, linestyle=":",
                               label=f"Knee (Kneedle): $\\alpha$={knee_alpha}")
@@ -429,3 +458,5 @@ def plot_combined_alpha_sweep(results, title="", save_path=None, mark_knee=True,
         print(f"Saved to {save_path}")
  
     return fig
+ 
+ 

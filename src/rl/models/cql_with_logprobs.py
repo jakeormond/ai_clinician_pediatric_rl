@@ -583,6 +583,7 @@ class CQL:
 		target_std_vaso: float = 0.5,     # desired raw (pre-sigmoid) std for vaso magnitude
 		initial_alpha_mag: float = 5e-4,  # starting value for the learned entropy-temperature
 		alpha_mag_lr: float = 1e-3,       # learning rate for the dual-variable optimizer
+		fluid_mean_reg_scale: float = 0.05,  # Weight for the vaso mean regularization term
 		vaso_mean_reg_scale: float = 0.05,  # Weight for the vaso mean regularization term
 
 		device: str = "CUDA" if torch.cuda.is_available() else "CPU",
@@ -625,6 +626,7 @@ class CQL:
 		self.actor_loss_q_scale = actor_loss_q_scale
 		self.actor_loss_gate_entropy_scale = actor_loss_gate_entropy_scale
 		# self.actor_loss_mag_entropy_scale = actor_loss_mag_entropy_scale
+		self.fluid_mean_reg_scale = fluid_mean_reg_scale
 		self.vaso_mean_reg_scale = vaso_mean_reg_scale
 
 		self.device = device
@@ -970,6 +972,9 @@ class CQL:
 		
 			actor_loss_gate_ent = gate_lp.mean()
 
+			f_gate_uncertainty_weight = (0.5 - (f_p - 0.5).abs()).clamp(min=0)
+			f_mean_saturation_penalty = (f_gate_uncertainty_weight * f_raw_mean.pow(2)).mean()
+
 			v_gate_uncertainty_weight = (0.5 - (v_p - 0.5).abs()).clamp(min=0)
 			v_mean_saturation_penalty = (v_gate_uncertainty_weight * v_raw_mean.pow(2)).mean()
 
@@ -994,6 +999,7 @@ class CQL:
 				self.actor_loss_gate_entropy_scale * actor_loss_gate_ent +
 				alpha_mag_fluid * f_mag_lp_mean +
 				alpha_mag_vaso * v_mag_lp_mean +
+				self.fluid_mean_reg_scale * f_mean_saturation_penalty +
 				self.vaso_mean_reg_scale * v_mean_saturation_penalty
 			)
 
@@ -1040,6 +1046,7 @@ class CQL:
 				"actor_raw_advantage_mean": raw_advantage.mean().item(),
 				"actor_loss_gate_ent": actor_loss_gate_ent.item(),
 				"gate_temperature": current_gate_temp,
+				"f_mean_saturation_penalty": f_mean_saturation_penalty.item(),
 				"v_mean_saturation_penalty": v_mean_saturation_penalty.item(),
 				"alpha_mag_fluid": alpha_mag_fluid.item(),
 				"alpha_mag_vaso": alpha_mag_vaso.item(),
@@ -1387,6 +1394,7 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		initial_alpha_mag=hyperparams.get('initial_alpha_mag', 5e-4),
 		alpha_mag_lr=hyperparams.get('alpha_mag_lr', 1e-3),
 
+		fluid_mean_reg_scale=hyperparams.get('fluid_mean_reg_scale', 0.05),
 		vaso_mean_reg_scale=hyperparams['vaso_mean_reg_scale'],
 
 		num_samples=hyperparams['num_samples'],

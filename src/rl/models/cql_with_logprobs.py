@@ -972,9 +972,14 @@ class CQL:
 		
 			actor_loss_gate_ent = gate_lp.mean()
 
-			f_gate_uncertainty_weight = (0.5 - (f_p - 0.5).abs()).clamp(min=0)
+			# Smooth weight: 1 at f_p=0.5, decaying smoothly toward (but never exactly
+			# reaching) 0 as f_p -> 0 or 1. Avoids a hard cutoff that creates an
+			# artificial population boundary (spike-plus-decay) at whatever threshold
+			# is chosen.
+			f_gate_uncertainty_weight = 4 * f_p * (1 - f_p)  # parabola: 1 at p=0.5, 0 at p=0 or p=1
 			f_mean_saturation_penalty = (f_gate_uncertainty_weight * f_raw_mean.pow(2)).mean()
-
+			
+			# For vaso, we use a more traditional approach with a tapering function
 			v_gate_uncertainty_weight = (0.5 - (v_p - 0.5).abs()).clamp(min=0)
 			v_mean_saturation_penalty = (v_gate_uncertainty_weight * v_raw_mean.pow(2)).mean()
 

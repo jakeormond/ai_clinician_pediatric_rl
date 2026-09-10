@@ -147,7 +147,8 @@ class Actor(nn.Module):
 	
 
 	def forward(self, state: torch.Tensor, deterministic: bool = False,
-			 return_dist=False, sigmoid_correction=True, hard_gate: bool = False):
+			 return_dist=False, sigmoid_correction=True, hard_gate: bool = False,
+			 return_components: bool = False) -> Tuple[torch.Tensor, torch.Tensor, typing.Optional[Dict[str, torch.Tensor]], typing.Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]]:
 		f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std = self._dists(state)
 		f_p = torch.sigmoid(f_gate_logit) 
 		v_p = torch.sigmoid(v_gate_logit)
@@ -189,6 +190,13 @@ class Actor(nn.Module):
 			gate_lp = (f_gate_lp + v_gate_lp).squeeze(-1)
 			mag_lp = (f_fire * f_mag_lp + v_fire * v_mag_lp).squeeze(-1)
 			log_prob = (f_gate_lp + f_fire * f_mag_lp + v_gate_lp + v_fire * v_mag_lp).squeeze(-1)
+
+			if return_components:
+				components = {
+					"f_fire": f_fire, "v_fire": v_fire,
+					"f_mag_lp": f_mag_lp, "v_mag_lp": v_mag_lp,
+				}
+
 		else:
 			f_mean_mag = torch.sigmoid(f_raw_mean)
 			v_mean_mag = torch.sigmoid(v_raw_mean)
@@ -200,12 +208,25 @@ class Actor(nn.Module):
 			gate_lp = None
 			mag_lp = None
 			log_prob = None
- 
-		if return_dist:
-			return actions, log_prob, (gate_lp, mag_lp), (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std)
- 
-		return actions, log_prob, (gate_lp, mag_lp)
 
+			if return_components:
+				raise ValueError(
+					"return_components=True is not supported with deterministic=True: "
+					"f_fire/v_fire/f_mag_lp/v_mag_lp are only meaningful for the "
+					"stochastic sampling path. Call with deterministic=False if you "
+					"need these components."
+				)
+
+		if return_dist:
+			result = (actions, log_prob, (gate_lp, mag_lp), (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std))
+		else:
+			result = (actions, log_prob, (gate_lp, mag_lp))
+
+		if return_components:
+			return result + (components,)
+		return result
+ 
+		
 
 	def log_prob_of_action(self, state: torch.Tensor, action: torch.Tensor, return_components=False) -> torch.Tensor:
 		"""
@@ -555,11 +576,13 @@ class CQL:
 		temp: float = 1.0,         # Temperature for the LogSumExp
 		num_samples: int = 10,   # How many random actions to sample for the penalty
 
-		# actor_loss_bc_scale: float = 2.0,  # Weight for the BC loss in the actor update
 		actor_loss_q_scale: float = 50.0,   # Weight for the Q loss in the actor update
-		# actor_loss_entropy_scale: float = 0.1, # Weight for the entropy loss in the actor update
-		actor_loss_gate_entropy_scale: float = 0.02, # Weight for the entropy loss in the actor update
-		actor_loss_mag_entropy_scale: float = 5.e-4, # Weight for the entropy loss in the actor update
+		actor_loss_gate_entropy_scale: float = 0.0, # Weight for the entropy loss in the actor update
+		# actor_loss_mag_entropy_scale: float = 5.e-4, # Weight for the entropy loss in the actor update		
+		target_std_fluid: float = 0.5,    # desired raw (pre-sigmoid) std for fluid magnitude
+		target_std_vaso: float = 0.5,     # desired raw (pre-sigmoid) std for vaso magnitude
+		initial_alpha_mag: float = 5e-4,  # starting value for the learned entropy-temperature
+		alpha_mag_lr: float = 1e-3,       # learning rate for the dual-variable optimizer
 		vaso_mean_reg_scale: float = 0.05,  # Weight for the vaso mean regularization term
 
 		device: str = "CUDA" if torch.cuda.is_available() else "CPU",
@@ -599,10 +622,9 @@ class CQL:
 
 		self.reward_type = reward_type  # can be 'terminal' or 'health_score'
 	
-		# self.actor_loss_bc_scale = actor_loss_bc_scale
 		self.actor_loss_q_scale = actor_loss_q_scale
 		self.actor_loss_gate_entropy_scale = actor_loss_gate_entropy_scale
-		self.actor_loss_mag_entropy_scale = actor_loss_mag_entropy_scale
+		# self.actor_loss_mag_entropy_scale = actor_loss_mag_entropy_scale
 		self.vaso_mean_reg_scale = vaso_mean_reg_scale
 
 		self.device = device
@@ -639,6 +661,22 @@ class CQL:
 		self.gate_temp_end = gate_temp_end       # e.g. 0.3
 		self.gate_temp_anneal_steps = total_steps //  2  # e.g. total_steps // 2
 
+		# --- automatic magnitude-entropy tuning (SAC-style dual variables) ---
+		# Target differential entropy for a Gaussian with the desired raw-space
+		# std: H = 0.5 * log(2*pi*e*sigma^2). Fixed constants, not learned.
+		self.target_entropy_mag_fluid = 0.5 * np.log(2 * np.pi * np.e * target_std_fluid ** 2)
+		self.target_entropy_mag_vaso = 0.5 * np.log(2 * np.pi * np.e * target_std_vaso ** 2)
+
+		self.log_alpha_mag_fluid = torch.tensor(
+			np.log(initial_alpha_mag), dtype=torch.float32, device=self.device, requires_grad=True
+		)
+		self.log_alpha_mag_vaso = torch.tensor(
+			np.log(initial_alpha_mag), dtype=torch.float32, device=self.device, requires_grad=True
+		)
+		self.alpha_mag_optimizer = torch.optim.Adam(
+			[self.log_alpha_mag_fluid, self.log_alpha_mag_vaso], lr=alpha_mag_lr
+		)
+
 
 	def _update_gate_temperature(self):
 		frac = min(1.0, self.total_it / self.gate_temp_anneal_steps)
@@ -654,7 +692,7 @@ class CQL:
 	# 	return actions.cpu().data.numpy().flatten()
 
 
-	def compute_actor_loss(self,pi: torch.Tensor, action: torch.Tensor, exp_weights: torch.Tensor) -> torch.Tensor:
+	def compute_actor_loss(self,pi: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
 		"""
 		Refined BC Loss for sparse clinical actions (Fluids/Vasopressors).
 		"""
@@ -902,9 +940,9 @@ class CQL:
 			self.actor.train() # Dropout ACTIVE for the network we are updating
 			
 			# Sample actions from the stochastic actor
-			pi, log_prob, (gate_lp, mag_lp), (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std) = self.actor(
+			pi, log_prob, (gate_lp, mag_lp), (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std), components = self.actor(
 				state, deterministic=False, return_dist=True, sigmoid_correction=False,
-				hard_gate=True
+				hard_gate=True, return_components=True
 			)
 			Q1_pi, Q2_pi = self.critic(state, pi)
 			Q_pi = torch.min(Q1_pi, Q2_pi)
@@ -929,35 +967,34 @@ class CQL:
 				beta = 1e-6
 
 			actor_loss_q = -Q_pi.mean() # we can also try just maximizing Q_pi directly without the weights, since the weights are mostly for interpretability and analysis of the advantage landscape
-
-			exp_weights = torch.exp(-raw_advantage / beta).detach()
-			exp_weights = torch.clamp(exp_weights, min=0.01, max=10.0)
-			
-			# BC Loss - compute actor loss using TrainerUtils function - the "anchor"
-			# actor_dict = self.compute_actor_loss(pi, action, exp_weights)
-			# actor_loss_bc = actor_dict['total_bc_loss'] # this is the combined BC loss that includes both the weighted MSE and the sparsity penalty
-			# losses.update(actor_dict) # add the actor_dict components to the losses dict for logging
-			
+		
 			actor_loss_gate_ent = gate_lp.mean()
-			actor_loss_mag_ent = mag_lp.mean()
-			# actor_loss_ent = log_prob.mean() 
 
-			# actor_loss = self.actor_loss_bc_scale * actor_loss_bc + \
-			# 	self.actor_loss_q_scale * actor_loss_q + \
-			# 		self.actor_loss_entropy_scale * actor_loss_ent  # combine the losses with a large weight on the Q loss to encourage improvement over the current policy
-			
-			# actor_loss = self.actor_loss_q_scale * actor_loss_q + \
-			# 		self.actor_loss_entropy_scale * actor_loss_ent  # combine the losses with a large weight on the Q loss to encourage improvement over the current policy
-			
 			v_gate_uncertainty_weight = (0.5 - (v_p - 0.5).abs()).clamp(min=0)
 			v_mean_saturation_penalty = (v_gate_uncertainty_weight * v_raw_mean.pow(2)).mean()
 
+			# --- per-drug magnitude entropy, masked mean over FIRED samples only ---
+			# (mag_lp is exactly 0 for non-fired samples via the fire-mask multiply,
+			# so a plain batch mean would dilute proportionally to firing rate --
+			# masking correctly reflects the actual conditional Gaussian's entropy.)
+			eps = 1e-6
+			f_fire_flat = components["f_fire"].squeeze(-1)
+			v_fire_flat = components["v_fire"].squeeze(-1)
+			f_mag_lp_flat = components["f_mag_lp"].squeeze(-1)
+			v_mag_lp_flat = components["v_mag_lp"].squeeze(-1)
+
+			f_mag_lp_mean = (f_fire_flat * f_mag_lp_flat).sum() / (f_fire_flat.sum() + eps)
+			v_mag_lp_mean = (v_fire_flat * v_mag_lp_flat).sum() / (v_fire_flat.sum() + eps)
+
+			alpha_mag_fluid = self.log_alpha_mag_fluid.exp().detach()
+			alpha_mag_vaso = self.log_alpha_mag_vaso.exp().detach()
 
 			actor_loss = (
-				self.actor_loss_q_scale * actor_loss_q + 
-				+ self.actor_loss_gate_entropy_scale * actor_loss_gate_ent 
-    			+ self.actor_loss_mag_entropy_scale * actor_loss_mag_ent
-				+ self.vaso_mean_reg_scale * v_mean_saturation_penalty
+				self.actor_loss_q_scale * actor_loss_q +
+				self.actor_loss_gate_entropy_scale * actor_loss_gate_ent +
+				alpha_mag_fluid * f_mag_lp_mean +
+				alpha_mag_vaso * v_mag_lp_mean +
+				self.vaso_mean_reg_scale * v_mean_saturation_penalty
 			)
 
 
@@ -966,15 +1003,28 @@ class CQL:
 				logging.info(
 					f"Iteration {self.total_it}: actor_loss_q={actor_loss_q.item():.4f}, \
 					actor_loss_gate_ent={actor_loss_gate_ent.item():.4f}, \
-					actor_loss_mag_ent={actor_loss_mag_ent.item():.4f}, \
 					raw_advantage_mean={raw_advantage.mean().item():.4f}")		 
+
+									
+			# Final combined update
+			self.actor_optimizer.zero_grad()
+			actor_loss.backward()
+
+			# --- update the learned entropy temperatures toward their target entropy ---
+			alpha_mag_fluid_loss = -(self.log_alpha_mag_fluid * (f_mag_lp_mean.detach() + self.target_entropy_mag_fluid))
+			alpha_mag_vaso_loss = -(self.log_alpha_mag_vaso * (v_mag_lp_mean.detach() + self.target_entropy_mag_vaso))
+			alpha_mag_loss = alpha_mag_fluid_loss + alpha_mag_vaso_loss
+
+			self.alpha_mag_optimizer.zero_grad()
+			alpha_mag_loss.backward()
+			self.alpha_mag_optimizer.step()
 
 			losses.update({
 				"actor_loss_total": actor_loss.item(),
 				"actor_loss_q": actor_loss_q.item(),
 				# "actor_loss_bc": actor_loss_bc.item(),
 				"fluid_fire_prob_mean": f_p.mean().item(),
-    			"fluid_hard_fire_rate": (f_p > 0.5).float().mean().item(),
+				"fluid_hard_fire_rate": (f_p > 0.5).float().mean().item(),
 				"vaso_fire_prob_mean": v_p.mean().item(),
 				"vaso_hard_fire_rate": (v_p > 0.5).float().mean().item(),
 				# "fluid_volume_loss": actor_dict['fluid_volume_loss'].item(),
@@ -989,15 +1039,15 @@ class CQL:
 				"vaso_std_std": v_std.std().item(),
 				"actor_raw_advantage_mean": raw_advantage.mean().item(),
 				"actor_loss_gate_ent": actor_loss_gate_ent.item(),
-				"actor_loss_mag_ent": actor_loss_mag_ent.item(),
 				"gate_temperature": current_gate_temp,
-				"v_mean_saturation_penalty": v_mean_saturation_penalty.item()
+				"v_mean_saturation_penalty": v_mean_saturation_penalty.item(),
+				"alpha_mag_fluid": alpha_mag_fluid.item(),
+				"alpha_mag_vaso": alpha_mag_vaso.item(),
+				"f_mag_lp_mean": f_mag_lp_mean.item(),
+				"v_mag_lp_mean": v_mag_lp_mean.item(),
+				"alpha_mag_loss": alpha_mag_loss.item(),
 			})
-						
-			# Final combined update
-			self.actor_optimizer.zero_grad()
-			actor_loss.backward()
-			
+
 			# clip actor gradients if specified
 			total_actor_grad_norm = self._get_grad_norm(self.actor)
 			grad_norm['actor_grad_norm'] = total_actor_grad_norm
@@ -1202,14 +1252,6 @@ class CQL:
 
 			actor_loss_q = -Q_pi.mean() # we can also try just maximizing Q_pi directly without the weights, since the weights are mostly for interpretability and analysis of the advantage landscape
 
-			exp_weights = torch.exp(-raw_advantage / beta).detach()
-			exp_weights = torch.clamp(exp_weights, min=0.01, max=10.0)
-			
-			# BC Loss - compute actor loss using TrainerUtils function - the "anchor"
-			# actor_dict = self.compute_actor_loss(pi, action, exp_weights)
-			# actor_loss_bc = actor_dict['total_bc_loss'] # this is the combined BC loss that includes both the weighted MSE and the sparsity penalty
-			# losses.update(actor_dict) # add the actor_dict components to the losses dict for logging
-
 				
 			# ADD THIS LINE:
 			neuron_stats = self.critic.get_neuron_stats(state, action)
@@ -1243,8 +1285,10 @@ class CQL:
 			"critic": self.critic.state_dict(),
 			"critic_optimizer": self.critic_optimizer.state_dict(),
 			"actor_target": self.actor_target.state_dict(),
-			"critic_target": self.critic_target.state_dict()
-			
+			"critic_target": self.critic_target.state_dict(),
+			"log_alpha_mag_fluid": self.log_alpha_mag_fluid.detach().cpu(),
+			"log_alpha_mag_vaso": self.log_alpha_mag_vaso.detach().cpu(),
+			"alpha_mag_optimizer": self.alpha_mag_optimizer.state_dict(),			
 		}
 
 
@@ -1337,7 +1381,11 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		actor_loss_q_scale=hyperparams['actor_loss_q_scale'],
 		# actor_loss_entropy_scale=hyperparams['actor_loss_entropy_scale'],
 		actor_loss_gate_entropy_scale=hyperparams['actor_loss_gate_entropy_scale'],
-		actor_loss_mag_entropy_scale=hyperparams['actor_loss_mag_entropy_scale'],
+
+		target_std_fluid=hyperparams.get('target_std_fluid', 0.6721),
+		target_std_vaso=hyperparams.get('target_std_vaso', 0.6342),
+		initial_alpha_mag=hyperparams.get('initial_alpha_mag', 5e-4),
+		alpha_mag_lr=hyperparams.get('alpha_mag_lr', 1e-3),
 
 		vaso_mean_reg_scale=hyperparams['vaso_mean_reg_scale'],
 

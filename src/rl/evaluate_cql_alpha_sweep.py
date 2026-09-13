@@ -95,11 +95,52 @@ def get_model_dirs(base_dir):
     return model_dirs      
 
  
-def get_actor_actions(model_entry, processor, batch_size=1024, device="cuda" if torch.cuda.is_available() else "cpu"):
+def get_actor_actions(model_entry, processor, batch_size=1024, device="cuda" if torch.cuda.is_available() else "cpu",
+                       stochastic=False):
+    """
+    stochastic=False (default): uses generate_model_outputs's existing
+        deterministic actor call (unchanged behavior).
+    stochastic=True: samples actions the same way the actor was TRAINED
+        (rsample() through the actor loss, hard_gate=True), rather than the
+        deterministic mean/hard-threshold action used elsewhere. Use this to
+        check whether a negative own-critic advantage under deterministic
+        evaluation is an artifact of evaluating a stochastically-trained
+        policy at a point (its deterministic mean) training never directly
+        optimized, rather than a real training problem.
+    """
     actor = model_entry[0] if isinstance(model_entry, (list, tuple)) else model_entry
-    return generate_model_outputs(
-        processor, model=actor, model_type="actor", batch_size=batch_size, device=device
-    )
+
+    if not stochastic:
+        return generate_model_outputs(
+            processor, model=actor, model_type="actor", batch_size=batch_size, device=device
+        )
+
+    # --- stochastic path: replicate generate_model_outputs' trajectory-batching
+    # loop, but sample via deterministic=False, hard_gate=True (matching how
+    # curr_actions/pi are sampled during actual actor training) ---
+    actor.eval()
+    traj_end_inds = np.where(processor.rl_dataset["dones"] == 1)[0]
+    traj_start_inds = np.concatenate(([0], traj_end_inds + 1))
+    stay_ids = processor.dynamic_deephit_dataset["stay_ids"]
+
+    n_total = processor.rl_dataset["states"].shape[0]
+    action_dim = processor.rl_dataset["actions"].shape[1]
+    actions_all = torch.zeros(n_total, action_dim, dtype=torch.float32).to(device)
+
+    for stay_id in stay_ids:
+        stay_idx = np.where(stay_ids == stay_id)[0][0]
+        start, end = traj_start_inds[stay_idx], traj_start_inds[stay_idx + 1]
+        states = torch.as_tensor(processor.rl_dataset["states"][start:end], dtype=torch.float32).to(device)
+
+        n_batches = int(np.ceil(states.shape[0] / batch_size))
+        for i in range(n_batches):
+            s, e = i * batch_size, min((i + 1) * batch_size, states.shape[0])
+            states_batch = states[s:e]
+            with torch.no_grad():
+                sampled_actions, _, _ = actor(states_batch, deterministic=False, hard_gate=True)
+            actions_all[start + s:start + e] = sampled_actions
+
+    return actions_all
  
  
 def get_critic(model_entry):
@@ -129,6 +170,7 @@ def _iqr_normalize(values, reference_q):
 def compute_model_advantage(
         model_entry, processor, sarsa_models,
         batch_size=1024, device="cuda" if torch.cuda.is_available() else "cpu",
+        stochastic=False,
     ):
     """
     Returns a dict with both RAW and IQR-NORMALIZED advantage:
@@ -147,7 +189,7 @@ def compute_model_advantage(
     """
     own_critic = get_critic(model_entry)
  
-    actor_actions = get_actor_actions(model_entry, processor, batch_size=batch_size, device=device)
+    actor_actions = get_actor_actions(model_entry, processor, batch_size=batch_size, device=device, stochastic=stochastic)
  
     q_own_clinician = generate_model_outputs(
         processor, model=own_critic, actions_to_use=None, model_type="critic",
@@ -214,45 +256,28 @@ def compute_occupancy_support_of_actions(
     return (counts >= min_count).mean(), counts
  
 
-def compute_occupancy_support_of_actions(
-        actions, test_health_score, training_actions, training_health_score,
-        n_severity_bins=20, n_action_bins=10, min_count=10,
-    ):
-    """
-    Fraction of timesteps where the actor's ACTUAL chosen (fluid, vaso)
-    combination, given that timestep's own severity bin, was well-supported
-    (count >= min_count) in the training data.
-    """
-    joint_counts, severity_edges, fluid_edges, vaso_edges = build_joint_state_action_occupancy_counts(
-        training_health_score, training_actions, n_severity_bins=n_severity_bins, n_action_bins=n_action_bins
-    )
-    actions_np = actions.cpu().numpy() if torch.is_tensor(actions) else np.asarray(actions)
-    hs_np = test_health_score.cpu().numpy() if torch.is_tensor(test_health_score) else np.asarray(test_health_score)
- 
-    sev_bin = _bin_index(hs_np, severity_edges)
-    fluid_bin = _bin_index(actions_np[:, 0], fluid_edges)
-    vaso_bin = _bin_index(actions_np[:, 1], vaso_edges)
-    counts = joint_counts[sev_bin, fluid_bin, vaso_bin]
- 
-    return (counts >= min_count).mean(), counts
- 
-
 def run_alpha_sweep_analysis(
         cql_models_by_alpha,   # dict: {alpha_value: model_entry}
         processor, sarsa_models,
         val_health_score, training_actions, training_health_score,
         n_severity_bins=20, n_action_bins=10, min_count=10,
+        stochastic=False,
         save_path=None,
     ):
+    """
+    stochastic: if True, evaluates advantage using stochastic action samples
+        (matching training) instead of the deterministic mean action -- see
+        compute_model_advantage / get_actor_actions for why this matters.
+    """
     alphas = sorted(cql_models_by_alpha.keys())
     results = {}
  
     for alpha in alphas:
         t0 = time.time()
-        print(f"=== alpha={alpha} ===", flush=True)
+        print(f"=== alpha={alpha} ({'stochastic' if stochastic else 'deterministic'} eval) ===", flush=True)
         model_entry = cql_models_by_alpha[alpha]
  
-        adv = compute_model_advantage(model_entry, processor, sarsa_models)
+        adv = compute_model_advantage(model_entry, processor, sarsa_models, stochastic=stochastic)
         occ_frac, _ = compute_occupancy_support_of_actions(
             adv["actor_actions"], val_health_score, training_actions, training_health_score,
             n_severity_bins=n_severity_bins, n_action_bins=n_action_bins, min_count=min_count,
@@ -458,5 +483,3 @@ def plot_combined_alpha_sweep(results, title="", save_path=None, mark_knee=True,
         print(f"Saved to {save_path}")
  
     return fig
- 
- 

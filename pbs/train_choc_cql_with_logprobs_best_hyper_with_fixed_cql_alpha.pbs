@@ -69,7 +69,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --mode single_split \
     --split_num 0 \
     --search_variant best_hyperparameters_fixed_cql_alpha \
-    --cql_alpha 0.006 \
+    --cql_alpha 0.022 \
     --seeds "0" "1" "2" "3" "4" \
     --n_epochs 400 \
     --action_mode continuous_only \

@@ -190,23 +190,38 @@ if __name__ == "__main__":
     plot_std_by_alpha(results_std_term, save_path="std_by_alpha_terminal.png")
 
 
-def plot_std_distributions_by_seed(models_by_seed, processor, save_path=None):
+def plot_std_distributions_by_seed(models_by_seed, processor, floor_tol=1e-3, ceiling_tol=1e-2, save_path=None):
     """
     Violin plot of f_std / v_std distributions, one violin per seed, for
     the final fixed-alpha 5-seed models -- a fuller check than the
     floor/ceiling percentages alone: shows the actual shape of each seed's
     std distribution (e.g. genuinely bimodal vs. a single well-behaved
     mode), and whether that shape is consistent across seeds.
+
+    Also prints full summary stats (mean/std/min/max/median/floor%/ceiling%)
+    per seed per drug, so results can be shared/discussed as text.
     """
     import matplotlib.pyplot as plt
 
     n_seeds = len(models_by_seed)
     f_std_by_seed, v_std_by_seed = [], []
 
-    for model_entry in models_by_seed:
+    print(f"Floor std = {FLOOR_STD:.4f}, Ceiling std = {CEILING_STD:.4f}\n")
+    print(f"{'Seed':<8}{'Drug':<8}{'mean':>8}{'std':>8}{'min':>8}{'max':>8}{'median':>8}{'%floor':>9}{'%ceil':>8}")
+    print("-" * 71)
+
+    for seed_idx, model_entry in enumerate(models_by_seed):
         f_std, v_std = get_both_std(model_entry, processor)
         f_std_by_seed.append(f_std)
         v_std_by_seed.append(v_std)
+
+        for drug, vals in [("Fluid", f_std), ("Vaso", v_std)]:
+            pct_floor = (np.abs(vals - FLOOR_STD) < floor_tol).mean() * 100
+            pct_ceiling = (np.abs(vals - CEILING_STD) < ceiling_tol).mean() * 100
+            print(f"{seed_idx+1:<8}{drug:<8}{vals.mean():>8.4f}{vals.std():>8.4f}"
+                  f"{vals.min():>8.4f}{vals.max():>8.4f}{np.median(vals):>8.4f}"
+                  f"{pct_floor:>8.1f}%{pct_ceiling:>7.1f}%")
+    print()
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
@@ -236,3 +251,44 @@ def plot_std_distributions_by_seed(models_by_seed, processor, save_path=None):
 
     plt.close(fig)
     return fig
+
+
+def check_std_dose_cooccurrence(model_entry, processor, ceiling_tol=1e-2, dose_threshold=0.9, dim=0):
+    """
+    Tests whether states with ceiling-saturated magnitude std ALSO show
+    dose values in the extreme (near-1.0) spike -- i.e. whether std
+    saturation and dose saturation are two symptoms of the same underlying
+    states, rather than independent phenomena.
+
+    dim: 0=fluid, 1=vaso (whichever this model_entry's known pathology concerns)
+
+    Prints: fraction of ceiling-std states that are ALSO high-dose states,
+    and fraction of high-dose states that are ALSO ceiling-std states --
+    if both are high, that confirms strong co-occurrence.
+    """
+    f_std, v_std = get_both_std(model_entry, processor)
+    std = f_std if dim == 0 else v_std
+
+    actor = model_entry[0] if isinstance(model_entry, (list, tuple)) else model_entry
+    # deterministic dose, matching how the actor's evaluated elsewhere
+    from src.rl.evaluate_terminal_reward_models import generate_model_outputs
+    actions = generate_model_outputs(processor, model=actor, model_type="actor")
+    actions_np = actions.cpu().numpy() if torch.is_tensor(actions) else np.asarray(actions)
+    dose = actions_np[:, dim]
+
+    ceiling_mask = np.abs(std - CEILING_STD) < ceiling_tol
+    high_dose_mask = dose > dose_threshold
+
+    n_ceiling = ceiling_mask.sum()
+    n_high_dose = high_dose_mask.sum()
+    n_both = (ceiling_mask & high_dose_mask).sum()
+
+    print(f"Ceiling-std states: {n_ceiling} ({n_ceiling/len(std)*100:.2f}% of all states)")
+    print(f"High-dose (>{dose_threshold}) states: {n_high_dose} ({n_high_dose/len(dose)*100:.2f}% of all states)")
+    print(f"States that are BOTH: {n_both}")
+    print(f"  Fraction of ceiling-std states that are ALSO high-dose: "
+          f"{n_both/n_ceiling*100:.1f}%" if n_ceiling > 0 else "  (no ceiling-std states)")
+    print(f"  Fraction of high-dose states that are ALSO ceiling-std: "
+          f"{n_both/n_high_dose*100:.1f}%" if n_high_dose > 0 else "  (no high-dose states)")
+
+    return ceiling_mask, high_dose_mask

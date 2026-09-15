@@ -39,6 +39,9 @@
     # validation loss
     loss_metric: "actor_loss"  # Which metric to use for validation loss
 
+    fluid_mean_reg_scale: [0., 0.02, 0.05, 0.1]
+    vaso_mean_reg_scale: [0., 0.02, 0.05, 0.1]
+
     # gradient clipping
     grad_clip: 1.0
 

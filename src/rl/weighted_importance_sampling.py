@@ -18,7 +18,7 @@ from .models.cql_with_logprobs import Actor as CQL_with_logprobs_Actor
 from .models.iql import Actor as IQLActor
 from .models.iql import Critic as IQLCritic
 from .models.iql import ValueNetwork as IQLValue
-from .models.bc_with_logprobs import Actor as BCActor
+from .models.bc_with_logprobs_v2 import Actor as BCActor
 from .training import create_processor_from_shards
 from .replay_buffer import RLDataset
 from torch.utils.data import DataLoader, TensorDataset

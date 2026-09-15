@@ -17,9 +17,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 """
-Gemini is suggesting training only the Actor for first 1000 steps, claims this can allow can prevent the policy
-from "overreacting" to initial, noisy Critic estimates. 
-
 Claude: Hurdle-model changes to Actor + BC.
  
 Core idea: instead of one squashed Gaussian per action trying to represent
@@ -33,6 +30,18 @@ This stops the ~96%-zero vaso targets (and ~55%-zero fluid targets) from
 dragging the magnitude mean/std toward the zero cluster. It also fixes the
 std-floor bug: the old log_std bias (-2.25) sat outside the clamp range
 [-2, 1], so torch.clamp zeroed its gradient from step 0. Fixed below.
+
+UPDATE: ported CQL's magnitude entropy-tuning (SAC-style dual variables,
+targeting each drug's real-data-derived raw-space std) and mean-saturation
+regularization (smooth 4p(1-p)-weighted penalty on f_raw_mean/v_raw_mean)
+into this BC actor. BC's pure MLE objective (-log_prob.mean()) has nothing
+discouraging std from collapsing toward the floor to minimize NLL on
+tightly-clustered real doses, or discouraging f_raw_mean/v_raw_mean from
+drifting to extreme values -- both failure modes CQL's actor showed and
+were fixed there; BC was equally exposed and unfixed until now. This
+matters specifically because CQL's log_prob_for_wis() borrows BC's fitted
+std directly as the WIS bandwidth, so a collapsed/miscalibrated BC std
+would bias importance weights for the eventual WIS-based OPE.
 """
 
 
@@ -247,6 +256,13 @@ class BC:
 		grad_clip: float = None,  # Add grad_clip argument
 		ema_alpha: float = 0.99,  # Add ema_alpha argument for moving
 
+		# --- entropy-tuning + mean-saturation regularization, ported from CQL ---
+		target_std_fluid: float = 0.6721,   # real-data-derived raw-space std (nonzero fluid doses, training set)
+		target_std_vaso: float = 0.6342,    # real-data-derived raw-space std (nonzero vaso doses, training set)
+		initial_alpha_mag: float = 5e-4,    # starting value for the learned entropy-temperature
+		alpha_mag_lr: float = 1e-3,         # learning rate for the dual-variable optimizer
+		fluid_mean_reg_scale: float = 0.05, # weight for the fluid mean-saturation regularization term
+		vaso_mean_reg_scale: float = 0.05,  # weight for the vaso mean-saturation regularization term
 
 	):
 		
@@ -262,6 +278,9 @@ class BC:
 		self.binary_actions = binary_actions
 		self.grad_clip = grad_clip		
 
+		self.fluid_mean_reg_scale = fluid_mean_reg_scale
+		self.vaso_mean_reg_scale = vaso_mean_reg_scale
+
 		# for calculating moving average of gradient clipping binary
 		self.actor_clip_fraction_ema = 0.0
 		self.ema_alpha = ema_alpha # Closer to 1.0 means more smoothing
@@ -269,6 +288,27 @@ class BC:
 		self.total_it = 0
 
 		self.utils = TrainerUtils()
+
+		# --- automatic magnitude-entropy tuning (SAC-style dual variables), ported
+		# from CQL. BC has no sampling step (log_prob_of_action is pure MLE against
+		# real actions), so rather than an entropy bonus on sampled log-probs, we
+		# target the FITTED Gaussian's own closed-form differential entropy
+		# directly -- equivalent in spirit, lower-variance since it needs no
+		# sampling, and appropriate for an MLE objective that otherwise has
+		# nothing discouraging it from collapsing std toward the floor to
+		# minimize NLL on tightly-clustered real doses.
+		self.target_entropy_mag_fluid = 0.5 * np.log(2 * np.pi * np.e * target_std_fluid ** 2)
+		self.target_entropy_mag_vaso = 0.5 * np.log(2 * np.pi * np.e * target_std_vaso ** 2)
+
+		self.log_alpha_mag_fluid = torch.tensor(
+			np.log(initial_alpha_mag), dtype=torch.float32, device=self.device, requires_grad=True
+		)
+		self.log_alpha_mag_vaso = torch.tensor(
+			np.log(initial_alpha_mag), dtype=torch.float32, device=self.device, requires_grad=True
+		)
+		self.alpha_mag_optimizer = torch.optim.Adam(
+			[self.log_alpha_mag_fluid, self.log_alpha_mag_vaso], lr=alpha_mag_lr
+		)
 
 		
 	def select_action(self, state):
@@ -290,9 +330,59 @@ class BC:
 		# Sample actions from the stochastic actor
 		log_prob, components = self.actor.log_prob_of_action(state, action, return_components=True) # log probability of the action taken by the doctor under the current policy
 		
-		actor_loss = -log_prob.mean() # negative log likelihood of the action taken by the doctor under the current policy
+		nll_loss = -log_prob.mean() # negative log likelihood of the action taken by the doctor under the current policy
+
+		# --- mean-saturation regularization (ported from CQL) ---
+		# needs f_p/v_p and f_raw_mean/v_raw_mean/f_std/v_std directly --
+		# log_prob_of_action's components dict doesn't expose these, so pull
+		# via _dists (cheap: same trunk forward pass already done internally,
+		# this is a second, small call rather than changing log_prob_of_action's
+		# signature/return).
+		f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std = self.actor._dists(state)
+		f_p = torch.sigmoid(f_gate_logit)
+		v_p = torch.sigmoid(v_gate_logit)
+
+		f_gate_uncertainty_weight = 4 * f_p * (1 - f_p)  # smooth parabola: 1 at p=0.5, 0 at p=0 or 1
+		v_gate_uncertainty_weight = 4 * v_p * (1 - v_p)
+		f_mean_saturation_penalty = (f_gate_uncertainty_weight * f_raw_mean.pow(2)).mean()
+		v_mean_saturation_penalty = (v_gate_uncertainty_weight * v_raw_mean.pow(2)).mean()
+
+		# --- magnitude entropy bonus, targeting the FITTED distribution's own
+		# closed-form entropy (no sampling needed): H = 0.5*log(2*pi*e*std^2),
+		# computed ONLY over states where that drug was actually fired
+		# (matching how f_mag_lp/v_mag_lp are already masked above) ---
+		f_fired = components["fluid_fired"]
+		v_fired = components["vaso_fired"]
+		eps = 1e-6
+
+		f_entropy_per_state = 0.5 * torch.log(2 * np.pi * np.e * f_std.squeeze(-1).pow(2) + eps)
+		v_entropy_per_state = 0.5 * torch.log(2 * np.pi * np.e * v_std.squeeze(-1).pow(2) + eps)
+		f_entropy_mean = (f_fired * f_entropy_per_state).sum() / (f_fired.sum() + eps)
+		v_entropy_mean = (v_fired * v_entropy_per_state).sum() / (v_fired.sum() + eps)
+
+		alpha_mag_fluid = self.log_alpha_mag_fluid.exp().detach()
+		alpha_mag_vaso = self.log_alpha_mag_vaso.exp().detach()
+
+		# entropy terms are SUBTRACTED (not added): we want to REWARD higher
+		# entropy, i.e. minimize -alpha*entropy -- standard sign convention
+		# for "encourage higher entropy toward a target".
+		actor_loss = (
+			nll_loss
+			- alpha_mag_fluid * f_entropy_mean
+			- alpha_mag_vaso * v_entropy_mean
+			+ self.fluid_mean_reg_scale * f_mean_saturation_penalty
+			+ self.vaso_mean_reg_scale * v_mean_saturation_penalty
+		)
+
 		losses = {
 			"actor_loss": actor_loss.item(),
+			"nll_loss": nll_loss.item(),
+			"f_entropy_mean": f_entropy_mean.item(),
+			"v_entropy_mean": v_entropy_mean.item(),
+			"alpha_mag_fluid": alpha_mag_fluid.item(),
+			"alpha_mag_vaso": alpha_mag_vaso.item(),
+			"f_mean_saturation_penalty": f_mean_saturation_penalty.item(),
+			"v_mean_saturation_penalty": v_mean_saturation_penalty.item(),
 		}
 
 		self.actor_optimizer.zero_grad()
@@ -316,6 +406,19 @@ class BC:
 				self.grad_clip
 			)
 		self.actor_optimizer.step()
+
+		# --- update the learned entropy temperatures toward their target entropy ---
+		# (uses detached f_entropy_mean/v_entropy_mean computed above, so this is
+		# independent of the actor's own graph/backward call, same as CQL's pattern)
+		alpha_mag_fluid_loss = self.log_alpha_mag_fluid * (f_entropy_mean.detach() - self.target_entropy_mag_fluid)
+		alpha_mag_vaso_loss = self.log_alpha_mag_vaso * (v_entropy_mean.detach() - self.target_entropy_mag_vaso)
+		alpha_mag_loss = alpha_mag_fluid_loss + alpha_mag_vaso_loss
+
+		self.alpha_mag_optimizer.zero_grad()
+		alpha_mag_loss.backward()
+		self.alpha_mag_optimizer.step()
+		losses["alpha_mag_loss"] = alpha_mag_loss.item()
+
 		if self.actor_scheduler is not None:
 			self.actor_scheduler.step()
 			# log_dict.update(lr_actor=self.actor_optimizer.param_groups[0]['lr'])
@@ -418,9 +521,43 @@ class BC:
 			# Sample actions from the stochastic actor
 			log_prob, components = self.actor.log_prob_of_action(state, action, return_components=True) # log probability of the action taken by the doctor under the current policy
 			
-			actor_loss = -log_prob.mean() # negative log likelihood of the action taken by the doctor under the current policy
+			nll_loss = -log_prob.mean() # negative log likelihood of the action taken by the doctor under the current policy
+
+			f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std = self.actor._dists(state)
+			f_p = torch.sigmoid(f_gate_logit)
+			v_p = torch.sigmoid(v_gate_logit)
+
+			f_gate_uncertainty_weight = 4 * f_p * (1 - f_p)
+			v_gate_uncertainty_weight = 4 * v_p * (1 - v_p)
+			f_mean_saturation_penalty = (f_gate_uncertainty_weight * f_raw_mean.pow(2)).mean()
+			v_mean_saturation_penalty = (v_gate_uncertainty_weight * v_raw_mean.pow(2)).mean()
+
+			f_fired_c = components["fluid_fired"]
+			v_fired_c = components["vaso_fired"]
+			eps = 1e-6
+			f_entropy_per_state = 0.5 * torch.log(2 * np.pi * np.e * f_std.squeeze(-1).pow(2) + eps)
+			v_entropy_per_state = 0.5 * torch.log(2 * np.pi * np.e * v_std.squeeze(-1).pow(2) + eps)
+			f_entropy_mean = (f_fired_c * f_entropy_per_state).sum() / (f_fired_c.sum() + eps)
+			v_entropy_mean = (v_fired_c * v_entropy_per_state).sum() / (v_fired_c.sum() + eps)
+
+			alpha_mag_fluid = self.log_alpha_mag_fluid.exp().detach()
+			alpha_mag_vaso = self.log_alpha_mag_vaso.exp().detach()
+
+			actor_loss = (
+				nll_loss
+				- alpha_mag_fluid * f_entropy_mean
+				- alpha_mag_vaso * v_entropy_mean
+				+ self.fluid_mean_reg_scale * f_mean_saturation_penalty
+				+ self.vaso_mean_reg_scale * v_mean_saturation_penalty
+			)
+
 			losses = {
 				"actor_loss": actor_loss.item(),
+				"nll_loss": nll_loss.item(),
+				"f_entropy_mean": f_entropy_mean.item(),
+				"v_entropy_mean": v_entropy_mean.item(),
+				"f_mean_saturation_penalty": f_mean_saturation_penalty.item(),
+				"v_mean_saturation_penalty": v_mean_saturation_penalty.item(),
 			}
 			
 			# ADD THIS LINE:
@@ -493,7 +630,10 @@ class BC:
 	def state_dict(self) -> Dict[str, torch.Tensor]:
 		return {
 			"actor": self.actor.state_dict(),
-			"actor_optimizer": self.actor_optimizer.state_dict(),			
+			"actor_optimizer": self.actor_optimizer.state_dict(),
+			"log_alpha_mag_fluid": self.log_alpha_mag_fluid.detach().cpu(),
+			"log_alpha_mag_vaso": self.log_alpha_mag_vaso.detach().cpu(),
+			"alpha_mag_optimizer": self.alpha_mag_optimizer.state_dict(),
 		}
 
 
@@ -542,6 +682,13 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		device=config_manager.training_config['device'],
 		action_mode=config_manager.action_mode,
 		grad_clip=hyperparams['grad_clip'],
+
+		target_std_fluid=hyperparams.get('target_std_fluid', 0.6721),
+		target_std_vaso=hyperparams.get('target_std_vaso', 0.6342),
+		initial_alpha_mag=hyperparams.get('initial_alpha_mag', 5e-4),
+		alpha_mag_lr=hyperparams.get('alpha_mag_lr', 1e-3),
+		fluid_mean_reg_scale=hyperparams['fluid_mean_reg_scale'],
+    	vaso_mean_reg_scale=hyperparams['vaso_mean_reg_scale'],
 	)
 
 	return trainer

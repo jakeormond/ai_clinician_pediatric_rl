@@ -425,6 +425,15 @@ def compute_extended_shape_data(
         vertex_full[quad["timestep_idx"]] = quad["vertex_location"]
         curvature_full[quad["timestep_idx"]] = quad["curvature_a"]
 
+        # rho (Spearman correlation) is defined for EVERY state (it's what
+        # classify_dose_response_shapes uses to decide increasing/decreasing/
+        # flat/non-monotonic in the first place), unlike R^2 which only
+        # exists for the non-monotonic subset -- so this is a full-length
+        # array, no index-mapping needed. NOTE: assumes shapes["rho"] is the
+        # correct key -- check against your actual classify_dose_response_shapes
+        # return dict and adjust the key name below if it differs.
+        rho_full = shapes["rho"] if "rho" in shapes else np.full(n_total, np.nan)
+
         occupancy_count_vertex = np.full(n_total, np.nan)
         has_interior_vertex = ~np.isnan(vertex_full)
         if has_interior_vertex.sum() > 0:
@@ -438,6 +447,7 @@ def compute_extended_shape_data(
             "category": category,
             "health_score": hs_np_shared,
             "r2_full": r2_full,
+            "rho_full": rho_full,
             "vertex_location_full": vertex_full,
             "curvature_a_full": curvature_full,
             "occupancy_count_real_action": occupancy_at_real_action,
@@ -595,26 +605,61 @@ def lightweight_dose_sweep(critic, states, real_actions, sweep_dim=0, n_grid=20,
     return grid.numpy(), q_at_grid.numpy()
 
 
-def select_example_states(per_seed_data, seed_idx, n_per_category=3, seed=0):
+def _order_by_selection(values, selection):
+    """Shared ranking logic for both r2_selection and rho_selection."""
+    if selection == "max":
+        return np.argsort(-values)
+    elif selection in ("median", "mean"):
+        target = np.median(values) if selection == "median" else np.mean(values)
+        return np.argsort(np.abs(values - target))
+    else:
+        raise ValueError(f"Unknown selection='{selection}', use 'max', 'median', or 'mean'")
+
+
+def select_example_states(per_seed_data, seed_idx, n_per_category=3, seed=0,
+                            r2_selection="max", rho_selection="max"):
     """
     Picks representative example state indices per category, from one
     seed's classification results:
-      - Concave/Convex: highest R^2 (cleanest, most unambiguous fit)
-      - Increasing/Decreasing/Flat: random sample (no fit-quality metric
-        available for these categories)
+      - Concave/Convex: selected by R^2 (quadratic fit quality), per
+        r2_selection ("max" = cleanest fit, "median"/"mean" = typical).
+      - Increasing/Decreasing: selected by |rho| (Spearman correlation
+        strength -- how cleanly monotonic the trend is), per
+        rho_selection, using the same "max"/"median"/"mean" semantics.
+      - Flat: random sample -- no analogous "strength" metric applies to
+        a flat classification (it's defined by total variation being
+        small, not by a correlation/fit-quality score), so this category
+        is unaffected by either selection parameter and always draws
+        randomly.
     """
     data = per_seed_data[seed_idx]
     category = data["category"]
     r2 = data["r2_full"]
+    rho = data.get("rho_full")
     rng = np.random.default_rng(seed)
 
     examples = {}
     for cat in ["Concave (inverted-U)", "Convex (U-shaped)"]:
         idx = np.where(category == cat)[0]
-        idx_sorted = idx[np.argsort(-r2[idx])]
-        examples[cat] = idx_sorted[:n_per_category]
+        order = _order_by_selection(r2[idx], r2_selection)
+        examples[cat] = idx[order][:n_per_category]
 
-    for cat in ["Increasing", "Decreasing", "Flat"]:
+    if rho is not None:
+        for cat in ["Increasing", "Decreasing"]:
+            idx = np.where(category == cat)[0]
+            order = _order_by_selection(np.abs(rho[idx]), rho_selection)
+            examples[cat] = idx[order][:n_per_category]
+    else:
+        # rho_full not present (e.g. data computed before this field was
+        # added) -- fall back to random, same as Flat, and say so once.
+        print("Note: 'rho_full' not found in per_seed_data -- Increasing/Decreasing "
+              "will be selected randomly. Re-run compute_extended_shape_data to enable rho-based selection.")
+        for cat in ["Increasing", "Decreasing"]:
+            idx = np.where(category == cat)[0]
+            n = min(n_per_category, len(idx))
+            examples[cat] = rng.choice(idx, size=n, replace=False) if n > 0 else np.array([], dtype=int)
+
+    for cat in ["Flat"]:
         idx = np.where(category == cat)[0]
         n = min(n_per_category, len(idx))
         examples[cat] = rng.choice(idx, size=n, replace=False) if n > 0 else np.array([], dtype=int)
@@ -627,7 +672,7 @@ def plot_example_dose_response_curves(
         training_actions, training_health_score,
         sweep_dim=0, example_seed=0, y_padding_frac=0.1,
         n_severity_bins=20, n_action_bins=10, min_count=10,
-        save_path=None,
+        r2_selection="max", rho_selection="max", save_path=None,
     ):
     """
     Pulls ONE example Q(fluid dose) curve per shape category and plots it,
@@ -641,7 +686,10 @@ def plot_example_dose_response_curves(
     the training set, not just this one state's own single real dose.
     """
     critic = get_cql_critic(model_entry)
-    examples = select_example_states(per_seed_data, seed_idx, n_per_category=1, seed=example_seed)
+    examples = select_example_states(per_seed_data, seed_idx, n_per_category=1, seed=example_seed,
+                                      r2_selection=r2_selection, rho_selection=rho_selection)
+    r2_full = per_seed_data[seed_idx]["r2_full"]
+    rho_full = per_seed_data[seed_idx].get("rho_full")
 
     states_all = processor.rl_dataset["states"]
     clinician_actions_np = clinician_actions.cpu().numpy() if torch.is_tensor(clinician_actions) else np.asarray(clinician_actions)
@@ -725,7 +773,13 @@ def plot_example_dose_response_curves(
         ax2.tick_params(axis="y", labelsize=7, colors="grey")
         ax2.spines[["top"]].set_visible(False)
 
-        ax.plot(grid, curve, color=color, linewidth=2.2, zorder=5)
+        # The "curve" is not a fit -- it's the literal Q values computed at
+        # each of the 20 swept dose grid points, connected by straight line
+        # segments. Marking each grid point explicitly makes this clear
+        # rather than implying a smooth, continuously-evaluated function.
+        ax.plot(grid, curve, color=color, linewidth=1.8, zorder=5)
+        ax.scatter(grid, curve, color=color, s=28, marker="D", edgecolors="black",
+                   linewidths=0.5, zorder=6, label="Swept dose grid points" if cat == "Increasing" else None)
         ax.set_zorder(ax2.get_zorder() + 1)   # keep the Q curve's axis (and its interactivity) drawn on top
         ax.patch.set_visible(False)           # let the histogram show through the now-transparent curve axis background
 
@@ -735,7 +789,12 @@ def plot_example_dose_response_curves(
         ax.set_xlabel("Fluid dose")
         if cat == "Increasing":
             ax.set_ylabel("Q value")
-        ax.set_title(f"{cat}\n(HS={health_score[state_idx]:.0f})", fontsize=10, fontweight="bold")
+        title = f"{cat}\n(HS={health_score[state_idx]:.0f})"
+        if not np.isnan(r2_full[state_idx]):
+            title += f", R\u00b2={r2_full[state_idx]:.2f}"
+        if rho_full is not None and not np.isnan(rho_full[state_idx]):
+            title += f", \u03c1={rho_full[state_idx]:.2f}"
+        ax.set_title(title, fontsize=10, fontweight="bold")
         ax.spines[["top"]].set_visible(False)
 
     fig.suptitle("Example fluid dose-response curves by shape category\n"

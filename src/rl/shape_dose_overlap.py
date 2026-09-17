@@ -793,7 +793,7 @@ def plot_example_dose_response_curves(
         if not np.isnan(r2_full[state_idx]):
             title += f", R\u00b2={r2_full[state_idx]:.2f}"
         if rho_full is not None and not np.isnan(rho_full[state_idx]):
-            title += f", \u03c1={rho_full[state_idx]:.2f}"
+            title += f", \u03c1={rho_full[state_idx]:.4f}"
         ax.set_title(title, fontsize=10, fontweight="bold")
         ax.spines[["top"]].set_visible(False)
 

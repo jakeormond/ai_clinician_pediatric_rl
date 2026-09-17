@@ -10,6 +10,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
 from sklearn.metrics import roc_auc_score
+import pandas as pd
+import pickle
+import math
 
 from .shared_components import TrainerUtils # Actor, MixedActionActor, 
 
@@ -1414,3 +1417,165 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 	)
 
 	return trainer
+
+
+
+def load_trained_actor(state_dim, action_dim, config_manager):
+	"""
+	Loads a trained CQL actor for use as another model's fixed target
+	policy (e.g. FQE's target_policy_actor). Called generically by
+	training.py's load_actor() when config_manager.actor_type ==
+	"cql_with_logprobs".
+
+	Path/run resolution is driven directly by config_manager -- NOT by
+	any hyperparams dict entries:
+
+	  config_manager.search_variant == "random_search":
+	      Used while tuning FQE's OWN hyperparameters. This does NOT
+	      simply take the best row of the (LR/hidden_dim/etc.) CQL
+	      hyperparameter search's own sorted_runs csv, because that
+	      search was run BEFORE the final cql_alpha value was chosen
+	      (via the separate alpha-sweep/knee-detection analysis) -- so
+	      its "best" row need not use the alpha you actually settled on.
+	      Instead:
+	        1. Read the FINAL cql_alpha from the pickled config_manager
+	           found inside the "fixed_alpha" folder (this is the
+	           config_manager that WAS run with the final, chosen alpha).
+	        2. Search "cql_alpha_sweep" (the sibling folder holding every
+	           individually-tested alpha value from that sweep) for the
+	           run whose results.json hyperparameters record that same
+	           cql_alpha, and load ITS actor.
+
+	  config_manager.search_variant == "best_hyperparameters":
+	      The final, fixed-alpha, multi-seed run stage. Looks inside
+	      "fixed_alpha" for the run whose saved checkpoint's
+	      training_config['seed'] matches
+	      config_manager.training_config['seed'], and loads that run's
+	      actor -- pairing each FQE seed with the CQL seed of the same
+	      number automatically.
+
+	Both "fixed_alpha" and "cql_alpha_sweep" are subfolders of
+	"health_score_change_only", itself a subfolder of the same
+	cohort/unit/reward_cohort base path used elsewhere in this project
+	(see get_evaluator in basic_q.py for the equivalent basic_q pattern).
+
+	NOTE -- please verify against your actual directory layout/checkpoint
+	contents before relying on this:
+	  - assumes each run's checkpoint (final_model.pt) was saved via
+	    train_with_hyperparameters's 'cql_with_logprobs' branch, i.e.
+	    contains 'actor_state_dict' and 'hyperparameters' (with
+	    'actor_hidden_dim' and, for cql_alpha_sweep runs, 'cql_alpha')
+	  - assumes results.json's hyperparameters dict also records
+	    'cql_alpha' (falls back to a top-level 'cql_alpha' key if not
+	    nested, but verify which your save_results() actually produces)
+	  - assumes exactly one config_manager.pkl exists somewhere under
+	    "fixed_alpha" (searched recursively, first match used) recording
+	    the final chosen cql_alpha as a `.cql_alpha` attribute
+	"""
+	device = torch.device(config_manager.training_config.get('device', "cuda" if torch.cuda.is_available() else "cpu"))
+
+	cohort = config_manager.cohort
+	unit = config_manager.unit
+	reward_cohort = config_manager.reward_cohort
+
+	base_path = os.path.join(config_manager.paths['rl_models_dir'],
+		'cql_with_logprobs', f'split_{config_manager.split_num}', cohort,
+		config_manager.actions)
+
+	if unit.lower() == 'picu':
+		if reward_cohort.lower() == 'picu':
+			base_path = os.path.join(base_path,
+			"picu_patients_health_score_from_picu_dataset")
+		elif reward_cohort.lower() == 'restricted':
+			base_path = os.path.join(base_path,
+			"picu_patients_health_score_from_restricted_dataset")
+		else:
+			raise ValueError(f"Unknown reward_cohort: {reward_cohort}. Must be 'picu' or 'restricted'.")
+	else:
+		raise ValueError(f"Unknown unit: {unit}. Must be 'picu'.")
+
+	health_score_change_only_path = os.path.join(base_path, "health_score_change_only")
+	fixed_alpha_path = os.path.join(health_score_change_only_path, "fixed_alpha")
+
+	def _load_actor_from_checkpoint(checkpoint):
+		hidden_dim = checkpoint['hyperparameters']['actor_hidden_dim']
+		actor = Actor(state_dim=state_dim, hidden_dim=hidden_dim).to(device)
+		actor.load_state_dict(checkpoint['actor_state_dict'])
+		actor.eval()
+		for p in actor.parameters():
+			p.requires_grad_(False)
+		return actor
+
+	if config_manager.search_variant == "random_search":
+		# 1. find the final chosen cql_alpha, from fixed_alpha's own config_manager.pkl
+		if not os.path.isdir(fixed_alpha_path):
+			raise FileNotFoundError(f"fixed_alpha directory not found: {fixed_alpha_path}")
+
+		config_pkl_path = None
+		for root, dirs, files in os.walk(fixed_alpha_path):
+			if "config_manager.pkl" in files:
+				config_pkl_path = os.path.join(root, "config_manager.pkl")
+				break
+		if config_pkl_path is None:
+			raise FileNotFoundError(f"No config_manager.pkl found anywhere under {fixed_alpha_path}")
+
+		with open(config_pkl_path, "rb") as f:
+			fixed_alpha_config_manager = pickle.load(f)
+		target_cql_alpha = fixed_alpha_config_manager.cql_alpha
+		print(f"[load_trained_actor] Final cql_alpha (from {config_pkl_path}): {target_cql_alpha}")
+
+		# 2. search cql_alpha_sweep for the run matching that alpha
+		sweep_path = os.path.join(health_score_change_only_path, "cql_alpha_sweep")
+		if not os.path.isdir(sweep_path):
+			raise FileNotFoundError(f"cql_alpha_sweep directory not found: {sweep_path}")
+
+		matched_run_path = None
+		for run_folder in sorted(os.listdir(sweep_path)):
+			run_path = os.path.join(sweep_path, run_folder)
+			for inner_run_folder in sorted(os.listdir(run_path)):
+				inner_run_path = os.path.join(run_path, inner_run_folder)
+				results_path = os.path.join(inner_run_path, "results.json")
+				if not os.path.isfile(results_path):
+					continue
+				with open(results_path, "r") as f:
+					results = json.load(f)
+				run_cql_alpha = results.get("hyperparameters", {}).get("cql_alpha", results.get("cql_alpha"))
+				if run_cql_alpha is not None and math.isclose(run_cql_alpha, target_cql_alpha, rel_tol=1e-6, abs_tol=1e-9):
+					matched_run_path = inner_run_path
+					break
+
+		if matched_run_path is None:
+			raise FileNotFoundError(
+				f"No run under {sweep_path} matched cql_alpha={target_cql_alpha} "
+				f"(checked results.json in each subfolder)."
+			)
+		print(f"[load_trained_actor] Matched cql_alpha_sweep run: {matched_run_path}")
+
+		final_model_path = os.path.join(matched_run_path, "final_model.pt")
+		checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
+		return _load_actor_from_checkpoint(checkpoint)
+
+	elif config_manager.search_variant == "best_hyperparameters":
+		target_seed = config_manager.training_config['seed']
+		if not os.path.isdir(fixed_alpha_path):
+			raise FileNotFoundError(f"fixed_alpha directory not found: {fixed_alpha_path}")
+
+		for run_folder in sorted(os.listdir(fixed_alpha_path)):
+			run_path = os.path.join(fixed_alpha_path, run_folder)
+			final_model_path = os.path.join(run_path, "final_model.pt")
+			if not os.path.isfile(final_model_path):
+				continue
+			checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
+			run_seed = checkpoint.get('training_config', {}).get('seed')
+			if run_seed == target_seed:
+				return _load_actor_from_checkpoint(checkpoint)
+
+		raise FileNotFoundError(
+			f"No run with training_config['seed']=={target_seed} found under {fixed_alpha_path}."
+		)
+
+	else:
+		raise ValueError(
+			f"Unknown config_manager.search_variant='{config_manager.search_variant}', "
+			f"expected 'random_search' or 'best_hyperparameters'"
+		)

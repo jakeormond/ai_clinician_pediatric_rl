@@ -18,6 +18,16 @@ TensorBatch = List[torch.Tensor]
 """
 this is designed for 1. testing that the pipeline works, and 2. testing whether
 intermediate rewards help learning
+
+FQE UPDATE: this file now also supports Fitted Q Evaluation (FQE). FQE is
+algorithmically IDENTICAL to SARSA in every respect except one: the
+Bellman target's next_action is no longer the clinician's real, logged
+next action -- it is the FIXED, FROZEN target policy's action at
+next_state (here, a trained CQL actor, evaluated deterministically, never
+updated during FQE training). Everything else (critic architecture, loss,
+target-network Polyak averaging, discounting) is unchanged. This is
+implemented as a single conditional substitution in train()/evaluate(),
+controlled by whether a target_policy_actor was passed to Q_Learner.
 """
 
 class Critic(nn.Module):
@@ -310,7 +320,12 @@ class Q_Learner(object):
         reward_scaling: float = 1.0,
         reward_type: str = None,  # can be 'terminal' or 'health_score'
         scheduler: torch.optim.lr_scheduler._LRScheduler = None,
-        evaluator=False
+        evaluator=False,
+        target_policy_actor: nn.Module = None,  # FQE: if set, next_action is
+            # generated from THIS FIXED, FROZEN actor instead of the
+            # clinician's real logged next_action. None (default) = SARSA,
+            # unchanged behavior. Never trained -- set to eval() and its
+            # parameters are never touched by this class's optimizer.
     ):
         
         self.total_it = 0
@@ -318,6 +333,14 @@ class Q_Learner(object):
 
         self.critic = critic.to(self.device)
         self.reward_type = reward_type  # can be 'terminal' or 'health_score'
+
+        # --- FQE: fixed target policy, frozen, eval mode, no gradients ---
+        self.target_policy_actor = target_policy_actor
+        if self.target_policy_actor is not None:
+            self.target_policy_actor = self.target_policy_actor.to(self.device)
+            self.target_policy_actor.eval()
+            for p in self.target_policy_actor.parameters():
+                p.requires_grad_(False)
         
         if not evaluator:
             self.discount = discount
@@ -334,6 +357,20 @@ class Q_Learner(object):
             # for calculating moving average of gradient clipping binary
             self.clip_fraction_ema = 0.0
             self.ema_alpha = 0.99 # Closer to 1.0 means more smoothing
+
+    def _get_next_action(self, next_state, next_action_from_batch):
+        """
+        SARSA (target_policy_actor is None): returns the clinician's real,
+        logged next_action, unchanged.
+        FQE (target_policy_actor is set): returns the FIXED target policy's
+        deterministic action at next_state instead -- this single swap is
+        the entire, complete difference between SARSA and FQE.
+        """
+        if self.target_policy_actor is None:
+            return next_action_from_batch
+        with torch.no_grad():
+            actor_output = self.target_policy_actor(next_state, deterministic=True)
+            return actor_output[0]  # CQL actor returns (actions, log_prob, (gate_lp, mag_lp)[, dist])
 
             
     def target_q(self, reward, not_done, next_state, next_action): # need to add next action to replay buffer
@@ -390,6 +427,11 @@ class Q_Learner(object):
 
         # sample the replay buffer
         state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
+
+        # FQE: swap the clinician's real next_action for the fixed target
+        # policy's action at next_state. No-op (returns next_action
+        # unchanged) when target_policy_actor is None, i.e. plain SARSA.
+        next_action = self._get_next_action(next_state, next_action)
 
         reward = reward * self.reward_scaling
 
@@ -464,6 +506,9 @@ class Q_Learner(object):
         self.critic.eval()  # Ensure critic is also in eval mode
         
         state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
+
+        # FQE: same swap as in train() -- see _get_next_action docstring.
+        next_action = self._get_next_action(next_state, next_action)
         
         reward = reward * self.reward_scaling
         
@@ -561,7 +606,7 @@ def get_adamw_optimizer(model, lr, weight_decay):
     return torch.optim.AdamW(optim_groups, lr=lr)
 
 
-def get_trainer(config_manager, state_dim, action_dim, hyperparams):
+def get_trainer(config_manager, state_dim, action_dim, hyperparams, actor=None):
 
     learning_rate = float(hyperparams['learning_rate'])
     weight_decay = float(hyperparams.get('weight_decay', 0.01)) # New hyperparam
@@ -584,7 +629,12 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		T_max=hyperparams['total_steps'],
 		eta_min=learning_rate * 0.1  # Final learning rate will be 10% of initial LR 
 	)
-   
+
+    # --- FQE: `actor` is loaded and passed in EXTERNALLY (by training.py's
+    # create_trainer / load_actor, via cql_with_logprobs.load_trained_actor)
+    # -- this function does no path resolution of its own. actor=None
+    # (the default, and what happens for every non-"fqe" model_type) means
+    # ordinary SARSA; a real actor object here means FQE. ---
     trainer = Q_Learner(
         critic=critic,
         critic_optimizer=critic_optimizer,
@@ -594,7 +644,8 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
         grad_clip=hyperparams['grad_clip'], 
         reward_scaling=hyperparams.get('reward_scaling', 1.0),
         reward_type=config_manager.reward_type,
-        scheduler=critic_scheduler
+        scheduler=critic_scheduler,
+        target_policy_actor=actor,
     )
 
     return trainer

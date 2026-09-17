@@ -1,0 +1,65 @@
+    project: "AI_Clininician"
+    group: "reinforcement_learning"
+    name: "basic_q"
+    device: "cuda"  # Device (cuda or cpu)   
+   
+    tuning: False
+  
+    n_episodes: 1000  # How many episodes run during evaluation
+    
+    reward_type: "health_score" # "terminal" # "health_score"
+    discount: 0.975  # Discount factor
+    terminal_discount: 0.998 # discount for terminal health-score-based rewards
+    
+    # reward scaling
+    health_score_hourly_change_clip: 100.
+    health_score_scale: 0.  # Scaling factor for health score component of reward
+    health_score_hourly_change_scale: 1.  # Scaling factor for hourly change component of reward
+    total_health_score_scale: 1. # .01  # Scaling factor for total health score component of reward
+    terminal_reward_scale: 10.
+
+    # seeds 
+    use_fixed_seed: True # # Whether to use a fixed seed for reproducibility, otherwise randomly generated
+    seed: 42 # Seed value to use if use_fixed_seed is True
+   
+    # add reward to vaso dosing as positive control expt
+    add_reward_to_vaso_dosing: False  # Whether to add reward to vaso dosing as positive control expt - this is added as a reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
+    vaso_reward_coefficient: [0.01, 0.05, 0.1, 0.2, 0.5] # [1.0, 5.0] # [0.2, 0.5, 1.0, 5.0]
+
+    learning_rate: [5.e-5, 1.e-4, 5.e-4] # [1.e-3, 5.e-3] # [5.e-6, 1.e-5, 5.e-5, 1.e-4, 5.e-4, 1.e-3, 5.e-3] # 1.e-4 # 1.e-3 # "loguniform(1e-5, 1e-4)" # "loguniform(3e-5, 1e-4)"           #      [1e-6]
+    dropout: 0.3 # 0.1 # "uniform(0.1, 0.3)"   # "uniform(0.0, 0.3)"
+    tau: 0.001 # [0.01, 0.005, 0.001] # [0.005, 0.01]   # [0.0005, 0.001, 0.005, 0.01] # Target network update rate
+    weight_decay: [1.e-3, 1.e-2, 1.e-1] # 1.e-5 # "loguniform(1e-4, 1e-3)" # "loguniform(1e-5, 1e-2)" # L2 regularization strength
+
+    batch_size: 1024  # Batch size for all networks
+    hidden_dim: [32, 64, 128, 256] # [512, 1024]  # Hidden dimension for all networks [128, 256, 256]] 
+
+
+    # Early stopping parameters (fixed for all combinations)
+    early_stopping_flag: True  # Whether to use early stopping
+    patience: 15       # Stop if no improvement for 15 evaluations
+    eval_freq: 1        # Evaluate every 20 epochs  
+    min_delta: 0.0001   # Minimum improvement threshold
+
+    # evaluation parameters
+    monitor_v0: False  # Whether to monitor V0 during training - specific to TD3-BC
+
+    # validation loss
+    loss_metric: "critic_loss"  # Which metric to use for early stopping
+    # changes to reward structure
+    make_rewards_positive: False  # Whether to shift rewards to be positive
+
+    # include next actions
+    include_next_actions: True  # needed for SARSA
+    actions_shift: True # temporal shift to maintain causality.
+    
+    # gradient clipping
+    grad_clip: 1.
+
+    use_compressed_latents: False  # Whether to use compressed latents as states instead of raw features or transformer output - specific to basic Q model, not used for TD3-BC or CQL
+
+
+    # n-step returns
+    n_step: 0  # Number of steps to use for n-step returns (set to 1 or None to disable n-step returns)
+    
+    

@@ -41,6 +41,7 @@ MODEL_MODULES = {
     "iql": "src.rl.models.iql",
     "iql_with_sarsa": "src.rl.models.iql_with_sarsa",
     "bc_with_logprobs": "src.rl.models.bc_with_logprobs",
+    "fqe": "src.rl.models.basic_q",  # FQE reuses basic_q's Q_Learner entirely -- see get_trainer(..., actor=...)
 }
 
 DISTRIBUTIONS = {
@@ -423,7 +424,7 @@ def check_improvement(best_val_loss, current_val_loss, early_stopping):
 
 
 def copy_model_parameters(trainer, config_manager):
-    if config_manager.model_type in ['basic_q']:
+    if config_manager.model_type in ['basic_q', 'fqe']:  # FQE's trainer is also a Q_Learner -- checkpoints its critic, not an actor
         return trainer.critic.state_dict().copy()
     elif config_manager.model_type in ['iql', 'iql_with_sarsa']:
         return {
@@ -438,7 +439,7 @@ def copy_model_parameters(trainer, config_manager):
         return trainer.actor.state_dict().copy()
     
 def restore_model_parameters(trainer, best_model_state, config_manager):
-    if config_manager.model_type in ['basic_q']:
+    if config_manager.model_type in ['basic_q', 'fqe']:  # see copy_model_parameters
         trainer.critic.load_state_dict(best_model_state)
     elif config_manager.model_type in ['iql', 'iql_with_sarsa']:
         trainer.critic.load_state_dict(best_model_state['critic'])
@@ -769,7 +770,7 @@ def train_with_hyperparameters(
     hyperparams['total_steps'] = n_epochs * len(training_buffer)
     
     if config_manager.model_type == "fqe":
-        actor_type = config_manager.actor_type
+        config_manager.actor_type = "cql_with_logprobs"  # 
         actor = load_actor(train_processor, hyperparams, config_manager)
 
         trainer = create_trainer(train_processor, hyperparams, config_manager, actor=actor)
@@ -1035,7 +1036,7 @@ def train_with_hyperparameters(
 
     model_path = Path(model_dir / "final_model.pt")
     
-    if config_manager.model_type in ['basic_q']:
+    if config_manager.model_type in ['basic_q', 'fqe']:  # FQE's trainer is also a Q_Learner -- same checkpoint shape as SARSA
         checkpoint = {
             'total_it': trainer.total_it,
             'critic_state_dict': trainer.critic.state_dict(),
@@ -1134,5 +1135,3 @@ def train_with_hyperparameters(
         
     else:
         return all_scores, model_dir
-
-    

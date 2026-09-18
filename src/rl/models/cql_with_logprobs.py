@@ -1557,18 +1557,25 @@ def load_trained_actor(state_dim, action_dim, config_manager):
 
 	elif config_manager.search_variant == "best_hyperparameters":
 		target_seed = config_manager.training_config['seed']
+	
 		if not os.path.isdir(fixed_alpha_path):
 			raise FileNotFoundError(f"fixed_alpha directory not found: {fixed_alpha_path}")
 
 		for run_folder in sorted(os.listdir(fixed_alpha_path)):
 			run_path = os.path.join(fixed_alpha_path, run_folder)
-			final_model_path = os.path.join(run_path, "final_model.pt")
-			if not os.path.isfile(final_model_path):
-				continue
-			checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
-			run_seed = checkpoint.get('training_config', {}).get('seed')
-			if run_seed == target_seed:
-				return _load_actor_from_checkpoint(checkpoint)
+			for inner_run_folder in sorted(os.listdir(run_path)):
+				inner_run_path = os.path.join(run_path, inner_run_folder)
+				# load results.json to check the seed
+				results_path = os.path.join(inner_run_path, "results.json")
+				if not os.path.isfile(results_path):
+					continue
+				with open(results_path, "r") as f:
+					results = json.load(f)
+				run_seed = results.get("hyperparameters", {}).get("seed")
+				if run_seed == target_seed:
+					final_model_path = os.path.join(inner_run_path, "final_model.pt")
+					checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
+					return _load_actor_from_checkpoint(checkpoint)
 
 		raise FileNotFoundError(
 			f"No run with training_config['seed']=={target_seed} found under {fixed_alpha_path}."

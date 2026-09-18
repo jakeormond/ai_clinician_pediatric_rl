@@ -648,6 +648,33 @@
         },
 
         {
+            "name": "fqe_choc_best_with_seeds",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.rl.reinforcement_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "reinforcement_learning",
+                "--model_type", "fqe", 
+                "--reward_type", "health_score",
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--search_variant", "best_hyperparameters",
+                "--seeds", "0", "1", "2", "3", "4",
+                "--n_epochs", "400",
+                "--cohort", "sepsis",
+                "--unit", "PICU",
+                "--filter_old", "True",
+                "--reward_cohort", "picu",
+                "--action_mode", "continuous_only",
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+
+        {
             "name": "mimiciv_td3_bc_fixed",
             "type": "debugpy",
             "request": "launch",

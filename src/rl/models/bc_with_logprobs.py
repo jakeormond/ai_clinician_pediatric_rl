@@ -277,7 +277,7 @@ class BC:
 		# must stay a genuine, correctly-specified probability for WIS) directly
 		# targets this. Default 9.5 approximates the real inverse class-frequency
 		# ratio (~90.5%/9.5%); tune based on the single-seed sanity check.
-		fluid_gate_neg_class_weight: float = 9.5,
+		fluid_gate_neg_class_weight: float = 8.346,  # = train fire rate / (1 - train fire rate) = 0.893 / 0.107 -- see clinician_baseline.py's "train" split, NOT val/test (this is a data-derived modeling constant, so it must come from training data only, same as any other statistic used to shape training)
 
 	):
 		
@@ -741,7 +741,8 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		alpha_mag_lr=hyperparams.get('alpha_mag_lr', 1e-3),
 		fluid_mean_reg_scale=hyperparams.get('fluid_mean_reg_scale', 0.05),
 		vaso_mean_reg_scale=hyperparams.get('vaso_mean_reg_scale', 0.05),
-		fluid_gate_neg_class_weight=hyperparams.get('fluid_gate_neg_class_weight', 9.5),
+		fluid_gate_neg_class_weight=hyperparams.get('fluid_gate_neg_class_weight', 8.346),
+		vaso_gate_neg_class_weight=hyperparams.get('vaso_gate_neg_class_weight', 8.346),
 	)
 
 	return trainer

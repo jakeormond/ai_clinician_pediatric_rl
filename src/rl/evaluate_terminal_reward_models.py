@@ -100,10 +100,10 @@ def load_data(config_manager, hyperparams):
 
 def create_test_rl_dataset(train_processor, val_processor, test_processor, config_manager, hyperparams):
     action_names=config_manager.data_config['actions']
-    n_step = hyperparams['n_step']
+    n_step = hyperparams.get('n_step', 1)
     gamma = hyperparams['discount']
     use_compressed_latents = hyperparams['use_compressed_latents']
-    actions_shift = hyperparams['actions_shift'] 
+    actions_shift = hyperparams.get('actions_shift', True) 
 
     scaler = train_processor.create_rl_dataset(
         states="model_outputs", 

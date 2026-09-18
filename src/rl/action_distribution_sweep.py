@@ -1,4 +1,3 @@
-
 """
 Diagnostic: actor action distribution (fluid, vaso) across the CQL alpha
 sweep. Complements the advantage/occupancy analysis by directly showing
@@ -18,11 +17,9 @@ Expects, already in your session (or importable):
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from src.rl.evaluate_terminal_reward_models import generate_model_outputs
 
 FLUID_COLOR = "#2471a3"
 VASO_COLOR = "#c0392b"
-
 
 
 def get_actor_actions(model_entry, processor, batch_size=1024, device="cuda" if torch.cuda.is_available() else "cpu"):
@@ -123,6 +120,7 @@ def run_action_distribution_stage3(
         clinician_baseline=None,
         zero_threshold=1e-4, batch_size=1024,
         device="cuda" if torch.cuda.is_available() else "cpu",
+        get_actor_actions_fn=None,   # optional override, e.g. eval_bc.get_bc_actor_actions for BC actors
         title="", save_path=None,
     ):
     """
@@ -135,12 +133,21 @@ def run_action_distribution_stage3(
     models_by_seed: list of 5 model_entry tuples/objects (e.g.
         cql_health_score_models filtered to the final alpha, or the Stage 3
         list directly if it only contains that one alpha).
+
+    get_actor_actions_fn: optional function(model_entry, processor,
+        batch_size=..., device=...) -> actions tensor, overriding the
+        default action_dist.get_actor_actions (which assumes a CQL-style
+        actor(state, deterministic=True) signature). Pass a compatible
+        function for other actor types, e.g. BC's Actor.forward, which has
+        no `deterministic` kwarg at all.
     """
+    action_fn = get_actor_actions_fn if get_actor_actions_fn is not None else get_actor_actions
+
     n_seeds = len(models_by_seed)
     per_seed_stats = []
 
     for seed_idx, model_entry in enumerate(models_by_seed):
-        actions = get_actor_actions(model_entry, processor, batch_size=batch_size, device=device)
+        actions = action_fn(model_entry, processor, batch_size=batch_size, device=device)
         stats = compute_action_distribution_stats(actions, zero_threshold=zero_threshold)
         per_seed_stats.append(stats)
 

@@ -17,6 +17,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 """
+Gemini is suggesting training only the Actor for first 1000 steps, claims this can allow can prevent the policy
+from "overreacting" to initial, noisy Critic estimates. 
+
 Claude: Hurdle-model changes to Actor + BC.
  
 Core idea: instead of one squashed Gaussian per action trying to represent
@@ -264,6 +267,18 @@ class BC:
 		fluid_mean_reg_scale: float = 0.05, # weight for the fluid mean-saturation regularization term
 		vaso_mean_reg_scale: float = 0.05,  # weight for the vaso mean-saturation regularization term
 
+		# --- fluid gate class-weighting, targeting the calibration issue found in
+		# evaluate_bc_final_seeds.check_gate_calibration_by_seed: fluid's ~90/10
+		# fire/no-fire base rate imbalance let the gate under-fit the rare
+		# "no fluid" class, assigning it only ~0.22-0.26 probability at states
+		# where that was the correct action (vs. vaso's well-calibrated ~0.94-0.98
+		# in the analogous case). Upweighting the negative (no-fire) class in the
+		# LOSS ONLY (not in log_prob_of_action's actual reported likelihood, which
+		# must stay a genuine, correctly-specified probability for WIS) directly
+		# targets this. Default 9.5 approximates the real inverse class-frequency
+		# ratio (~90.5%/9.5%); tune based on the single-seed sanity check.
+		fluid_gate_neg_class_weight: float = 9.5,
+
 	):
 		
 		self.use_smoothing = use_smoothing
@@ -280,6 +295,7 @@ class BC:
 
 		self.fluid_mean_reg_scale = fluid_mean_reg_scale
 		self.vaso_mean_reg_scale = vaso_mean_reg_scale
+		self.fluid_gate_neg_class_weight = fluid_gate_neg_class_weight
 
 		# for calculating moving average of gradient clipping binary
 		self.actor_clip_fraction_ema = 0.0
@@ -330,7 +346,8 @@ class BC:
 		# Sample actions from the stochastic actor
 		log_prob, components = self.actor.log_prob_of_action(state, action, return_components=True) # log probability of the action taken by the doctor under the current policy
 		
-		nll_loss = -log_prob.mean() # negative log likelihood of the action taken by the doctor under the current policy
+		nll_loss = -log_prob.mean() # TRUE, unweighted negative log likelihood -- kept purely for
+			# monitoring/comparison; this is NOT what's optimized below (see weighted_nll_loss)
 
 		# --- mean-saturation regularization (ported from CQL) ---
 		# needs f_p/v_p and f_raw_mean/v_raw_mean/f_std/v_std directly --
@@ -363,11 +380,29 @@ class BC:
 		alpha_mag_fluid = self.log_alpha_mag_fluid.exp().detach()
 		alpha_mag_vaso = self.log_alpha_mag_vaso.exp().detach()
 
+		# --- fluid gate class-weighted loss (see fluid_gate_neg_class_weight docstring
+		# in __init__): upweight the rare "no fluid" (fired=0) class in the LOSS ONLY.
+		# log_prob/components["fluid_gate_lp"] itself remains the true, unweighted
+		# log-probability -- only the term actually optimized below is reweighted, so
+		# the model's REPORTED likelihood (used downstream for WIS) stays a genuine,
+		# correctly-specified probability rather than an artificially reweighted one.
+		fluid_gate_weight = torch.where(
+			f_fired.bool(),
+			torch.ones_like(f_fired),
+			self.fluid_gate_neg_class_weight * torch.ones_like(f_fired),
+		)
+		weighted_nll_loss = -(
+			(fluid_gate_weight * components["fluid_gate_lp"]).mean()
+			+ (f_fired * components["fluid_mag_lp"]).mean()
+			+ components["vaso_gate_lp"].mean()
+			+ (v_fired * components["vaso_mag_lp"]).mean()
+		)
+
 		# entropy terms are SUBTRACTED (not added): we want to REWARD higher
 		# entropy, i.e. minimize -alpha*entropy -- standard sign convention
 		# for "encourage higher entropy toward a target".
 		actor_loss = (
-			nll_loss
+			weighted_nll_loss
 			- alpha_mag_fluid * f_entropy_mean
 			- alpha_mag_vaso * v_entropy_mean
 			+ self.fluid_mean_reg_scale * f_mean_saturation_penalty
@@ -377,6 +412,7 @@ class BC:
 		losses = {
 			"actor_loss": actor_loss.item(),
 			"nll_loss": nll_loss.item(),
+			"weighted_nll_loss": weighted_nll_loss.item(),
 			"f_entropy_mean": f_entropy_mean.item(),
 			"v_entropy_mean": v_entropy_mean.item(),
 			"alpha_mag_fluid": alpha_mag_fluid.item(),
@@ -521,7 +557,7 @@ class BC:
 			# Sample actions from the stochastic actor
 			log_prob, components = self.actor.log_prob_of_action(state, action, return_components=True) # log probability of the action taken by the doctor under the current policy
 			
-			nll_loss = -log_prob.mean() # negative log likelihood of the action taken by the doctor under the current policy
+			nll_loss = -log_prob.mean() # TRUE, unweighted -- monitoring only, see train()
 
 			f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std = self.actor._dists(state)
 			f_p = torch.sigmoid(f_gate_logit)
@@ -543,8 +579,23 @@ class BC:
 			alpha_mag_fluid = self.log_alpha_mag_fluid.exp().detach()
 			alpha_mag_vaso = self.log_alpha_mag_vaso.exp().detach()
 
+			# same class-weighted loss as train() -- see the docstring there.
+			# Validation/early-stopping should track the SAME objective being
+			# optimized, not a different (unweighted) one.
+			fluid_gate_weight = torch.where(
+				f_fired_c.bool(),
+				torch.ones_like(f_fired_c),
+				self.fluid_gate_neg_class_weight * torch.ones_like(f_fired_c),
+			)
+			weighted_nll_loss = -(
+				(fluid_gate_weight * components["fluid_gate_lp"]).mean()
+				+ (f_fired_c * components["fluid_mag_lp"]).mean()
+				+ components["vaso_gate_lp"].mean()
+				+ (v_fired_c * components["vaso_mag_lp"]).mean()
+			)
+
 			actor_loss = (
-				nll_loss
+				weighted_nll_loss
 				- alpha_mag_fluid * f_entropy_mean
 				- alpha_mag_vaso * v_entropy_mean
 				+ self.fluid_mean_reg_scale * f_mean_saturation_penalty
@@ -554,6 +605,7 @@ class BC:
 			losses = {
 				"actor_loss": actor_loss.item(),
 				"nll_loss": nll_loss.item(),
+				"weighted_nll_loss": weighted_nll_loss.item(),
 				"f_entropy_mean": f_entropy_mean.item(),
 				"v_entropy_mean": v_entropy_mean.item(),
 				"f_mean_saturation_penalty": f_mean_saturation_penalty.item(),
@@ -687,8 +739,9 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 		target_std_vaso=hyperparams.get('target_std_vaso', 0.6342),
 		initial_alpha_mag=hyperparams.get('initial_alpha_mag', 5e-4),
 		alpha_mag_lr=hyperparams.get('alpha_mag_lr', 1e-3),
-		fluid_mean_reg_scale=hyperparams['fluid_mean_reg_scale'],
-    	vaso_mean_reg_scale=hyperparams['vaso_mean_reg_scale'],
+		fluid_mean_reg_scale=hyperparams.get('fluid_mean_reg_scale', 0.05),
+		vaso_mean_reg_scale=hyperparams.get('vaso_mean_reg_scale', 0.05),
+		fluid_gate_neg_class_weight=hyperparams.get('fluid_gate_neg_class_weight', 9.5),
 	)
 
 	return trainer

@@ -211,6 +211,64 @@ def plot_dose_histograms_at_clinician_zero(
     return fig
 
 
+def plot_combined_dose_distribution_overlay(
+        models_by_key, processor, clinician_actions,
+        dim=0, dim_name="Fluid",
+        get_actor_actions_fn=None,
+        bins=30, title="", save_path=None,
+    ):
+    """
+    Complementary view to plot_dose_histograms: instead of one small-
+    multiple panel per key (seed or alpha), overlays the clinician's real
+    distribution (bold, black step outline) with EVERY model's
+    distribution (thin, colored step lines, one per key) on a SINGLE axis.
+    Easier to see at a glance both how closely each model matches the
+    real shape, and how consistent multiple seeds/runs are with each
+    other -- at the cost of being harder to read if models diverge a lot
+    from one another (in which case plot_dose_histograms' small multiples
+    remain the clearer choice).
+ 
+    models_by_key: dict {key: model_entry}, e.g. {0: bc_seed_0_entry, ...}
+    get_actor_actions_fn: function(model_entry, processor, batch_size=,
+        device=) -> actions tensor. Required -- pass e.g.
+        eval_bc.get_bc_actor_actions for BC actors, or
+        action_distribution_sweep.get_actor_actions for CQL actors.
+    """
+    if get_actor_actions_fn is None:
+        raise ValueError("get_actor_actions_fn is required (no default -- actor call "
+                          "signatures differ between model types, e.g. BC vs CQL).")
+ 
+    clinician_doses = get_nonzero_doses(clinician_actions, dim)
+ 
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    ax.hist(clinician_doses, bins=bins, range=(0, 1), density=True, histtype="step",
+            color=CLINICIAN_COLOR, linewidth=3, label=f"Clinician (real, n={len(clinician_doses)})", zorder=10)
+ 
+    keys = sorted(models_by_key.keys())
+    for i, key in enumerate(keys):
+        model_entry = models_by_key[key]
+        actions = get_actor_actions_fn(model_entry, processor)
+        doses = get_nonzero_doses(actions, dim)
+        color = ALPHA_COLORS[i % len(ALPHA_COLORS)]
+        ax.hist(doses, bins=bins, range=(0, 1), density=True, histtype="step",
+                color=color, linewidth=1.5, alpha=0.85, label=f"Seed {key} (n={len(doses)})")
+ 
+    ax.set_xlabel(f"{dim_name} dose")
+    ax.set_ylabel("Density")
+    ax.set_title(title or f"{dim_name} dose distribution: all seeds vs. clinician (nonzero doses only)",
+                 fontsize=12, fontweight="bold")
+    ax.legend(frameon=False, fontsize=8, loc="best")
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+ 
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Saved to {save_path}")
+ 
+    plt.close(fig)
+    return fig
+
+
 if __name__ == "__main__":
     import src.rl.action_distribution_sweep as action_dist
 

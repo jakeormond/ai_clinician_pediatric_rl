@@ -12,10 +12,11 @@ mean-saturation diagnostics) right matters directly for WIS quality.
 import os
 import json
 import pickle
+import numpy as np
 
 import torch
 
-from src.rl.models.bc_with_logprobs import Actor
+from .models.bc_with_logprobs import Actor
 
 
 def load_actor(reward_type, model_dir, state_dim, device=None):
@@ -88,3 +89,173 @@ def load_actor(reward_type, model_dir, state_dim, device=None):
         p.requires_grad_(False)
 
     return actor, config_manager, hyperparams
+
+
+def get_bc_actor_actions(model_entry, processor, batch_size=1024,
+                           device="cuda" if torch.cuda.is_available() else "cpu"):
+    """
+    BC-compatible drop-in replacement for action_distribution_sweep.get_actor_actions
+    (which calls the CQL-style actor(state, deterministic=True) signature --
+    BC's Actor.forward has no `deterministic` kwarg at all, since it only
+    ever computes the deterministic path internally). Pass this function as
+    `get_actor_actions_fn` to run_action_distribution_stage3 /
+    plot_dose_histograms / plot_dose_histograms_at_clinician_zero.
+    """
+    actor = model_entry[0] if isinstance(model_entry, (list, tuple)) else model_entry
+    actor.eval()
+
+    traj_end_inds = np.where(processor.rl_dataset["dones"] == 1)[0]
+    traj_start_inds = np.concatenate(([0], traj_end_inds + 1))
+    stay_ids = processor.dynamic_deephit_dataset["stay_ids"]
+
+    n_total = processor.rl_dataset["states"].shape[0]
+    action_dim = processor.rl_dataset["actions"].shape[1]
+    actions_all = torch.zeros(n_total, action_dim, dtype=torch.float32).to(device)
+
+    for stay_id in stay_ids:
+        stay_idx = np.where(stay_ids == stay_id)[0][0]
+        start, end = traj_start_inds[stay_idx], traj_start_inds[stay_idx + 1]
+        states = torch.as_tensor(processor.rl_dataset["states"][start:end], dtype=torch.float32).to(device)
+
+        n_batches = int(np.ceil(states.shape[0] / batch_size))
+        for i in range(n_batches):
+            s, e = i * batch_size, min((i + 1) * batch_size, states.shape[0])
+            states_batch = states[s:e]
+            with torch.no_grad():
+                actions, _, _ = actor(states_batch)
+            actions_all[start + s:start + e] = actions
+
+    return actions_all
+
+
+def get_gate_probs(model_entry, processor, batch_size=1024,
+                    device="cuda" if torch.cuda.is_available() else "cpu"):
+    """
+    Returns (f_p, v_p) as numpy arrays, shape (n_timesteps,) -- the raw
+    fluid/vaso gate firing PROBABILITIES (pre-threshold), for every state
+    in the processor's dataset. Same trajectory-batching pattern as
+    check_std_floor.get_both_std, but extracting f_p/v_p instead of std.
+    """
+    actor = model_entry[0] if isinstance(model_entry, (list, tuple)) else model_entry
+    actor.eval()
+
+    traj_end_inds = np.where(processor.rl_dataset["dones"] == 1)[0]
+    traj_start_inds = np.concatenate(([0], traj_end_inds + 1))
+    stay_ids = processor.dynamic_deephit_dataset["stay_ids"]
+
+    n_total = processor.rl_dataset["states"].shape[0]
+    f_p_all = torch.zeros(n_total, dtype=torch.float32)
+    v_p_all = torch.zeros(n_total, dtype=torch.float32)
+
+    for stay_id in stay_ids:
+        stay_idx = np.where(stay_ids == stay_id)[0][0]
+        start, end = traj_start_inds[stay_idx], traj_start_inds[stay_idx + 1]
+        states = torch.as_tensor(processor.rl_dataset["states"][start:end], dtype=torch.float32).to(device)
+
+        n_batches = int(np.ceil(states.shape[0] / batch_size))
+        for i in range(n_batches):
+            s, e = i * batch_size, min((i + 1) * batch_size, states.shape[0])
+            states_batch = states[s:e]
+            with torch.no_grad():
+                _, _, _, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std) = actor(states_batch, return_dist=True)
+            f_p_all[start + s:start + e] = f_p.squeeze(-1).cpu()
+            v_p_all[start + s:start + e] = v_p.squeeze(-1).cpu()
+
+    return f_p_all.numpy(), v_p_all.numpy()
+
+
+def check_gate_calibration_by_seed(models_by_seed, processor, clinician_actions, zero_threshold=1e-4):
+    """
+    For each seed, checks whether the raw gate probability (f_p, v_p)
+    genuinely distinguishes clinician-zero from clinician-nonzero states,
+    or whether it's uniformly high (a real calibration failure) regardless
+    of what the clinician actually did.
+    """
+    clinician_actions_np = clinician_actions.cpu().numpy() if torch.is_tensor(clinician_actions) else np.asarray(clinician_actions)
+    clinician_fluid_fired = clinician_actions_np[:, 0] > zero_threshold
+    clinician_vaso_fired = clinician_actions_np[:, 1] > zero_threshold
+
+    for seed_idx, model_entry in enumerate(models_by_seed):
+        f_p, v_p = get_gate_probs(model_entry, processor)
+
+        print(f"=== Seed {seed_idx} ===")
+        for name, p, fired_mask in [("Fluid", f_p, clinician_fluid_fired), ("Vaso", v_p, clinician_vaso_fired)]:
+            p_at_zero = p[~fired_mask]
+            p_at_nonzero = p[fired_mask]
+            pct_over_half_at_zero = (p_at_zero > 0.5).mean() * 100
+            print(f"  {name} gate probability (f_p):")
+            print(f"    At clinician-ZERO states:    mean={p_at_zero.mean():.3f}, median={np.median(p_at_zero):.3f}, "
+                  f"p10={np.percentile(p_at_zero,10):.3f}, p90={np.percentile(p_at_zero,90):.3f}, "
+                  f"%>0.5={pct_over_half_at_zero:.1f}%")
+            print(f"    At clinician-NONZERO states: mean={p_at_nonzero.mean():.3f}, median={np.median(p_at_nonzero):.3f}, "
+                  f"p10={np.percentile(p_at_nonzero,10):.3f}, p90={np.percentile(p_at_nonzero,90):.3f}")
+        print()
+
+
+def check_fluid_gate_wis_impact(models_by_seed, processor, clinician_actions, zero_threshold=1e-4):
+    """
+    Quantifies how much the fluid gate's miscalibration at clinician-zero
+    states could distort WIS importance weights, WITHOUT needing the
+    target (CQL) policy -- two complementary views:
+
+      1. Direct probability mass: what probability does BC actually assign
+         to the real "no fluid" decision at these states (1 - f_p), vs.
+         the analogous, well-calibrated vaso number (1 - v_p) at
+         clinician-zero-vaso states, as a "what good looks like" reference.
+
+      2. Trajectory-level compounding: for each patient trajectory, what
+         FRACTION of the total gate-related negative-log-likelihood (i.e.
+         "surprise") comes specifically from zero-fluid states, vs.
+         everything else (nonzero-fluid gate decisions + all vaso gate
+         decisions). A large fraction here means this single, known
+         calibration issue could dominate that trajectory's resulting
+         importance weight; a small fraction means it's a minor
+         correction relative to everything else already being modeled.
+    """
+    clinician_actions_np = clinician_actions.cpu().numpy() if torch.is_tensor(clinician_actions) else np.asarray(clinician_actions)
+    clinician_fluid_fired = clinician_actions_np[:, 0] > zero_threshold
+    clinician_vaso_fired = clinician_actions_np[:, 1] > zero_threshold
+
+    traj_end_inds = np.where(processor.rl_dataset["dones"] == 1)[0]
+    traj_start_inds = np.concatenate(([0], traj_end_inds + 1))
+    n_traj = len(traj_end_inds)
+
+    for seed_idx, model_entry in enumerate(models_by_seed):
+        f_p, v_p = get_gate_probs(model_entry, processor)
+        eps = 1e-8
+
+        # --- 1. direct probability mass at clinician-zero states ---
+        prob_correct_fluid_zero = 1 - f_p[~clinician_fluid_fired]
+        prob_correct_vaso_zero = 1 - v_p[~clinician_vaso_fired]
+
+        print(f"=== Seed {seed_idx} ===")
+        print(f"  Probability BC assigns to the REAL 'no fluid' decision, at clinician-zero-fluid states:")
+        print(f"    median={np.median(prob_correct_fluid_zero):.3f}, mean={prob_correct_fluid_zero.mean():.3f}")
+        print(f"  Probability BC assigns to the REAL 'no vaso' decision, at clinician-zero-vaso states (reference -- well calibrated):")
+        print(f"    median={np.median(prob_correct_vaso_zero):.3f}, mean={prob_correct_vaso_zero.mean():.3f}")
+
+        # --- 2. trajectory-level compounding ---
+        f_gate_lp_all = np.log(np.where(clinician_fluid_fired, f_p, 1 - f_p) + eps)
+        v_gate_lp_all = np.log(np.where(clinician_vaso_fired, v_p, 1 - v_p) + eps)
+
+        zero_fluid_mask = ~clinician_fluid_fired
+
+        fractions = []
+        for t in range(n_traj):
+            start, end = traj_start_inds[t], traj_start_inds[t + 1]
+            f_gate_lp_traj = f_gate_lp_all[start:end]
+            v_gate_lp_traj = v_gate_lp_all[start:end]
+            zero_fluid_traj = zero_fluid_mask[start:end]
+
+            total_gate_nll = -(f_gate_lp_traj.sum() + v_gate_lp_traj.sum())
+            zero_fluid_nll = -f_gate_lp_traj[zero_fluid_traj].sum()
+
+            if total_gate_nll > eps:
+                fractions.append(zero_fluid_nll / total_gate_nll)
+
+        fractions = np.array(fractions)
+        print(f"  Fraction of each trajectory's TOTAL gate log-likelihood magnitude coming from "
+              f"zero-fluid states specifically (n={n_traj} trajectories):")
+        print(f"    median={np.median(fractions)*100:.1f}%, mean={fractions.mean()*100:.1f}%, "
+              f"p90={np.percentile(fractions,90)*100:.1f}%")
+        print()

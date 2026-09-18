@@ -14,11 +14,26 @@ FLOOR_STD = np.exp(LOG_STD_MIN)   # ~0.1353
 CEILING_STD = np.exp(LOG_STD_MAX)  # ~2.718
 
 
+def _forward_return_dist(actor, states_batch):
+    """
+    Calls actor(states_batch, return_dist=True), tolerating both the CQL
+    Actor signature (forward(state, deterministic=False, return_dist=False, ...))
+    and the BC Actor signature (forward(state, return_dist=False)), which
+    has no deterministic kwarg at all -- BC's forward only ever computes
+    the deterministic path internally, so there's nothing to toggle.
+    """
+    try:
+        return actor(states_batch, deterministic=True, return_dist=True)
+    except TypeError:
+        return actor(states_batch, return_dist=True)
+
+
 def get_both_std(model_entry, processor, batch_size=1024,
                   device="cuda" if torch.cuda.is_available() else "cpu"):
     """
     Returns (f_std, v_std) as numpy arrays, shape (n_timesteps,), for every
-    state in the processor's dataset.
+    state in the processor's dataset. Works with both CQL and BC actors
+    (see _forward_return_dist).
     """
     actor = model_entry[0] if isinstance(model_entry, (list, tuple)) else model_entry
     actor.eval()
@@ -41,8 +56,8 @@ def get_both_std(model_entry, processor, batch_size=1024,
             s, e = i * batch_size, min((i + 1) * batch_size, states.shape[0])
             states_batch = states[s:e]
             with torch.no_grad():
-                _, _, _, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std) = actor(
-                    states_batch, deterministic=True, return_dist=True
+                _, _, _, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std) = _forward_return_dist(
+                    actor, states_batch
                 )
             f_std_all[start + s:start + e] = f_std.squeeze(-1).cpu()
             v_std_all[start + s:start + e] = v_std.squeeze(-1).cpu()

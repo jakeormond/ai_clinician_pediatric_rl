@@ -48,16 +48,25 @@ def load_actor(reward_type, model_dir, state_dim, device=None):
     hyperparams = results["hyperparameters"]
 
     config_manager_path = os.path.join(model_dir, "config_manager.pkl")
-    config_manager = None
-    if os.path.isfile(config_manager_path):
-        with open(config_manager_path, "rb") as f:
-            config_manager = pickle.load(f)
-        cm_reward_type = getattr(config_manager, "reward_type", None)
-        if cm_reward_type is not None and cm_reward_type != reward_type:
-            print(f"Warning: requested reward_type='{reward_type}' but "
-                  f"config_manager.reward_type='{cm_reward_type}' for {model_dir}")
-    else:
-        print(f"Warning: no config_manager.pkl found at {config_manager_path} -- returning None for config_manager.")
+    if not os.path.isfile(config_manager_path):
+        # sometimes config_manager.pkl sits in the parent directory instead
+        # (e.g. shared across a run's seed subfolders) -- check there before
+        # giving up.
+        parent_config_manager_path = os.path.join(os.path.dirname(model_dir), "config_manager.pkl")
+        if os.path.isfile(parent_config_manager_path):
+            config_manager_path = parent_config_manager_path
+        else:
+            raise FileNotFoundError(
+                f"No config_manager.pkl found at {os.path.join(model_dir, 'config_manager.pkl')} "
+                f"or in the parent directory ({parent_config_manager_path})."
+            )
+
+    with open(config_manager_path, "rb") as f:
+        config_manager = pickle.load(f)
+    cm_reward_type = getattr(config_manager, "reward_type", None)
+    if cm_reward_type is not None and cm_reward_type != reward_type:
+        print(f"Warning: requested reward_type='{reward_type}' but "
+              f"config_manager.reward_type='{cm_reward_type}' for {model_dir}")
 
     actor = Actor(
         state_dim=state_dim,

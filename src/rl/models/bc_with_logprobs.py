@@ -79,6 +79,10 @@ class Actor(nn.Module):
 		dropout: float = 0.1,
 		zero_threshold: float = 1e-4,
 		gate_temperature: float = 1.0,   # relaxation temperature for differentiable gate sampling
+		fluid_gate_hidden: int = 0,      # 0 = single linear layer (original). >0 = adds one hidden
+			# layer of this width (ReLU) before the final fluid gate logit -- gives the fluid
+			# gate more capacity to separate ambiguous zero/nonzero states, independent of the
+			# shared trunk. Vaso's gate is untouched (already well-calibrated).
 	):
 		super().__init__()
 		self.log_std_min = log_std_min
@@ -100,10 +104,28 @@ class Actor(nn.Module):
 		)
 		self.fluid_mean = nn.Linear(hidden_dim, 1)
 		self.vaso_mean = nn.Linear(hidden_dim, 1)
-		self.fluid_gate = nn.Linear(hidden_dim, 1)
+
+		if fluid_gate_hidden > 0:
+			self.fluid_gate = nn.Sequential(
+				nn.Linear(hidden_dim, fluid_gate_hidden),
+				nn.ReLU(),
+				nn.Linear(fluid_gate_hidden, 1),
+			)
+		else:
+			self.fluid_gate = nn.Linear(hidden_dim, 1)
 		self.vaso_gate = nn.Linear(hidden_dim, 1)
+
 		self.fluid_log_std = nn.Linear(hidden_dim, 1)
 		self.vaso_log_std = nn.Linear(hidden_dim, 1)
+
+		# --- post-hoc gate calibration (Platt scaling), fit AFTER normal
+		# training via calibrate_fluid_gate() below. Identity by default
+		# (scale=1, bias=0) -- has NO EFFECT unless calibrate_fluid_gate()
+		# has been called. Stored as buffers, not nn.Parameters, since
+		# they're fit by a small separate procedure, not by the main
+		# optimizer/backward pass used for everything else.
+		self.register_buffer("fluid_gate_calib_scale", torch.tensor(1.0))
+		self.register_buffer("fluid_gate_calib_bias", torch.tensor(0.0))
  
 		self._init_weights()
 
@@ -124,17 +146,26 @@ class Actor(nn.Module):
 			layer.bias.data.fill_(-1.0)   # -1.0 gives std ≈ 0.37, which is a reasonable starting point for exploration
 
 		# match known base rates — same values as the BC actor
-		nn.init.zeros_(self.fluid_gate.weight)
-		self.fluid_gate.bias.data.fill_(0.78)    # sigmoid(0.78) ≈ 0.686 fluid nonzero rate
+		if isinstance(self.fluid_gate, nn.Linear):
+			nn.init.zeros_(self.fluid_gate.weight)
+			self.fluid_gate.bias.data.fill_(0.78)    # sigmoid(0.78) ≈ 0.686 fluid nonzero rate
+		else:
+			# MLP gate head: zero-init the FINAL layer only (so it starts at
+			# the same base-rate prior), let the hidden layer use its default init
+			nn.init.zeros_(self.fluid_gate[-1].weight)
+			self.fluid_gate[-1].bias.data.fill_(0.78)
 		nn.init.zeros_(self.vaso_gate.weight)
 		self.vaso_gate.bias.data.fill_(-2.98)    # sigmoid(-2.98) ≈ 0.048 vaso nonzero rate
 
 
-	def _dists(self, state):
+	def _dists(self, state, apply_calibration=False):
 		z = self.trunk(state)
 
 		f_gate_logit = self.fluid_gate(z)
 		v_gate_logit = self.vaso_gate(z)
+
+		if apply_calibration:
+			f_gate_logit = f_gate_logit * self.fluid_gate_calib_scale + self.fluid_gate_calib_bias
 
 		f_raw_mean = self.fluid_mean(z)
 		v_raw_mean = self.vaso_mean(z)
@@ -145,10 +176,46 @@ class Actor(nn.Module):
 		v_std = v_log_std.exp()
 
 		return f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std
+
+
+	@torch.no_grad()
+	def calibrate_fluid_gate(self, states, actions, n_steps=300, lr=0.05, zero_threshold=1e-4):
+		"""
+		Post-hoc Platt scaling: fits fluid_gate_calib_scale/bias (a single
+		scale + bias applied to the raw fluid gate logit) by minimizing BCE
+		against REAL fired/not-fired labels on a held-out set (val, not
+		train -- same reasoning as any other data-derived calibration
+		constant in this project). Call this ONCE, after normal training is
+		otherwise complete, on a frozen model. Does not touch trunk/gate
+		weights or any other parameter -- purely a post-hoc correction.
+
+		states: (n, state_dim) held-out states
+		actions: (n, 2) held-out real actions (for the true fluid fired/not label)
+		"""
+		self.eval()
+		with torch.enable_grad():
+			f_gate_logit_raw = self.fluid_gate(self.trunk(states)).detach()  # frozen, no grad to the network
+			fired = (actions[:, 0:1] > zero_threshold).float()
+
+			scale = torch.tensor(1.0, requires_grad=True, device=states.device)
+			bias = torch.tensor(0.0, requires_grad=True, device=states.device)
+			optimizer = torch.optim.Adam([scale, bias], lr=lr)
+
+			for _ in range(n_steps):
+				optimizer.zero_grad()
+				calibrated_logit = f_gate_logit_raw * scale + bias
+				loss = F.binary_cross_entropy_with_logits(calibrated_logit, fired)
+				loss.backward()
+				optimizer.step()
+
+		self.fluid_gate_calib_scale.copy_(scale.detach())
+		self.fluid_gate_calib_bias.copy_(bias.detach())
+		print(f"Fitted fluid gate calibration: scale={scale.item():.4f}, bias={bias.item():.4f}, "
+			  f"final BCE={loss.item():.4f}")
 	
 	
-	def sample(self, state):
-		f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std = self._dists(state)
+	def sample(self, state, apply_calibration=False):
+		f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std = self._dists(state, apply_calibration=apply_calibration)
 		f_p = torch.sigmoid(f_gate_logit)
 		v_p = torch.sigmoid(v_gate_logit)
 
@@ -161,8 +228,8 @@ class Actor(nn.Module):
 		return torch.cat([f_fire * f_mag, v_fire * v_mag], dim=-1)
 	
 
-	def forward(self, state: torch.Tensor, return_dist=False):
-		f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std = self._dists(state)
+	def forward(self, state: torch.Tensor, return_dist=False, apply_calibration=False):
+		f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std = self._dists(state, apply_calibration=apply_calibration)
 		f_p = torch.sigmoid(f_gate_logit) 
 		v_p = torch.sigmoid(v_gate_logit) 
 		
@@ -182,7 +249,8 @@ class Actor(nn.Module):
 		return actions, log_prob, (gate_lp, mag_lp)
 
 
-	def log_prob_of_action(self, state: torch.Tensor, action: torch.Tensor, return_components=False) -> torch.Tensor:
+	def log_prob_of_action(self, state: torch.Tensor, action: torch.Tensor, return_components=False,
+							apply_calibration=False) -> torch.Tensor:
 		"""
 		Hurdle log-likelihood of a GIVEN (dataset) action. Used for WIS eval
 		and/or a CQL+BC regularization term. (The original version of this
@@ -190,11 +258,20 @@ class Actor(nn.Module):
 		there's a single real trunk to call.)
 
 		NOTE: this is the TRUE, correctly-specified log-likelihood -- it is
-		NEVER reweighted (see BC.train()'s separate, class-weighted LOSS,
-		which uses these same per-sample components but is a distinct
-		quantity used only for the gradient, not reported here).
+		NEVER reweighted by the training-time class weight/focal loss (see
+		BC.train()'s separate, class-weighted LOSS, which uses these same
+		per-sample components but is a distinct quantity used only for the
+		gradient, not reported here).
+
+		apply_calibration: if True, applies the post-hoc Platt-scaling
+		correction fit by calibrate_fluid_gate() (identity/no-op if that
+		method has never been called on this actor). Default False, so
+		existing behavior (including any already-trained/saved models) is
+		completely unaffected unless explicitly requested. Set True here
+		specifically when computing the density used for WIS, once you've
+		fit and validated a calibration.
 		"""
-		f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std = self._dists(state)
+		f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std = self._dists(state, apply_calibration=apply_calibration)
  
 		f_dose = action[:, 0:1]
 		v_dose = action[:, 1:2]
@@ -290,7 +367,10 @@ class BC:
 		fluid_mean_reg_scale: float = 0.05,
 		vaso_mean_reg_scale: float = 0.05,
 
-		fluid_gate_neg_class_weight: float = 8.346,
+		fluid_gate_neg_class_weight: float = 6.0,   # updated default -- see tuning history in module docstring
+
+		fluid_gate_loss_type: str = "class_weighted",  # "class_weighted" or "focal"
+		fluid_gate_focal_gamma: float = 2.0,           # only used if fluid_gate_loss_type=="focal"
 
 	):
 		
@@ -309,6 +389,8 @@ class BC:
 		self.fluid_mean_reg_scale = fluid_mean_reg_scale
 		self.vaso_mean_reg_scale = vaso_mean_reg_scale
 		self.fluid_gate_neg_class_weight = fluid_gate_neg_class_weight
+		self.fluid_gate_loss_type = fluid_gate_loss_type
+		self.fluid_gate_focal_gamma = fluid_gate_focal_gamma
 
 		# for calculating moving average of gradient clipping binary
 		self.actor_clip_fraction_ema = 0.0
@@ -323,6 +405,41 @@ class BC:
 		state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
 		actions, _, _ = self.actor(state)
 		return actions.cpu().data.numpy().flatten()
+
+
+	def _compute_fluid_gate_weight(self, f_fired, fluid_gate_lp):
+		"""
+		Shared by train()/evaluate(). Computes the per-sample weight applied
+		to the fluid gate's log-probability in the LOSS (never in the
+		reported log_prob itself -- see module docstring).
+
+		fluid_gate_loss_type == "class_weighted": weight = 1 if fired,
+			else fluid_gate_neg_class_weight (uniform reweighting of the
+			whole negative class -- the version validated across 5 seeds).
+
+		fluid_gate_loss_type == "focal": additionally multiplies by
+			(1 - p_t)^gamma, where p_t = exp(fluid_gate_lp) is the
+			probability BC assigns to the TRUE label for that sample.
+			This down-weights already-easy/correct predictions (p_t close
+			to 1) and concentrates gradient on ambiguous cases, rather
+			than reweighting the whole class uniformly regardless of how
+			easy any individual example already is.
+		"""
+		class_weight = torch.where(
+			f_fired.bool(),
+			torch.ones_like(f_fired),
+			self.fluid_gate_neg_class_weight * torch.ones_like(f_fired),
+		)
+
+		if self.fluid_gate_loss_type == "class_weighted":
+			return class_weight
+		elif self.fluid_gate_loss_type == "focal":
+			p_t = fluid_gate_lp.exp().clamp(1e-6, 1 - 1e-6)
+			focal_term = (1 - p_t).pow(self.fluid_gate_focal_gamma)
+			return class_weight * focal_term
+		else:
+			raise ValueError(f"Unknown fluid_gate_loss_type='{self.fluid_gate_loss_type}', "
+							  f"use 'class_weighted' or 'focal'")
 
 
 	def train(self, batch: TensorBatch) -> Tuple[Dict[str, float], Dict[str, float]]:
@@ -350,11 +467,7 @@ class BC:
 		f_fired = components["fluid_fired"]
 		v_fired = components["vaso_fired"]
 
-		fluid_gate_weight = torch.where(
-			f_fired.bool(),
-			torch.ones_like(f_fired),
-			self.fluid_gate_neg_class_weight * torch.ones_like(f_fired),
-		)
+		fluid_gate_weight = self._compute_fluid_gate_weight(f_fired, components["fluid_gate_lp"])
 		weighted_nll_loss = -(
 			(fluid_gate_weight * components["fluid_gate_lp"]).mean()
 			+ (f_fired * components["fluid_mag_lp"]).mean()
@@ -502,11 +615,7 @@ class BC:
 			f_fired_c = components["fluid_fired"]
 			v_fired_c = components["vaso_fired"]
 
-			fluid_gate_weight = torch.where(
-				f_fired_c.bool(),
-				torch.ones_like(f_fired_c),
-				self.fluid_gate_neg_class_weight * torch.ones_like(f_fired_c),
-			)
+			fluid_gate_weight = self._compute_fluid_gate_weight(f_fired_c, components["fluid_gate_lp"])
 			weighted_nll_loss = -(
 				(fluid_gate_weight * components["fluid_gate_lp"]).mean()
 				+ (f_fired_c * components["fluid_mag_lp"]).mean()
@@ -617,7 +726,8 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 	actor = Actor(
 		state_dim=state_dim, 
 		hidden_dim=hyperparams['hidden_dim'], 
-		dropout=hyperparams['dropout']
+		dropout=hyperparams['dropout'],
+		fluid_gate_hidden=hyperparams.get('fluid_gate_hidden', 0),
 	).to(config_manager.training_config['device'])
 	
 	actor_optimizer = torch.optim.AdamW(
@@ -643,7 +753,10 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 
 		fluid_mean_reg_scale=hyperparams.get('fluid_mean_reg_scale', 0.05),
 		vaso_mean_reg_scale=hyperparams.get('vaso_mean_reg_scale', 0.05),
-		fluid_gate_neg_class_weight=hyperparams.get('fluid_gate_neg_class_weight', 6.0), # 8.346
+		fluid_gate_neg_class_weight=hyperparams.get('fluid_gate_neg_class_weight', 6.0),
+		fluid_gate_loss_type=hyperparams.get('fluid_gate_loss_type', 'class_weighted'),
+		fluid_gate_focal_gamma=hyperparams.get('fluid_gate_focal_gamma', 2.0),
+
 	)
 
 	return trainer

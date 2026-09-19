@@ -68,12 +68,6 @@ def load_actor(reward_type, model_dir, state_dim, device=None):
         print(f"Warning: requested reward_type='{reward_type}' but "
               f"config_manager.reward_type='{cm_reward_type}' for {model_dir}")
 
-    actor = Actor(
-        state_dim=state_dim,
-        hidden_dim=hyperparams["hidden_dim"],
-        dropout=hyperparams.get("dropout", 0.1),
-    ).to(device)
-
     final_model_path = os.path.join(model_dir, "final_model.pt")
     checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
 
@@ -83,15 +77,52 @@ def load_actor(reward_type, model_dir, state_dim, device=None):
     # checkpoint-saving branch takes for 'bc_with_logprobs', either could
     # be correct). Check both explicitly rather than guessing silently.
     if "actor_state_dict" in checkpoint:
-        actor.load_state_dict(checkpoint["actor_state_dict"])
+        actor_state_dict = checkpoint["actor_state_dict"]
     elif "actor" in checkpoint:
-        actor.load_state_dict(checkpoint["actor"])
+        actor_state_dict = checkpoint["actor"]
     else:
         raise KeyError(
             f"Could not find actor weights in checkpoint at {final_model_path}. "
             f"Checked keys 'actor_state_dict' and 'actor'; available keys were: "
             f"{list(checkpoint.keys())}. Update load_actor() with the correct key."
         )
+
+    # Infer fluid_gate_hidden DIRECTLY from the checkpoint's own weight shapes,
+    # rather than trusting hyperparams/results.json to have recorded it --
+    # results.json may not log every hyperparameter key (confirmed: some
+    # fluid_gate_hidden runs' results.json omitted it entirely, causing a
+    # silent fallback to 0 and a state_dict key mismatch). Reading the
+    # checkpoint's actual structure can't be wrong, since it IS the
+    # structure that was actually saved.
+    if "fluid_gate.0.weight" in actor_state_dict:
+        fluid_gate_hidden = actor_state_dict["fluid_gate.0.weight"].shape[0]
+    elif "fluid_gate.weight" in actor_state_dict:
+        fluid_gate_hidden = 0
+    else:
+        raise KeyError(
+            f"Could not find fluid_gate weights in checkpoint at {final_model_path} "
+            f"under either 'fluid_gate.weight' (plain Linear) or 'fluid_gate.0.weight' "
+            f"(Sequential MLP). Available keys: {list(actor_state_dict.keys())}"
+        )
+
+    actor = Actor(
+        state_dim=state_dim,
+        hidden_dim=hyperparams["hidden_dim"],
+        dropout=hyperparams.get("dropout", 0.1),
+        fluid_gate_hidden=fluid_gate_hidden,
+    ).to(device)
+
+    load_result = actor.load_state_dict(actor_state_dict, strict=False)
+    # strict=False tolerates OLDER checkpoints (e.g. saved before the
+    # fluid_gate_calib_scale/bias buffers existed) missing those two keys --
+    # they simply keep their default, no-op (identity) values in that case.
+    # Anything else missing/unexpected would indicate a real mismatch, so
+    # we still check and warn explicitly rather than silencing everything.
+    unexpected_missing = [k for k in load_result.missing_keys if k not in
+                          ("fluid_gate_calib_scale", "fluid_gate_calib_bias")]
+    if unexpected_missing or load_result.unexpected_keys:
+        print(f"Warning: unexpected state_dict mismatch loading {model_dir}: "
+              f"missing={unexpected_missing}, unexpected={load_result.unexpected_keys}")
 
     actor.eval()
     for p in actor.parameters():

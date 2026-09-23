@@ -602,6 +602,187 @@ def print_dominant_trajectory_report(
         print(f"  Discounted return G_i for this trajectory: {s['discounted_return']:.4f}\n")
 
 
+# ---------------------------------------------------------------------------
+# Stepwise (cross-sectional) diagnostics -- for when plot_stepwise_ess_curve
+# shows the ESS/n_active ratio collapsing at a SPECIFIC timestep (e.g. t=0),
+# rather than late in the horizon. find_dominant_trajectories above answers
+# "which trajectory dominates the whole-episode weight"; this answers
+# "which trajectory dominates the cross-section AT timestep t_idx", which is
+# the question that actually matters for compute_stepwise_wis, since that
+# estimator renormalizes independently at every t.
+# ---------------------------------------------------------------------------
+
+def diagnose_stepwise_timestep(trajectories, t_idx, top_k=5):
+    """
+    Cross-sectional analogue of find_dominant_trajectories, pinned to one
+    absolute timestep t_idx (0-indexed, matching compute_stepwise_wis's
+    per_step_* arrays) rather than ranking by whole-trajectory weight.
+
+    Among trajectories still active at t_idx (length > t_idx), computes the
+    CUMULATIVE log-ratio from step 0 through t_idx (this is exactly the
+    quantity compute_stepwise_wis exponentiates to get w_t^i), ranks
+    trajectories by that cumulative weight, and reports both the cumulative
+    figure and the SINGLE-STEP log_ratio/behavior_lp/target_lp at t_idx
+    itself -- so you can tell whether a trajectory dominates the t_idx
+    cross-section because of something happening right at t_idx, or because
+    of ratio build-up from earlier steps in the same trajectory.
+
+    Also returns n_active and the ESS at t_idx (should match
+    compute_stepwise_wis's per_step_ess[t_idx] up to the max-subtraction
+    used there for numerical stability, which does not change ESS).
+
+    Requires trajectories built with build_trajectory_data (needs each
+    entry's start/behavior_lp/target_lp fields).
+    """
+    active_idx = [i for i, t in enumerate(trajectories) if t["length"] > t_idx]
+    n_active = len(active_idx)
+    if n_active == 0:
+        raise ValueError(f"No trajectories are active at t_idx={t_idx} (all shorter).")
+
+    cum_lr = np.array([trajectories[i]["log_ratio"][:t_idx + 1].sum() for i in active_idx])
+    max_lr = cum_lr.max()
+    w = np.exp(cum_lr - max_lr)
+    ess_at_t = compute_ess(w)
+    total_w = w.sum()
+
+    order = np.argsort(w)[::-1][:top_k]
+    summaries = []
+    for rank, k in enumerate(order):
+        i = active_idx[k]
+        t = trajectories[i]
+        summaries.append({
+            "rank": rank,
+            "stay_id": t["stay_id"],
+            "t_idx": t_idx,
+            "n_active_at_t": n_active,
+            "ess_at_t": ess_at_t,
+            "weight_frac_at_t": w[k] / total_w,
+            "cumulative_log_ratio_0_to_t": cum_lr[k],
+            "global_row": t["start"] + t_idx,
+            "step_log_ratio": t["log_ratio"][t_idx],
+            "step_behavior_lp": t["behavior_lp"][t_idx],
+            "step_target_lp": t["target_lp"][t_idx],
+            "trajectory_length": t["length"],
+        })
+    return summaries
+
+
+def print_stepwise_timestep_report(
+        summaries, processor, bc_actor,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    ):
+    """
+    Human-readable report for diagnose_stepwise_timestep's output: the real
+    logged (fluid, vaso) action and BC's fire probability at the specific
+    global row for each top-ranked trajectory, so you can see directly
+    whether the t_idx cross-section is dominated by a genuine rare/extreme
+    early dose, or by ratio build-up carried in from earlier steps within
+    the same trajectory (compare step_log_ratio to
+    cumulative_log_ratio_0_to_t: if they're close, the step itself is doing
+    the damage; if cumulative is much more negative/positive than the step
+    alone, earlier steps in that trajectory are responsible).
+    """
+    states = torch.as_tensor(_to_numpy(processor.rl_dataset["states"]), dtype=torch.float32)
+    actions = torch.as_tensor(_to_numpy(processor.rl_dataset["actions"]), dtype=torch.float32)
+
+    bc_actor.eval()
+    for s in summaries:
+        row = s["global_row"]
+        state = states[row:row + 1].to(device)
+        action = actions[row:row + 1]
+        fluid_dose, vaso_dose = action[0, 0].item(), action[0, 1].item()
+
+        with torch.no_grad():
+            _, _, _, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std) = bc_actor(
+                state, return_dist=True,
+            )
+
+        print(f"--- rank {s['rank']}: stay_id={s['stay_id']}, t_idx={s['t_idx']}, "
+              f"weight_frac_at_t={100 * s['weight_frac_at_t']:.1f}% "
+              f"(of {s['n_active_at_t']} active, ess_at_t={s['ess_at_t']:.2f}) ---")
+        print(f"  Global row {row} (trajectory length {s['trajectory_length']})")
+        print(f"  Real logged action: fluid={fluid_dose:.4f}, vaso={vaso_dose:.4f}")
+        print(f"  BC fire probability at this state: fluid_p={f_p.item():.4f}, vaso_p={v_p.item():.4f}")
+        print(f"  THIS STEP: behavior_lp={s['step_behavior_lp']:.3f}, target_lp={s['step_target_lp']:.3f}, "
+              f"log_ratio={s['step_log_ratio']:.3f}")
+        print(f"  CUMULATIVE (0..t_idx): log_ratio={s['cumulative_log_ratio_0_to_t']:.3f} "
+              f"(exp={np.exp(s['cumulative_log_ratio_0_to_t']):.3e})\n")
+
+
+# ---------------------------------------------------------------------------
+# Gate vs. magnitude decomposition of log_prob_for_wis -- log_prob_for_wis
+# itself (cql_with_logprobs.py) does NOT expose return_components like
+# log_prob_of_action does, so this reimplements its exact arithmetic
+# (Bernoulli gate log-prob + BC-bandwidth Gaussian-in-logit magnitude
+# log-prob per drug) to split out the two terms for a single state/action
+# pair. Use this to test the hypothesis that extreme negative per-step
+# log-ratios come from the magnitude term (unbounded -- can blow up when
+# BC's fitted std at that state is tiny and CQL's mean sits many std's away
+# from the real logit-dose) rather than the gate term (bounded below by the
+# 1e-8 floor inside each log(), i.e. at most ~-18.4 per drug, ~-36.8 total).
+# ---------------------------------------------------------------------------
+
+def decompose_log_prob_for_wis(cql_actor, bc_actor, state, action):
+    """
+    Recomputes cql_actor.log_prob_for_wis(state, action, bc_actor) for a
+    single (state, action) pair (batch dim 1), returning a dict with the
+    gate and magnitude log-prob for each drug separately, plus the
+    normalized distance (in BC-std units) between CQL's mean and the real
+    logit-dose that drives the magnitude term -- the direct numerical
+    signature of the "CQL mean far from real action, BC std small at this
+    state" failure mode.
+
+    state, action: torch tensors, already on the same device as the models,
+    shape (1, state_dim) / (1, 2).
+    """
+    bc_actor.eval()
+    cql_actor.eval()
+
+    with torch.no_grad():
+        f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, _, _ = cql_actor._dists(state)
+        f_p = torch.sigmoid(f_gate_logit)
+        v_p = torch.sigmoid(v_gate_logit)
+
+        _, _, _, (_, _, _, _, bc_f_std, bc_v_std) = bc_actor(state, return_dist=True)
+
+        f_dose, v_dose = action[:, 0:1], action[:, 1:2]
+        f_fired_actual = (f_dose > cql_actor.zero_threshold).float()
+        v_fired_actual = (v_dose > cql_actor.zero_threshold).float()
+
+        f_gate_lp = f_fired_actual * torch.log(f_p + 1e-8) + (1 - f_fired_actual) * torch.log(1 - f_p + 1e-8)
+        v_gate_lp = v_fired_actual * torch.log(v_p + 1e-8) + (1 - v_fired_actual) * torch.log(1 - v_p + 1e-8)
+
+        f_a = f_dose.clamp(1e-4, 1 - 1e-4)
+        v_a = v_dose.clamp(1e-4, 1 - 1e-4)
+        f_logit_dose = torch.logit(f_a)
+        v_logit_dose = torch.logit(v_a)
+
+        f_dist = torch.distributions.Normal(f_raw_mean, bc_f_std)
+        v_dist = torch.distributions.Normal(v_raw_mean, bc_v_std)
+
+        f_mag_lp = f_dist.log_prob(f_logit_dose) - torch.log(f_a * (1 - f_a) + 1e-6)
+        v_mag_lp = v_dist.log_prob(v_logit_dose) - torch.log(v_a * (1 - v_a) + 1e-6)
+
+        f_z = (f_logit_dose - f_raw_mean) / bc_f_std
+        v_z = (v_logit_dose - v_raw_mean) / bc_v_std
+
+        total_lp = f_gate_lp + f_fired_actual * f_mag_lp + v_gate_lp + v_fired_actual * v_mag_lp
+
+    return {
+        "total_lp": total_lp.item(),
+        "fluid_fired_actual": bool(f_fired_actual.item()),
+        "vaso_fired_actual": bool(v_fired_actual.item()),
+        "fluid_gate_lp": f_gate_lp.item(),
+        "vaso_gate_lp": v_gate_lp.item(),
+        "fluid_mag_lp": f_mag_lp.item(),
+        "vaso_mag_lp": v_mag_lp.item(),
+        "fluid_z": f_z.item(),      # (real logit-dose - CQL mean) / BC std
+        "vaso_z": v_z.item(),
+        "fluid_bc_std": bc_f_std.item(),
+        "vaso_bc_std": bc_v_std.item(),
+    }
+
+
 def compare_dominant_trajectory_across_seeds(results, top_k=1):
     """
     For each seed's results (from run_wis_across_seeds, which stores each

@@ -236,20 +236,229 @@ def get_trajectory_boundaries(processor):
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
+def log_prob_for_wis_clipped(cql_actor, bc_actor, state, action, logit_clip=8.0, z_clip=10.0):
+    """
+    Batched drop-in replacement for cql_actor.log_prob_for_wis(state, action,
+    bc_actor), reimplementing its exact arithmetic (see
+    cql_with_logprobs.Actor.log_prob_for_wis) with the magnitude term's
+    z-score -- (real_logit_dose - CQL_mean) / bc_std -- clamped to
+    [-z_clip, +z_clip] before it is squared inside the Gaussian log-density.
+
+    Why z-score, not the mean (history of this function): the first version
+    of this fix clamped f_raw_mean/v_raw_mean to [-logit_clip, +logit_clip]
+    in logit space. Empirically that did almost nothing (WIS values and ESS
+    were unchanged to 3 decimal places) -- because CQL's vaso head is so
+    collapsed, and bc_std at those states so narrow (~0.24 in one observed
+    case), that even after clamping the mean to -8, a real logit-dose around
+    -1.7 is STILL ~26 std's away. Clamping the mean bounds the *input* to
+    the z-score but not the z-score itself when std is narrow. Clamping the
+    z-score directly is the version that actually bounds the worst-case
+    per-step magnitude log-prob, independent of how narrow bc_std is or how
+    far CQL's mean has collapsed: max magnitude penalty per drug is now
+    exactly -0.5 * z_clip**2 - log(std) - 0.5*log(2*pi), a few dozen at
+    most rather than unbounded (single steps were observed as low as
+    -2500+ before this fix).
+
+    Root cause this addresses: CQL's vaso head has fully collapsed
+    (predicted vaso dose ~3e-6 median across states), while ~8.3% of real
+    logged timesteps DO administer vaso -- every one of those timesteps hits
+    this failure mode. This is an artifact of scoring a real action against
+    a Gaussian effectively centered on a boundary value using a narrow
+    std -- not evidence about whether CQL's near-zero-vaso policy is
+    clinically reasonable (that's a separate, valid question). This is
+    purely an evaluation-time choice about how far outside a fitted
+    density's support we're willing to extrapolate its penalty, not a
+    change to cql_with_logprobs.py or the trained model itself.
+
+    logit_clip is kept as a secondary safeguard (clamps the mean before the
+    z-score is computed) but z_clip is what actually does the stabilizing
+    work now; z_clip=10 bounds the worst-case single-drug magnitude penalty
+    to roughly -50 - log(std), vs. unbounded before.
+
+    state, action: torch tensors, shape (batch, state_dim) / (batch, 2).
+    Returns a 1-D tensor of length batch (not detached/moved -- caller
+    handles that, matching cql_actor.log_prob_for_wis's own contract).
+    """
+    bc_actor.eval()
+
+    f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, _, _ = cql_actor._dists(state)
+    if logit_clip is not None:
+        f_raw_mean = f_raw_mean.clamp(-logit_clip, logit_clip)
+        v_raw_mean = v_raw_mean.clamp(-logit_clip, logit_clip)
+
+    f_p = torch.sigmoid(f_gate_logit)
+    v_p = torch.sigmoid(v_gate_logit)
+
+    _, _, _, (_, _, _, _, bc_f_std, bc_v_std) = bc_actor(state, return_dist=True)
+
+    f_dose, v_dose = action[:, 0:1], action[:, 1:2]
+    f_fired_actual = (f_dose > cql_actor.zero_threshold).float()
+    v_fired_actual = (v_dose > cql_actor.zero_threshold).float()
+
+    f_gate_lp = f_fired_actual * torch.log(f_p + 1e-8) + (1 - f_fired_actual) * torch.log(1 - f_p + 1e-8)
+    v_gate_lp = v_fired_actual * torch.log(v_p + 1e-8) + (1 - v_fired_actual) * torch.log(1 - v_p + 1e-8)
+
+    f_a = f_dose.clamp(1e-4, 1 - 1e-4)
+    v_a = v_dose.clamp(1e-4, 1 - 1e-4)
+    f_logit_dose = torch.logit(f_a)
+    v_logit_dose = torch.logit(v_a)
+
+    LOG_2PI = 1.8378770664093453  # log(2*pi), for the Normal log-density constant
+
+    def _clipped_normal_log_prob(x, mean, std, z_clip):
+        z = (x - mean) / std
+        if z_clip is not None:
+            z = z.clamp(-z_clip, z_clip)
+        return -0.5 * z ** 2 - torch.log(std) - 0.5 * LOG_2PI
+
+    f_mag_lp = _clipped_normal_log_prob(f_logit_dose, f_raw_mean, bc_f_std, z_clip) \
+        - torch.log(f_a * (1 - f_a) + 1e-6)
+    v_mag_lp = _clipped_normal_log_prob(v_logit_dose, v_raw_mean, bc_v_std, z_clip) \
+        - torch.log(v_a * (1 - v_a) + 1e-6)
+
+    total_lp = f_gate_lp + f_fired_actual * f_mag_lp + v_gate_lp + v_fired_actual * v_mag_lp
+    return total_lp.squeeze(-1)
+
+
+def log_prob_for_wis_clipped_components(cql_actor, bc_actor, state, action, logit_clip=8.0, z_clip=10.0):
+    """
+    Same arithmetic as log_prob_for_wis_clipped, but returns the fluid and
+    vaso contributions SEPARATELY (each already gate + fired*magnitude
+    combined for that one drug) rather than summed into a single total.
+    Batched (no .item() calls) -- use compute_drug_split_log_probs to run
+    this across a full dataset.
+
+    Returns a dict of 1-D tensors (length batch): "fluid_lp", "vaso_lp"
+    (these two sum to what log_prob_for_wis_clipped returns).
+    """
+    bc_actor.eval()
+
+    f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, _, _ = cql_actor._dists(state)
+    if logit_clip is not None:
+        f_raw_mean = f_raw_mean.clamp(-logit_clip, logit_clip)
+        v_raw_mean = v_raw_mean.clamp(-logit_clip, logit_clip)
+
+    f_p = torch.sigmoid(f_gate_logit)
+    v_p = torch.sigmoid(v_gate_logit)
+
+    _, _, _, (_, _, _, _, bc_f_std, bc_v_std) = bc_actor(state, return_dist=True)
+
+    f_dose, v_dose = action[:, 0:1], action[:, 1:2]
+    f_fired_actual = (f_dose > cql_actor.zero_threshold).float()
+    v_fired_actual = (v_dose > cql_actor.zero_threshold).float()
+
+    f_gate_lp = f_fired_actual * torch.log(f_p + 1e-8) + (1 - f_fired_actual) * torch.log(1 - f_p + 1e-8)
+    v_gate_lp = v_fired_actual * torch.log(v_p + 1e-8) + (1 - v_fired_actual) * torch.log(1 - v_p + 1e-8)
+
+    f_a = f_dose.clamp(1e-4, 1 - 1e-4)
+    v_a = v_dose.clamp(1e-4, 1 - 1e-4)
+    f_logit_dose = torch.logit(f_a)
+    v_logit_dose = torch.logit(v_a)
+
+    LOG_2PI = 1.8378770664093453
+
+    def _clipped_normal_log_prob(x, mean, std, z_clip):
+        z = (x - mean) / std
+        if z_clip is not None:
+            z = z.clamp(-z_clip, z_clip)
+        return -0.5 * z ** 2 - torch.log(std) - 0.5 * LOG_2PI
+
+    f_mag_lp = _clipped_normal_log_prob(f_logit_dose, f_raw_mean, bc_f_std, z_clip) \
+        - torch.log(f_a * (1 - f_a) + 1e-6)
+    v_mag_lp = _clipped_normal_log_prob(v_logit_dose, v_raw_mean, bc_v_std, z_clip) \
+        - torch.log(v_a * (1 - v_a) + 1e-6)
+
+    fluid_lp = (f_gate_lp + f_fired_actual * f_mag_lp).squeeze(-1)
+    vaso_lp = (v_gate_lp + v_fired_actual * v_mag_lp).squeeze(-1)
+    return {"fluid_lp": fluid_lp, "vaso_lp": vaso_lp}
+
+
+def compute_drug_split_log_probs(
+        cql_actor, bc_actor, states, actions,
+        batch_size=1024, device="cuda" if torch.cuda.is_available() else "cpu",
+        logit_clip=8.0, z_clip=10.0,
+    ):
+    """
+    Per-drug analogue of compute_behavior_and_target_log_probs: for every
+    (state, action) row, computes the fluid-only and vaso-only behavior_lp
+    and target_lp separately (rather than the single drug-summed total).
+
+    Use this to isolate whether WIS instability comes from fluid dosing,
+    vaso dosing, or both -- e.g. build "fluid-only" trajectories with
+    build_trajectory_data(processor, fluid_behavior_lp, fluid_target_lp)
+    and compare compute_stepwise_wis/compute_trajectory_wis ESS against the
+    full (fluid+vaso) result, to test whether CQL's collapsed vaso policy
+    is solely responsible for the observed instability.
+
+    behavior_lp components come from bc_actor.log_prob_of_action(...,
+    return_components=True) (same hurdle-model field names as
+    cql_with_logprobs.Actor.log_prob_of_action: fluid_gate_lp, vaso_gate_lp,
+    fluid_mag_lp, vaso_mag_lp, fluid_fired, vaso_fired). target_lp
+    components come from log_prob_for_wis_clipped_components.
+
+    Returns four float64 numpy arrays of shape (n,): fluid_behavior_lp,
+    vaso_behavior_lp, fluid_target_lp, vaso_target_lp. Each pair
+    (fluid_behavior_lp + vaso_behavior_lp, fluid_target_lp + vaso_target_lp)
+    should match compute_behavior_and_target_log_probs's output (same
+    logit_clip/z_clip) up to which rows were "fired" -- summing is exact
+    since the un-fired drug's magnitude term is excluded on both sides
+    identically to the combined function.
+    """
+    cql_actor.eval()
+    bc_actor.eval()
+
+    states_t = torch.as_tensor(states, dtype=torch.float32)
+    actions_t = torch.as_tensor(actions, dtype=torch.float32)
+    n = states_t.shape[0]
+
+    fluid_behavior_lp = np.zeros(n, dtype=np.float64)
+    vaso_behavior_lp = np.zeros(n, dtype=np.float64)
+    fluid_target_lp = np.zeros(n, dtype=np.float64)
+    vaso_target_lp = np.zeros(n, dtype=np.float64)
+
+    for i in range(0, n, batch_size):
+        s = states_t[i:i + batch_size].to(device)
+        a = actions_t[i:i + batch_size].to(device)
+
+        b_components = bc_actor.log_prob_of_action(s, a, return_components=True)
+        if isinstance(b_components, tuple):
+            # matches cql_with_logprobs.Actor.log_prob_of_action's contract:
+            # (total_lp, components_dict) when return_components=True
+            _, b_components = b_components
+        b_fluid = b_components["fluid_gate_lp"] + b_components["fluid_fired"] * b_components["fluid_mag_lp"]
+        b_vaso = b_components["vaso_gate_lp"] + b_components["vaso_fired"] * b_components["vaso_mag_lp"]
+
+        t_components = log_prob_for_wis_clipped_components(
+            cql_actor, bc_actor, s, a, logit_clip=logit_clip, z_clip=z_clip,
+        )
+
+        fluid_behavior_lp[i:i + batch_size] = b_fluid.detach().cpu().numpy()
+        vaso_behavior_lp[i:i + batch_size] = b_vaso.detach().cpu().numpy()
+        fluid_target_lp[i:i + batch_size] = t_components["fluid_lp"].detach().cpu().numpy()
+        vaso_target_lp[i:i + batch_size] = t_components["vaso_lp"].detach().cpu().numpy()
+
+    return fluid_behavior_lp, vaso_behavior_lp, fluid_target_lp, vaso_target_lp
+
+
 def compute_behavior_and_target_log_probs(
         cql_actor, bc_actor, states, actions,
         batch_size=1024, device="cuda" if torch.cuda.is_available() else "cpu",
+        logit_clip=8.0, z_clip=10.0,
     ):
     """
     For every (state, action) row in the dataset, computes:
       behavior_lp[i] = log pi_b(action_i | state_i)   via bc_actor.log_prob_of_action
-      target_lp[i]   = log pi_e(action_i | state_i)   via cql_actor.log_prob_for_wis(..., bc_actor)
+      target_lp[i]   = log pi_e(action_i | state_i)   via log_prob_for_wis_clipped
 
-    log_prob_for_wis constructs its evaluation density around the CQL
-    actor's DETERMINISTIC action using BC's per-state std as bandwidth
-    (see cql_with_logprobs.Actor.log_prob_for_wis's docstring) -- this is
-    the density this project has already built specifically for WIS, so we
-    call it directly rather than re-deriving anything here.
+    Uses log_prob_for_wis_clipped rather than calling
+    cql_actor.log_prob_for_wis directly -- see that function's docstring for
+    why (diagnosed unbounded magnitude-term blowup when CQL's action head is
+    collapsed near a logit boundary, e.g. the observed vaso-head collapse;
+    z_clip -- clamping the z-score itself -- is what actually fixes it,
+    logit_clip alone was tried first and was NOT sufficient). Pass
+    z_clip=None (and logit_clip=None) to fall back to the raw, unclipped
+    cql_actor.log_prob_for_wis (e.g. for an explicit before/after
+    comparison).
 
     Returns two float64 numpy arrays of shape (n,).
     """
@@ -268,7 +477,12 @@ def compute_behavior_and_target_log_probs(
         a = actions_t[i:i + batch_size].to(device)
 
         b_lp = bc_actor.log_prob_of_action(s, a)
-        t_lp = cql_actor.log_prob_for_wis(s, a, bc_actor)
+        if logit_clip is None and z_clip is None:
+            t_lp = cql_actor.log_prob_for_wis(s, a, bc_actor)
+        else:
+            t_lp = log_prob_for_wis_clipped(
+                cql_actor, bc_actor, s, a, logit_clip=logit_clip, z_clip=z_clip,
+            )
 
         behavior_lp[i:i + batch_size] = b_lp.detach().cpu().numpy()
         target_lp[i:i + batch_size] = t_lp.detach().cpu().numpy()
@@ -375,7 +589,7 @@ def discounted_returns(trajectories, gamma):
     ])
 
 
-def compute_trajectory_wis(trajectories, gamma):
+def compute_trajectory_wis(trajectories, gamma, weight_cap_percentile=None):
     """
     Standard (whole-episode) weighted importance sampling:
 
@@ -384,13 +598,57 @@ def compute_trajectory_wis(trajectories, gamma):
     WIS reweights which TRAJECTORIES count more; it never alters the
     observed reward sequence. log-weights are normalized by their max
     before exponentiating (numerically stable, does not change the ratio).
+
+    weight_cap_percentile: if given (e.g. 95.0), truncates the UPPER tail
+    of the weight distribution to that percentile -- e.g. 95.0 means no
+    trajectory's weight can exceed the 95th percentile of all 240
+    trajectories' weights; anything above is clipped down to that value.
+    This is standard weight/importance-ratio truncation (Ionides 2008 and
+    the broader truncated-IS literature), and is a fundamentally different
+    intervention from build_trajectory_data's cap_percentile: that caps the
+    raw PER-STEP log-ratio before it's summed across the trajectory, which
+    (empirically verified on this dataset, even at 60% of ALL timesteps
+    clipped) does NOT meaningfully change trajectory-level ESS, because
+    compounding over hundreds of steps reintroduces enormous spread
+    regardless of how tame any single step is. Capping the WEIGHT itself,
+    after compounding, directly targets the thing that's actually
+    concentrated. Still a biased estimator (as any truncated IS is) --
+    report ESS/top-weight-fraction alongside the value so the bias-variance
+    tradeoff is visible, not just the point estimate. Only the upper tail
+    is truncated (standard practice -- small weights aren't the source of
+    instability).
+
+    IMPORTANT implementation note: the percentile/clip is computed in LOG
+    space (on log_weights), NOT on the already-exponentiated weights. When
+    one trajectory dominates by hundreds of natural-log units (observed on
+    this dataset), exponentiating first sends most other trajectories'
+    weights to EXACT floating-point 0.0 (underflow) before any capping
+    happens -- so a percentile computed on the exponentiated array can
+    itself evaluate to 0.0, and clipping the dominant weight down to
+    (a small multiple of) 0 doesn't reduce its RELATIVE dominance over an
+    array of literal zeros one bit: the value and ESS come out completely
+    unchanged (empirically verified on real data at weight_cap_percentile=95:
+    identical to the uncapped value/ESS to 4 decimal places). Log-weights
+    of -800 or +50 are both ordinary finite floats with no precision loss,
+    so capping there and exponentiating afterward is the correct, numerically
+    safe order of operations.
     """
     log_weights = np.array([np.sum(t["log_ratio"]) for t in trajectories])
     returns = discounted_returns(trajectories, gamma)
 
-    max_lw = log_weights.max()
-    weights = np.exp(log_weights - max_lw)
-    wis_value = np.sum(weights * returns) / np.sum(weights)
+    cap_value = None
+    if weight_cap_percentile is not None:
+        cap_log_weight = np.percentile(log_weights, weight_cap_percentile)
+        log_weights_for_exp = np.minimum(log_weights, cap_log_weight)
+        cap_value = cap_log_weight
+    else:
+        log_weights_for_exp = log_weights
+
+    max_lw = log_weights_for_exp.max()
+    weights = np.exp(log_weights_for_exp - max_lw)
+
+    w_sum = np.sum(weights)
+    wis_value = np.mean(returns) if w_sum <= 0 else np.sum(weights * returns) / w_sum
 
     return {
         "value": wis_value,
@@ -399,10 +657,12 @@ def compute_trajectory_wis(trajectories, gamma):
         "returns": returns,
         "ess": compute_ess(weights),
         "n_trajectories": len(trajectories),
+        "weight_cap_percentile": weight_cap_percentile,
+        "weight_cap_value": cap_value,
     }
 
 
-def compute_stepwise_wis(trajectories, gamma):
+def compute_stepwise_wis(trajectories, gamma, weight_cap_percentile=None):
     """
     Per-decision (stepwise) WIS, following the Precup et al. / AI-Clinician
     convention: the importance weight is accumulated timestep-by-timestep
@@ -433,6 +693,17 @@ def compute_stepwise_wis(trajectories, gamma):
     to judge whether either estimate is trustworthy at the horizons that
     matter.
 
+    weight_cap_percentile: if given, truncates the UPPER tail of the
+    CROSS-SECTIONAL weight distribution independently AT EACH timestep t
+    (among trajectories active at t) to that percentile, before computing
+    that timestep's weighted average -- the stepwise analogue of
+    compute_trajectory_wis's weight_cap_percentile. This is a different
+    intervention from build_trajectory_data's cap_percentile (which caps
+    the raw per-step log-ratio before cumulative summing, and was
+    empirically shown NOT to fix ESS collapse here even at extreme
+    settings): this caps the already-cumulative, already-exponentiated
+    weight itself, at the point where it's actually concentrated.
+
     Also returns the per-timestep value and ESS curves, since these are
     useful diagnostics in their own right (how much of the horizon is
     still well-supported by a meaningful effective sample size).
@@ -460,6 +731,107 @@ def compute_stepwise_wis(trajectories, gamma):
             continue
 
         lr_t = cum_log_ratio[active, t_idx]
+        if weight_cap_percentile is not None and n_active > 1:
+            # Cap in LOG space, same reasoning as compute_trajectory_wis:
+            # capping the already-exponentiated w_t can be a no-op when the
+            # dominant trajectory leads by hundreds of log-units, because
+            # np.percentile(w_t, ...) can itself land on floating-point 0.0
+            # once most of w_t has underflowed -- clipping the dominant
+            # weight down to (a multiple of) 0 doesn't change its RELATIVE
+            # dominance over an array of literal zeros. Capping lr_t
+            # (finite, no precision loss) before exponentiating is the
+            # numerically correct order of operations.
+            cap_lr = np.percentile(lr_t, weight_cap_percentile)
+            lr_t = np.minimum(lr_t, cap_lr)
+        max_lr = lr_t.max()
+        w_t = np.exp(lr_t - max_lr)
+        r_t = reward_matrix[active, t_idx]
+
+        w_sum = np.sum(w_t)
+        if w_sum <= 0:
+            # w_t is normalized by its own max before exponentiating, so
+            # the max entry is always exactly 1.0 and w_sum > 0 in
+            # practice; this is just a defensive fallback against
+            # propagating a NaN if that ever isn't true.
+            step_value = np.mean(r_t)
+        else:
+            step_value = np.sum(w_t * r_t) / w_sum
+        per_step_value[t_idx] = step_value
+        per_step_ess[t_idx] = compute_ess(w_t)
+        value += (gamma ** t_idx) * step_value
+
+    return {
+        "value": value,
+        "per_step_value": per_step_value,
+        "per_step_ess": per_step_ess,
+        "per_step_n_active": per_step_n_active,
+        "max_len": max_len,
+        "weight_cap_percentile": weight_cap_percentile,
+    }
+
+
+def compute_myopic_stepwise_wis(trajectories, gamma):
+    """
+    "Per-decision, non-cumulative" WIS -- diagnosed as necessary after
+    compute_stepwise_wis (and compute_trajectory_wis) both showed ESS
+    collapsing to ~1 trajectory within ~50-100 timesteps EVEN on a
+    fluid-only log-ratio (i.e. even with CQL's collapsed vaso head fully
+    excluded). The problem there is compounding itself: summing many steps'
+    log-ratios before exponentiating means the cumulative spread across
+    trajectories grows like sqrt(t) * per-step-std, which is enough on its
+    own (per-step std ~17 post-vaso-fix) to blow up cross-trajectory weight
+    variance well before t=100, regardless of any single density bug.
+
+    This estimator removes ALL compounding across time: at each timestep t,
+    it uses ONLY that step's own single-step log-ratio (log_ratio[t], NOT
+    cumsum(log_ratio)[:t+1]) to weight trajectories cross-sectionally --
+
+        w_t^i = exp( log_ratio_t^i )               [no cumulative sum]
+        V_myopic = sum_t gamma^t * [ sum_i w_t^i r_t^i ] / [ sum_i w_t^i ]
+
+    This is a MYOPIC approximation: it implicitly assumes the state
+    distribution at time t is the same under the target and behavior
+    policies (i.e. it ignores that CQL's earlier actions would have altered
+    which state you're even in by step t), so it does NOT correctly account
+    for how the target policy's own trajectory would unfold -- it only
+    reweights "given you're in this exact logged trajectory at this exact
+    logged state, how much more/less likely was THIS ONE decision under the
+    target policy." That's a real, known limitation (it silently drops the
+    state-distribution-shift term standard per-decision IS is supposed to
+    carry), which is exactly why compute_stepwise_wis's cumulative form is
+    the theoretically correct one and this one is not a replacement for it
+    -- it's a robustness/sanity-check estimator to run alongside FQE when
+    the theoretically correct estimators are too unstable to trust, so it
+    should be reported and framed as such, not as the primary value
+    estimate.
+
+    Same return shape as compute_stepwise_wis for drop-in comparison
+    (per_step_value/per_step_ess/per_step_n_active use "active at t" in the
+    same sense -- trajectories with length > t).
+    """
+    max_len = max(t["length"] for t in trajectories)
+    n_traj = len(trajectories)
+
+    log_ratio_mat = np.full((n_traj, max_len), np.nan)
+    reward_matrix = np.zeros((n_traj, max_len))
+    for i, t in enumerate(trajectories):
+        L = t["length"]
+        log_ratio_mat[i, :L] = t["log_ratio"]
+        reward_matrix[i, :L] = t["rewards"]
+
+    value = 0.0
+    per_step_value = np.zeros(max_len)
+    per_step_ess = np.zeros(max_len)
+    per_step_n_active = np.zeros(max_len, dtype=int)
+
+    for t_idx in range(max_len):
+        active = ~np.isnan(log_ratio_mat[:, t_idx])
+        n_active = int(active.sum())
+        per_step_n_active[t_idx] = n_active
+        if n_active == 0:
+            continue
+
+        lr_t = log_ratio_mat[active, t_idx]
         max_lr = lr_t.max()
         w_t = np.exp(lr_t - max_lr)
         r_t = reward_matrix[active, t_idx]
@@ -899,7 +1271,7 @@ def plot_length_vs_log_weight(length_weight_result, save_path=None):
 
 
 def bootstrap_wis_ci(trajectories, gamma, estimator="both", n_bootstrap=1000,
-                      ci=(2.5, 97.5), random_state=None):
+                      ci=(2.5, 97.5), random_state=None, weight_cap_percentile=None):
     """
     Bootstrap over TRAJECTORIES (patients), resampling with replacement and
     recomputing the chosen WIS estimator(s) each time. WIS has no simple
@@ -907,22 +1279,35 @@ def bootstrap_wis_ci(trajectories, gamma, estimator="both", n_bootstrap=1000,
     this is the standard approach for its uncertainty in the
     offline-RL-for-sepsis literature this project follows.
 
-    estimator: "trajectory", "stepwise", or "both".
+    estimator: "trajectory", "stepwise", "myopic", "all", or a legacy
+    "both" (kept as an alias for trajectory+stepwise, for old call sites).
+    weight_cap_percentile: passed through to compute_trajectory_wis /
+    compute_stepwise_wis (truncates the post-summation weight distribution
+    -- see those functions' docstrings; NOT the same thing as
+    build_trajectory_data's cap_percentile, which caps the raw per-step
+    log-ratio and does not fix ESS collapse for these estimators). Ignored
+    by the myopic estimator (which never compounds, so its own
+    logit_clip/z_clip already control per-step extremity).
     Returns a dict keyed by estimator name, each with samples/mean/std/CI.
     """
     rng = np.random.default_rng(random_state)
     n = len(trajectories)
-    want_traj = estimator in ("trajectory", "both")
-    want_step = estimator in ("stepwise", "both")
+    want_traj = estimator in ("trajectory", "both", "all")
+    want_step = estimator in ("stepwise", "both", "all")
+    want_myopic = estimator in ("myopic", "all")
 
-    traj_samples, step_samples = [], []
+    traj_samples, step_samples, myopic_samples = [], [], []
     for _ in range(n_bootstrap):
         idx = rng.integers(0, n, size=n)
         resampled = [trajectories[i] for i in idx]
         if want_traj:
-            traj_samples.append(compute_trajectory_wis(resampled, gamma)["value"])
+            traj_samples.append(compute_trajectory_wis(
+                resampled, gamma, weight_cap_percentile=weight_cap_percentile)["value"])
         if want_step:
-            step_samples.append(compute_stepwise_wis(resampled, gamma)["value"])
+            step_samples.append(compute_stepwise_wis(
+                resampled, gamma, weight_cap_percentile=weight_cap_percentile)["value"])
+        if want_myopic:
+            myopic_samples.append(compute_myopic_stepwise_wis(resampled, gamma)["value"])
 
     def _summarize(vals):
         vals = np.array(vals)
@@ -939,6 +1324,8 @@ def bootstrap_wis_ci(trajectories, gamma, estimator="both", n_bootstrap=1000,
         results["trajectory"] = _summarize(traj_samples)
     if want_step:
         results["stepwise"] = _summarize(step_samples)
+    if want_myopic:
+        results["myopic"] = _summarize(myopic_samples)
     return results
 
 
@@ -950,7 +1337,8 @@ def run_wis_across_seeds(
         cql_models_with_seeds, bc_models_with_seeds, processor,
         gamma=0.975, cap_percentile=None, batch_size=1024,
         device="cuda" if torch.cuda.is_available() else "cpu",
-        n_bootstrap=1000, random_state=0,
+        n_bootstrap=1000, random_state=0, logit_clip=8.0, z_clip=10.0,
+        include_myopic=True, weight_cap_percentile=None,
     ):
     """
     Runs the full WIS pipeline (log-probs -> trajectory split -> both
@@ -969,6 +1357,38 @@ def run_wis_across_seeds(
     processor's actions/rewards were built for (0.975 for health-score
     reward, per this project's convention -- confirm against your own
     config if evaluating a different reward type).
+
+    logit_clip, z_clip: passed through to compute_behavior_and_target_log_probs /
+    log_prob_for_wis_clipped. z_clip (clamping the magnitude term's z-score)
+    is what actually bounds the worst-case per-step penalty when an action
+    head has collapsed near a boundary (diagnosed for the vaso head on this
+    dataset) -- logit_clip alone was tried first and was NOT sufficient,
+    since a narrow bc_std can still put a real action tens of std's away
+    even from a clamped mean. Pass both logit_clip=None and z_clip=None to
+    reproduce the original, unclipped cql_actor.log_prob_for_wis behavior.
+
+    include_myopic: also computes compute_myopic_stepwise_wis (the
+    non-cumulative, per-decision-only estimator added after
+    trajectory-level and (cumulative) stepwise WIS BOTH showed ESS
+    collapsing to ~1 trajectory within ~100 timesteps, even with a
+    fluid-only log-ratio -- i.e. even independent of the vaso-head-collapse
+    fix. This is a robustness/sanity-check estimator with a real theoretical
+    limitation (see its docstring: it drops the state-distribution-shift
+    term standard per-decision IS carries), meant to run alongside FQE
+    rather than replace it -- not the theoretically preferred estimator,
+    but useful when trajectory-level and cumulative stepwise WIS are too
+    unstable to trust on their own.
+
+    weight_cap_percentile: passed to compute_trajectory_wis /
+    compute_stepwise_wis -- truncates the upper tail of the already-formed
+    weight distribution (trajectory-level: across all 240 trajectories;
+    stepwise: cross-sectionally at each timestep). This is the fix that
+    actually targets weight concentration (verified: cap_percentile
+    upstream, which caps the raw per-step log-ratio before summing, does
+    NOT move trajectory-level ESS even at extreme settings, since
+    compounding over hundreds of steps reintroduces spread regardless of
+    per-step magnitude). None (default) reproduces the original,
+    untruncated estimators.
     """
     pairs, _, _ = match_cql_bc_pairs(cql_models_with_seeds, bc_models_with_seeds)
     states = processor.rl_dataset["states"]
@@ -982,17 +1402,20 @@ def run_wis_across_seeds(
 
         behavior_lp, target_lp = compute_behavior_and_target_log_probs(
             cql_actor, bc_actor, states, actions, batch_size=batch_size, device=device,
+            logit_clip=logit_clip, z_clip=z_clip,
         )
         trajectories, cap_bounds = build_trajectory_data(
             processor, behavior_lp, target_lp, cap_percentile=cap_percentile,
         )
 
-        traj_wis = compute_trajectory_wis(trajectories, gamma)
-        step_wis = compute_stepwise_wis(trajectories, gamma)
+        traj_wis = compute_trajectory_wis(trajectories, gamma, weight_cap_percentile=weight_cap_percentile)
+        step_wis = compute_stepwise_wis(trajectories, gamma, weight_cap_percentile=weight_cap_percentile)
+        myopic_wis = compute_myopic_stepwise_wis(trajectories, gamma) if include_myopic else None
         baseline_mean, baseline_sem = compute_clinician_baseline_return(trajectories, gamma)
         ci = bootstrap_wis_ci(
-            trajectories, gamma, estimator="both",
+            trajectories, gamma, estimator=("all" if include_myopic else "both"),
             n_bootstrap=n_bootstrap, random_state=random_state,
+            weight_cap_percentile=weight_cap_percentile,
         )
         diag = summarize_weight_diagnostics(traj_wis["weights"])
 
@@ -1003,6 +1426,10 @@ def run_wis_across_seeds(
               f"({100 * diag['ess_frac']:.1f}%)")
         print(f"  Stepwise WIS:         {step_wis['value']:.4f}  "
               f"[{ci['stepwise']['ci_lower']:.4f}, {ci['stepwise']['ci_upper']:.4f}]")
+        if include_myopic:
+            print(f"  Myopic per-decision WIS (non-cumulative, sanity-check only): "
+                  f"{myopic_wis['value']:.4f}  "
+                  f"[{ci['myopic']['ci_lower']:.4f}, {ci['myopic']['ci_upper']:.4f}]")
         print(f"  Top-1% of trajectories hold {100 * diag['top_1pct_weight_frac']:.1f}% of total weight "
               f"(max single trajectory: {100 * diag['max_weight_frac']:.1f}%)")
 
@@ -1012,6 +1439,7 @@ def run_wis_across_seeds(
             "cap_bounds": cap_bounds,
             "trajectory_wis": traj_wis,
             "stepwise_wis": step_wis,
+            "myopic_stepwise_wis": myopic_wis,
             "baseline_mean": baseline_mean,
             "baseline_sem": baseline_sem,
             "bootstrap_ci": ci,

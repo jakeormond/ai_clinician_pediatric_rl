@@ -107,6 +107,13 @@ Computed `Q_FQE(π_CQL(s), s) − Q_FQE(a_clinician, s)` for each of the 5 match
 
 ---
 
+
+## Analysis workflow
+
+1. **Notebooks paired with python files.** For most analyses (e.g. WIS), we have a dedicated notebook that runs commands and displays plots and tables, but doesn't contain functions. Where these are uniquely (or primarily) used in the notebook, they will be contained in a python file of the same name; otherwise they should be in a file whose name indicates it's purpose (e.g. model_loading.py). 
+
+---
+
 ## Key file map (`src/rl/`)
 - `models/basic_q.py` — SARSA critic; also the FQE trainer (`Q_Learner` with optional `target_policy_actor`)
 - `models/cql_with_logprobs.py` — CQL actor + critic; `load_trained_actor` for FQE's target-policy loading

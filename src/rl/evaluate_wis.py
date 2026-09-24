@@ -36,6 +36,7 @@ runs the actual analysis, calls, and plots.
 
 import os
 import json
+import warnings
 
 import numpy as np
 import torch
@@ -1604,6 +1605,195 @@ def plot_weight_diagnostics(results, save_path=None):
     ax.legend(frameon=False, fontsize=9)
     ax.set_title("Trajectory-level importance-weight concentration by seed",
                  fontsize=12, fontweight="bold")
+    fig.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Saved to {save_path}")
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Weight-truncation sweep -- runs compute_trajectory_wis/compute_stepwise_wis
+# across a range of weight_cap_percentile values WITHOUT recomputing the
+# (expensive) log-probs/trajectory split each time, since those don't depend
+# on weight_cap_percentile at all. Use this instead of calling
+# run_wis_across_seeds once per sweep value.
+# ---------------------------------------------------------------------------
+
+def run_weight_truncation_sweep(
+        cql_models_with_seeds, bc_models_with_seeds, processor, wcap_values,
+        gamma=0.975, n_bootstrap=300, random_state=0,
+        logit_clip=8.0, z_clip=10.0, batch_size=1024,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    ):
+    """
+    For every seed-matched (CQL, BC) pair, computes log-probs and builds
+    trajectories ONCE (no per-step cap_percentile -- this sweep is about
+    weight_cap_percentile only), then re-evaluates compute_trajectory_wis /
+    compute_stepwise_wis / bootstrap_wis_ci at each value in wcap_values
+    without redoing the expensive part. wcap_values should NOT include None
+    (the uncapped case) -- that's already established elsewhere
+    (ESS=~1/240 across the board) and doesn't share an x-axis position with
+    a percentile value; report it separately as a reference line if wanted.
+
+    n_bootstrap defaults lower than run_wis_across_seeds's (300 vs 1000)
+    since this multiplies by len(wcap_values) full bootstrap runs -- bump it
+    back up for the final version of whichever cap level you settle on.
+
+    Returns a flat list of per-(seed, wcap) dicts, one row per combination,
+    suitable for passing directly to plot_weight_truncation_sweep or to
+    pandas.DataFrame(...) for your own tabulation.
+    """
+    pairs, _, _ = match_cql_bc_pairs(cql_models_with_seeds, bc_models_with_seeds)
+    states = processor.rl_dataset["states"]
+    actions = processor.rl_dataset["actions"]
+
+    sweep_rows = []
+    for cql_model_entry, bc_model_entry, seed in pairs:
+        print(f"\n=== Seed {seed}: building trajectories once, then sweeping {len(wcap_values)} cap levels ===")
+        cql_actor = get_cql_actor(cql_model_entry)
+        bc_actor = get_bc_actor(bc_model_entry)
+
+        behavior_lp, target_lp = compute_behavior_and_target_log_probs(
+            cql_actor, bc_actor, states, actions, batch_size=batch_size, device=device,
+            logit_clip=logit_clip, z_clip=z_clip,
+        )
+        trajectories, _ = build_trajectory_data(processor, behavior_lp, target_lp, cap_percentile=None)
+        baseline_mean, baseline_sem = compute_clinician_baseline_return(trajectories, gamma)
+
+        for wcap in wcap_values:
+            traj_wis = compute_trajectory_wis(trajectories, gamma, weight_cap_percentile=wcap)
+            step_wis = compute_stepwise_wis(trajectories, gamma, weight_cap_percentile=wcap)
+            ci = bootstrap_wis_ci(
+                trajectories, gamma, estimator="both", n_bootstrap=n_bootstrap,
+                random_state=random_state, weight_cap_percentile=wcap,
+            )
+
+            # Genuine stepwise ESS summary: compute_stepwise_wis's own
+            # per-timestep ESS, NOT trajectory-level ESS. Earlier versions of
+            # this sweep/plot mistakenly reused traj_ess_frac for the
+            # stepwise panel too -- misleading, since the two estimators
+            # truncate/concentrate weight in completely different ways (one
+            # whole-episode weight per trajectory vs. one cross-sectional
+            # weight distribution per timestep). Summarize the per-timestep
+            # ess/n_active curve with the same gamma^t weighting the value
+            # itself uses, restricted to timesteps with >0 active trajectories.
+            active_t = step_wis["per_step_n_active"] > 0
+            t_idx = np.arange(step_wis["max_len"])[active_t]
+            ess_frac_t = (
+                step_wis["per_step_ess"][active_t] / step_wis["per_step_n_active"][active_t]
+            )
+            disc = gamma ** t_idx
+            step_ess_frac = float(np.sum(disc * ess_frac_t) / np.sum(disc))
+
+            row = {
+                "seed": seed,
+                "weight_cap_percentile": wcap,
+                "traj_value": traj_wis["value"],
+                "traj_ess": traj_wis["ess"],
+                "traj_ess_frac": traj_wis["ess"] / traj_wis["n_trajectories"],
+                "traj_ci_lower": ci["trajectory"]["ci_lower"],
+                "traj_ci_upper": ci["trajectory"]["ci_upper"],
+                "step_value": step_wis["value"],
+                "step_ess_frac": step_ess_frac,
+                "step_ci_lower": ci["stepwise"]["ci_lower"],
+                "step_ci_upper": ci["stepwise"]["ci_upper"],
+                "baseline_mean": baseline_mean,
+                "baseline_sem": baseline_sem,
+            }
+            sweep_rows.append(row)
+            print(f"  wcap={wcap:5.1f}  traj={row['traj_value']:.3f} "
+                  f"(traj ESS {100 * row['traj_ess_frac']:.1f}%)  "
+                  f"step={row['step_value']:.3f} (step ESS {100 * step_ess_frac:.1f}%)")
+
+    return sweep_rows
+
+
+def plot_weight_truncation_sweep(sweep_rows, estimator="trajectory", save_path=None):
+    """
+    The full loose-to-aggressive weight_cap_percentile sweep, overlaid with
+    ESS, for one estimator ("trajectory" or "stepwise") -- run twice (once
+    per estimator) for the paired figure. One thin line per seed for the
+    value (left axis, with its bootstrap CI as a shaded band, mean across
+    seeds in bold), ESS fraction as a dashed line per seed on the right
+    axis, and the clinician baseline as a horizontal reference line.
+
+    x-axis is a CATEGORICAL ordering of the wcap values actually present in
+    sweep_rows, ordered from loosest (largest percentile, e.g. 99) on the
+    left to most aggressive (smallest percentile, e.g. 1) on the right --
+    NOT a linear/log numeric axis, since the sweep values themselves are
+    irregularly spaced and a categorical axis reads more honestly here.
+
+    sweep_rows: the flat list returned by run_weight_truncation_sweep.
+    """
+    prefix = "traj" if estimator == "trajectory" else "step"
+    value_key = f"{prefix}_value"
+    ci_lower_key = f"{prefix}_ci_lower"
+    ci_upper_key = f"{prefix}_ci_upper"
+    # traj_ess_frac has always been in sweep_rows; step_ess_frac was added
+    # later -- fall back to traj_ess_frac (with a warning) for sweep_rows
+    # produced before that change, rather than KeyError.
+    if prefix == "step" and "step_ess_frac" not in sweep_rows[0]:
+        warnings.warn(
+            "sweep_rows has no 'step_ess_frac' (produced by an older "
+            "run_weight_truncation_sweep) -- falling back to trajectory-level "
+            "ESS for the stepwise plot, which is NOT the stepwise estimator's "
+            "own weight concentration. Re-run run_weight_truncation_sweep to "
+            "get a correct stepwise ESS curve."
+        )
+    ess_key = f"{prefix}_ess_frac" if f"{prefix}_ess_frac" in sweep_rows[0] else "traj_ess_frac"
+    color = TRAJECTORY_COLOR if estimator == "trajectory" else STEPWISE_COLOR
+
+    wcap_values = sorted({r["weight_cap_percentile"] for r in sweep_rows}, reverse=True)
+    x = np.arange(len(wcap_values))
+    seeds = sorted({r["seed"] for r in sweep_rows})
+
+    fig, ax1 = plt.subplots(figsize=(9, 5.5))
+    ax2 = ax1.twinx()
+
+    cmap = plt.get_cmap("viridis")
+    mean_values = []
+    for xi, wcap in enumerate(wcap_values):
+        rows_here = [r for r in sweep_rows if r["weight_cap_percentile"] == wcap]
+        mean_values.append(np.mean([r[value_key] for r in rows_here]))
+
+    for i, seed in enumerate(seeds):
+        seed_rows = sorted(
+            [r for r in sweep_rows if r["seed"] == seed],
+            key=lambda r: wcap_values.index(r["weight_cap_percentile"]),
+        )
+        vals = [r[value_key] for r in seed_rows]
+        ci_lo = [r[ci_lower_key] for r in seed_rows]
+        ci_hi = [r[ci_upper_key] for r in seed_rows]
+        ess_frac = [100 * r[ess_key] for r in seed_rows]
+        seed_color = cmap(i / max(1, len(seeds) - 1))
+
+        ax1.plot(x, vals, color=seed_color, linewidth=1.2, alpha=0.6, label=f"seed {seed}")
+        ax1.fill_between(x, ci_lo, ci_hi, color=seed_color, alpha=0.08)
+        ax2.plot(x, ess_frac, color=seed_color, linewidth=1.0, linestyle="--", alpha=0.5)
+
+    ax1.plot(x, mean_values, color=color, linewidth=2.8, label="mean across seeds", zorder=10)
+
+    baseline_mean = sweep_rows[0]["baseline_mean"]
+    ax1.axhline(baseline_mean, color=BASELINE_COLOR, linestyle=":", linewidth=1.5,
+                label="clinician baseline (logged)")
+
+    ax1.set_xticks(x)
+    ax1.set_xticklabels([f"{wc:g}" for wc in wcap_values])
+    ax1.set_xlabel("weight_cap_percentile (loosest → most aggressive truncation)")
+    ax1.set_ylabel(f"{'Trajectory-level' if estimator == 'trajectory' else 'Stepwise'} WIS value")
+    ess_label = "Trajectory-level ESS (% of n)" if prefix == "traj" else "Stepwise ESS (gamma-weighted mean % of active n)"
+    ax2.set_ylabel(f"{ess_label} -- dashed", color=ESS_COLOR)
+    ax2.tick_params(axis="y", colors=ESS_COLOR)
+    ax1.spines[["top"]].set_visible(False)
+    ax2.spines[["top"]].set_visible(False)
+    ax1.legend(loc="upper left", frameon=False, fontsize=8, ncol=2)
+    ax1.set_title(
+        f"{'Trajectory-level' if estimator == 'trajectory' else 'Stepwise'} WIS across weight-truncation "
+        f"levels, overlaid with ESS",
+        fontsize=12, fontweight="bold",
+    )
     fig.tight_layout()
 
     if save_path:

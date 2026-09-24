@@ -237,13 +237,29 @@ def get_trajectory_boundaries(processor):
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def log_prob_for_wis_clipped(cql_actor, bc_actor, state, action, logit_clip=8.0, z_clip=10.0):
+def log_prob_for_wis_clipped(cql_actor, bc_actor, state, action, logit_clip=8.0, z_clip=10.0, std_source="bc"):
     """
     Batched drop-in replacement for cql_actor.log_prob_for_wis(state, action,
     bc_actor), reimplementing its exact arithmetic (see
     cql_with_logprobs.Actor.log_prob_for_wis) with the magnitude term's
-    z-score -- (real_logit_dose - CQL_mean) / bc_std -- clamped to
+    z-score -- (real_logit_dose - CQL_mean) / std -- clamped to
     [-z_clip, +z_clip] before it is squared inside the Gaussian log-density.
+
+    std_source: "bc" (default, matches cql_with_logprobs.Actor.log_prob_for_wis's
+    original design) uses the BC actor's per-state fitted std -- an MLE fit to
+    real clinician dosing variability, deliberately decoupled from CQL's own
+    training dynamics. "cql" instead uses CQL's OWN f_std/v_std from _dists,
+    i.e. the actor's own entropy-regularized magnitude std (pushed toward a
+    fixed target raw std via the learned alpha_mag dual variables during
+    training -- see CQL.train's actor_loss). This is a genuinely different
+    density, not just a numerical variant: CQL's own std can reflect local
+    Q-curvature (narrower where the exact dose matters more for Q, wider
+    where it doesn't, up to the entropy target), which BC's std does not
+    encode at all. Neither is more "correct" a priori; compare both against
+    the same known-catastrophic rows before deciding, and note that z_clip
+    should be kept as a safety net regardless of std_source, since a
+    boundary-collapsed mean can still produce an unbounded penalty against
+    ANY std that happens to be narrow at that particular state.
 
     Why z-score, not the mean (history of this function): the first version
     of this fix clamped f_raw_mean/v_raw_mean to [-logit_clip, +logit_clip]
@@ -280,9 +296,11 @@ def log_prob_for_wis_clipped(cql_actor, bc_actor, state, action, logit_clip=8.0,
     Returns a 1-D tensor of length batch (not detached/moved -- caller
     handles that, matching cql_actor.log_prob_for_wis's own contract).
     """
+    if std_source not in ("bc", "cql"):
+        raise ValueError(f"std_source must be 'bc' or 'cql', got {std_source!r}")
     bc_actor.eval()
 
-    f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, _, _ = cql_actor._dists(state)
+    f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std_cql, v_std_cql = cql_actor._dists(state)
     if logit_clip is not None:
         f_raw_mean = f_raw_mean.clamp(-logit_clip, logit_clip)
         v_raw_mean = v_raw_mean.clamp(-logit_clip, logit_clip)
@@ -290,7 +308,10 @@ def log_prob_for_wis_clipped(cql_actor, bc_actor, state, action, logit_clip=8.0,
     f_p = torch.sigmoid(f_gate_logit)
     v_p = torch.sigmoid(v_gate_logit)
 
-    _, _, _, (_, _, _, _, bc_f_std, bc_v_std) = bc_actor(state, return_dist=True)
+    if std_source == "bc":
+        _, _, _, (_, _, _, _, f_std, v_std) = bc_actor(state, return_dist=True)
+    else:
+        f_std, v_std = f_std_cql, v_std_cql
 
     f_dose, v_dose = action[:, 0:1], action[:, 1:2]
     f_fired_actual = (f_dose > cql_actor.zero_threshold).float()
@@ -312,16 +333,16 @@ def log_prob_for_wis_clipped(cql_actor, bc_actor, state, action, logit_clip=8.0,
             z = z.clamp(-z_clip, z_clip)
         return -0.5 * z ** 2 - torch.log(std) - 0.5 * LOG_2PI
 
-    f_mag_lp = _clipped_normal_log_prob(f_logit_dose, f_raw_mean, bc_f_std, z_clip) \
+    f_mag_lp = _clipped_normal_log_prob(f_logit_dose, f_raw_mean, f_std, z_clip) \
         - torch.log(f_a * (1 - f_a) + 1e-6)
-    v_mag_lp = _clipped_normal_log_prob(v_logit_dose, v_raw_mean, bc_v_std, z_clip) \
+    v_mag_lp = _clipped_normal_log_prob(v_logit_dose, v_raw_mean, v_std, z_clip) \
         - torch.log(v_a * (1 - v_a) + 1e-6)
 
     total_lp = f_gate_lp + f_fired_actual * f_mag_lp + v_gate_lp + v_fired_actual * v_mag_lp
     return total_lp.squeeze(-1)
 
 
-def log_prob_for_wis_clipped_components(cql_actor, bc_actor, state, action, logit_clip=8.0, z_clip=10.0):
+def log_prob_for_wis_clipped_components(cql_actor, bc_actor, state, action, logit_clip=8.0, z_clip=10.0, std_source="bc"):
     """
     Same arithmetic as log_prob_for_wis_clipped, but returns the fluid and
     vaso contributions SEPARATELY (each already gate + fired*magnitude
@@ -332,9 +353,11 @@ def log_prob_for_wis_clipped_components(cql_actor, bc_actor, state, action, logi
     Returns a dict of 1-D tensors (length batch): "fluid_lp", "vaso_lp"
     (these two sum to what log_prob_for_wis_clipped returns).
     """
+    if std_source not in ("bc", "cql"):
+        raise ValueError(f"std_source must be 'bc' or 'cql', got {std_source!r}")
     bc_actor.eval()
 
-    f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, _, _ = cql_actor._dists(state)
+    f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std_cql, v_std_cql = cql_actor._dists(state)
     if logit_clip is not None:
         f_raw_mean = f_raw_mean.clamp(-logit_clip, logit_clip)
         v_raw_mean = v_raw_mean.clamp(-logit_clip, logit_clip)
@@ -342,7 +365,10 @@ def log_prob_for_wis_clipped_components(cql_actor, bc_actor, state, action, logi
     f_p = torch.sigmoid(f_gate_logit)
     v_p = torch.sigmoid(v_gate_logit)
 
-    _, _, _, (_, _, _, _, bc_f_std, bc_v_std) = bc_actor(state, return_dist=True)
+    if std_source == "bc":
+        _, _, _, (_, _, _, _, f_std, v_std) = bc_actor(state, return_dist=True)
+    else:
+        f_std, v_std = f_std_cql, v_std_cql
 
     f_dose, v_dose = action[:, 0:1], action[:, 1:2]
     f_fired_actual = (f_dose > cql_actor.zero_threshold).float()
@@ -364,9 +390,9 @@ def log_prob_for_wis_clipped_components(cql_actor, bc_actor, state, action, logi
             z = z.clamp(-z_clip, z_clip)
         return -0.5 * z ** 2 - torch.log(std) - 0.5 * LOG_2PI
 
-    f_mag_lp = _clipped_normal_log_prob(f_logit_dose, f_raw_mean, bc_f_std, z_clip) \
+    f_mag_lp = _clipped_normal_log_prob(f_logit_dose, f_raw_mean, f_std, z_clip) \
         - torch.log(f_a * (1 - f_a) + 1e-6)
-    v_mag_lp = _clipped_normal_log_prob(v_logit_dose, v_raw_mean, bc_v_std, z_clip) \
+    v_mag_lp = _clipped_normal_log_prob(v_logit_dose, v_raw_mean, v_std, z_clip) \
         - torch.log(v_a * (1 - v_a) + 1e-6)
 
     fluid_lp = (f_gate_lp + f_fired_actual * f_mag_lp).squeeze(-1)
@@ -444,7 +470,7 @@ def compute_drug_split_log_probs(
 def compute_behavior_and_target_log_probs(
         cql_actor, bc_actor, states, actions,
         batch_size=1024, device="cuda" if torch.cuda.is_available() else "cpu",
-        logit_clip=8.0, z_clip=10.0,
+        logit_clip=8.0, z_clip=10.0, std_source="bc",
     ):
     """
     For every (state, action) row in the dataset, computes:
@@ -459,7 +485,14 @@ def compute_behavior_and_target_log_probs(
     logit_clip alone was tried first and was NOT sufficient). Pass
     z_clip=None (and logit_clip=None) to fall back to the raw, unclipped
     cql_actor.log_prob_for_wis (e.g. for an explicit before/after
-    comparison).
+    comparison) -- note that path always uses BC's std (that's what
+    cql_actor.log_prob_for_wis itself does), regardless of std_source.
+
+    std_source: passed through to log_prob_for_wis_clipped -- "bc" (default)
+    for BC's fitted std, "cql" to use CQL's own entropy-regularized f_std/
+    v_std instead. See that function's docstring for the reasoning; this is
+    a real modeling choice; run both and compare before picking one for the
+    paper's headline numbers.
 
     Returns two float64 numpy arrays of shape (n,).
     """
@@ -483,6 +516,7 @@ def compute_behavior_and_target_log_probs(
         else:
             t_lp = log_prob_for_wis_clipped(
                 cql_actor, bc_actor, s, a, logit_clip=logit_clip, z_clip=z_clip,
+                std_source=std_source,
             )
 
         behavior_lp[i:i + batch_size] = b_lp.detach().cpu().numpy()
@@ -1339,7 +1373,7 @@ def run_wis_across_seeds(
         gamma=0.975, cap_percentile=None, batch_size=1024,
         device="cuda" if torch.cuda.is_available() else "cpu",
         n_bootstrap=1000, random_state=0, logit_clip=8.0, z_clip=10.0,
-        include_myopic=True, weight_cap_percentile=None,
+        include_myopic=True, weight_cap_percentile=None, std_source="bc",
     ):
     """
     Runs the full WIS pipeline (log-probs -> trajectory split -> both
@@ -1390,6 +1424,17 @@ def run_wis_across_seeds(
     compounding over hundreds of steps reintroduces spread regardless of
     per-step magnitude). None (default) reproduces the original,
     untruncated estimators.
+
+    std_source: passed through to compute_behavior_and_target_log_probs /
+    log_prob_for_wis_clipped. "bc" (default, unchanged behavior) uses BC's
+    fitted std for the target-policy magnitude density; "cql" uses CQL's own
+    entropy-regularized f_std/v_std instead. Verified on the five known
+    worst-offender rows: std_source="cql" cuts the pathological per-step
+    penalty roughly 5x at non-degenerate states (CQL's std ~0.55 vs BC's
+    ~0.24 there), but does NOT eliminate it (still ~-430 per step) -- the
+    dominant driver is how far CQL's raw mean has collapsed toward the
+    zero-dose boundary (~-18 logit units observed), not std width per se.
+    z_clip should stay enabled regardless of std_source.
     """
     pairs, _, _ = match_cql_bc_pairs(cql_models_with_seeds, bc_models_with_seeds)
     states = processor.rl_dataset["states"]
@@ -1403,7 +1448,7 @@ def run_wis_across_seeds(
 
         behavior_lp, target_lp = compute_behavior_and_target_log_probs(
             cql_actor, bc_actor, states, actions, batch_size=batch_size, device=device,
-            logit_clip=logit_clip, z_clip=z_clip,
+            logit_clip=logit_clip, z_clip=z_clip, std_source=std_source,
         )
         trajectories, cap_bounds = build_trajectory_data(
             processor, behavior_lp, target_lp, cap_percentile=cap_percentile,
@@ -1420,6 +1465,7 @@ def run_wis_across_seeds(
         )
         diag = summarize_weight_diagnostics(traj_wis["weights"])
 
+        print(f"  [std_source={std_source}]")
         print(f"  Clinician baseline (logged) return: {baseline_mean:.4f} +/- {baseline_sem:.4f} (SEM)")
         print(f"  Trajectory-level WIS: {traj_wis['value']:.4f}  "
               f"[{ci['trajectory']['ci_lower']:.4f}, {ci['trajectory']['ci_upper']:.4f}]  "
@@ -1626,6 +1672,7 @@ def run_weight_truncation_sweep(
         gamma=0.975, n_bootstrap=300, random_state=0,
         logit_clip=8.0, z_clip=10.0, batch_size=1024,
         device="cuda" if torch.cuda.is_available() else "cpu",
+        std_source="bc",
     ):
     """
     For every seed-matched (CQL, BC) pair, computes log-probs and builds
@@ -1644,6 +1691,11 @@ def run_weight_truncation_sweep(
     Returns a flat list of per-(seed, wcap) dicts, one row per combination,
     suitable for passing directly to plot_weight_truncation_sweep or to
     pandas.DataFrame(...) for your own tabulation.
+
+    std_source: "bc" (default) or "cql" -- see log_prob_for_wis_clipped's
+    docstring. Passed straight through to compute_behavior_and_target_log_probs;
+    everything downstream (trajectory split, both estimators, sweep) is
+    unaffected in structure, only in the log-ratios it starts from.
     """
     pairs, _, _ = match_cql_bc_pairs(cql_models_with_seeds, bc_models_with_seeds)
     states = processor.rl_dataset["states"]
@@ -1657,7 +1709,7 @@ def run_weight_truncation_sweep(
 
         behavior_lp, target_lp = compute_behavior_and_target_log_probs(
             cql_actor, bc_actor, states, actions, batch_size=batch_size, device=device,
-            logit_clip=logit_clip, z_clip=z_clip,
+            logit_clip=logit_clip, z_clip=z_clip, std_source=std_source,
         )
         trajectories, _ = build_trajectory_data(processor, behavior_lp, target_lp, cap_percentile=None)
         baseline_mean, baseline_sem = compute_clinician_baseline_return(trajectories, gamma)

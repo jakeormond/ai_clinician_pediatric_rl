@@ -164,6 +164,31 @@
         },
 
         {
+            "name": "choc_transformer_best_with_seeds",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "choc", 
+                "--experiment_type", "supervised_learning",
+                "--model_type", "dynamic_deephit_transformer", 
+                "--prediction_type", "discharge_mortality_tte",
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--search_variant", "best_hyperparameters",
+                "--seeds", "0", "1", "2", "3", "4",
+                "--cohort", "sepsis",
+                "--unit", "PICU",
+                "--filter_old", "True",
+                "--n_search_iterations", "1",
+                "--n_epochs", "2",
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
             "name": "mimic_iv_transformer",
             "type": "debugpy",
             "request": "launch",

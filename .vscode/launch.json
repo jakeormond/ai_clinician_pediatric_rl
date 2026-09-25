@@ -177,10 +177,9 @@
                 "--split_num", "0",
                 "--search_variant", "best_hyperparameters",
                 "--seeds", "0", "1", "2", "3", "4",
-                "--cohort", "sepsis",
+                "--cohort", "all",
                 "--unit", "PICU",
                 "--filter_old", "True",
-                "--n_search_iterations", "1",
                 "--n_epochs", "2",
                 "--action_dir", "intake-vis",
                 "--include_actions_in_state", "False"

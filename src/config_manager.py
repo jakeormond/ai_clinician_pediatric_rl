@@ -155,7 +155,7 @@ class ConfigManager:
                     elif self.model_type == "dynamic_deephit_transformer":
                         self.best_results_path = os.path.join(
                             self.paths["supervised_final_model_dir"], 'five_splits',
-                            f"split_{self.split_num}", self.cohort.lower(), self.action_dir,
+                            f"split_{self.split_num}", 'sepsis', self.action_dir,
                             f"{self.unit.lower()}",
                             "best_results.json"
                         )

@@ -107,8 +107,11 @@ def parse_arguments():
                        help='Experiment variant determines config defaults')
 
     parser.add_argument('--search_variant', type=str, default=None,
-                        choices=['grid_search', 'random_search', 'fixed_hyperparameters'],
+                        choices=['grid_search', 'random_search', 'fixed_hyperparameters', 'best_hyperparameters'],
                         help='Search variant for hyperparameter tuning (default: None)')
+
+    parser.add_argument('--seeds', type=int, nargs='+', default=None,
+                        help='Random seeds to use for training (default: None, which means use the default seed in the config file)')
     
     parser.add_argument('--n_search_iterations', type=int, default=0,
                         help='Number of search iterations for random search (default: 0)')
@@ -153,12 +156,14 @@ def parse_arguments():
     
     parser.add_argument('--n_epochs', type=int, default = 10,                  
                     help='Number of epochs to train for - should be 1000, but for testing we set to 10')  
-    
-    # seeds is a list if not None, but argparse doesn't support list of ints, so we use nargs='+' and convert to list of ints
-    parser.add_argument('--seeds', type=int, nargs='+', default=None,
-        help='Random seeds to use for training (default: None, which means use the default seed in the config file)')
-        
 
+    parser.add_argument('--action_dir', type=str, default=None,
+                        choices=['intake-vis'],
+                        help='Directory of the actions to use for this experiment (overrides config file)')
+
+    parser.add_argument('--include_actions_in_state', type=str, default='True',
+                        choices=['True', 'False'],
+                        help='Whether to include actions in the state (default: True)')
 
     args = parser.parse_args()
 

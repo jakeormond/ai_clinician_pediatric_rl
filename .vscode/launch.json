@@ -182,6 +182,8 @@
                 "--filter_old", "True",
                 "--n_search_iterations", "1",
                 "--n_epochs", "2",
+                "--action_dir", "intake-vis",
+                "--include_actions_in_state", "False"
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

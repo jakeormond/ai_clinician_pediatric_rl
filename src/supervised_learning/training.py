@@ -246,7 +246,7 @@ def create_buffer(processor, batch_size, config_manager, shuffle=True):
     return buffer, dataset
 
 
-def create_trainer(train_processor, training_dataset, hyperparams, config_manager):
+def create_trainer(training_dataset, hyperparams, config_manager):
 
     # feature_dim = train_processor.dynamic_deephit_dataset["features"].shape[2]
     feature_dim = training_dataset.trajectories.shape[1] 
@@ -269,7 +269,6 @@ def create_trainer(train_processor, training_dataset, hyperparams, config_manage
         config_manager,
         feature_dim,
         hyperparams,
-        train_processor,
         training_dataset,
         num_targets=num_targets
     )
@@ -837,6 +836,8 @@ def train_with_hyperparameters(
     hyperparams['seed'] = seed
     set_seed(seed)
 
+    hyperparams['include_actions_in_state'] = config_manager.include_actions_in_state
+
     # initialize wandb for this training run
     run = wandb_init(hyperparams, job_id)
 
@@ -851,7 +852,7 @@ def train_with_hyperparameters(
     hyperparams['total_steps'] = n_epochs * len(training_buffer)
     
     # create trainer
-    trainer = create_trainer(train_processor, training_dataset, hyperparams, config_manager)
+    trainer = create_trainer(training_dataset, hyperparams, config_manager)
 
     # Early stopping configuration 
     early_stopping = get_early_stopping_config(config_manager)

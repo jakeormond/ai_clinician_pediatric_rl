@@ -768,7 +768,6 @@ def get_trainer(
         config_manager, 
         feature_dim, 
         hyperparams, 
-        train_processor, 
         training_dataset,
         num_targets = 2,
         ):
@@ -787,7 +786,7 @@ def get_trainer(
         feature_dropout_p=hyperparams['feature_dropout_p'],
         ff_factor=hyperparams['ff_factor'],
         max_seq_len=config_manager.training_config['window_length'],
-        predict_covariates=train_processor.dynamic_deephit_dataset['physiological_feature_ind']
+        predict_covariates=training_dataset.physiological_feature_ind
     ).to(config_manager.training_config['device'])
 
     # # Collect L1 parameters: classification head weights only
@@ -845,7 +844,7 @@ def get_trainer(
             logit_scale = hyperparams['logit_scale'],
             log_grad_norms_freq = hyperparams['log_grad_norms_freq'],
             verbose=True, 
-            physiological_feature_type = train_processor.dynamic_deephit_dataset['physiological_feature_type'],
+            physiological_feature_type = training_dataset.physiological_feature_type,
             # l1_params=l1_params,          # ← ADD THIS
             l1_lambda=hyperparams['l1_lambda'],   
             final_timestep_only = config_manager.final_timestep_only        

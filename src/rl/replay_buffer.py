@@ -102,6 +102,8 @@ class DynamicDeepHitTransformerDataset(Dataset):
         self.trajectories = torch.tensor(data_processor.dynamic_deephit_dataset["trajectories"], dtype=torch.float32)
         self.feature_names = data_processor.dynamic_deephit_dataset["feature_names"]
         self.stay_ids = torch.tensor(data_processor.dynamic_deephit_dataset["stay_ids"], dtype=torch.long)
+        self.physiological_feature_ind = data_processor.dynamic_deephit_dataset['physiological_feature_ind'].copy()
+        self.physiological_feature_type = data_processor.dynamic_deephit_dataset['physiological_feature_type']
                 
         self.event = torch.tensor(data_processor.dynamic_deephit_dataset["event"], dtype=torch.long)
         self.index_ptr = torch.tensor(data_processor.dynamic_deephit_dataset["index_ptr"], dtype=torch.long)
@@ -124,6 +126,7 @@ class DynamicDeepHitTransformerDataset(Dataset):
         # and the response_zero_ind and carry_forward_ind features which we need to omit 
         # from the final timestep
         actions = config_manager.training_config['actions']
+        
         # if actions is a list of lists, flatten it
         if isinstance(actions, list) and len(actions) > 0 and isinstance(actions[0], list):
             actions = [item for sublist in actions for item in sublist]
@@ -149,6 +152,26 @@ class DynamicDeepHitTransformerDataset(Dataset):
             # SHOULD I INCLUDE ALL INTERVENTIONS HERE??????????????????????????
             self.response_zero_ind = np.sort(list(set(self.response_zero_ind) & set(action_ind)))
             self.carry_forward_ind = np.sort(list(set(self.carry_forward_ind) & set(action_ind)))
+
+        if config_manager.include_actions_in_state == 'False':
+            indices_to_remove = np.sort(list(set(self.response_zero_ind) | set(self.carry_forward_ind)))
+
+            # check that none of indices_to_remove are in self.physiological_feature_ind
+            if hasattr(self, 'physiological_feature_ind'):
+                for ind in indices_to_remove:
+                    if ind in self.physiological_feature_ind:
+                        raise ValueError("Cannot remove physiological features from the state representation.")
+
+            # shift the indices self.physiological_feature_ind down by the number of indices removed that are less than each physiological feature index
+            if hasattr(self, 'physiological_feature_ind'):
+                for i, ind in enumerate(self.physiological_feature_ind):
+                    num_removed = np.sum(indices_to_remove < ind)
+                    self.physiological_feature_ind[i] = ind - num_removed
+            
+            self.trajectories = torch.tensor(np.delete(self.trajectories, indices_to_remove, axis=1), dtype=torch.float32)
+            self.feature_names = [feat for i, feat in enumerate(self.feature_names) if i not in indices_to_remove]
+            self.response_zero_ind = []
+            self.carry_forward_ind = []
 
         # model specific processing
         if self.task == "bc_transformer":
@@ -176,7 +199,7 @@ class DynamicDeepHitTransformerDataset(Dataset):
         elif self.task == "dynamic_deephit_transformer":
             self.time_to_event_raw = torch.tensor(data_processor.dynamic_deephit_dataset["time_to_event_raw"], dtype=torch.long)
             self.time_to_event = torch.tensor(data_processor.dynamic_deephit_dataset["time_to_event"], dtype=torch.long)
-                
+        
         self.reshuffle_subsample() 
 
 

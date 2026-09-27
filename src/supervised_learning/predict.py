@@ -1649,8 +1649,6 @@ def plot_health_score_statistics(
 
 def plot_random_predictions(
         config_manager,
-        model='transformer',
-        cohort='all',
     ):
     
     # experiment_dir, cohort_final_model_dir = get_model_dir(

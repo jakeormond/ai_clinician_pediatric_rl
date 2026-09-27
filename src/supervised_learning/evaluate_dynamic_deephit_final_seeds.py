@@ -19,7 +19,6 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 from scipy import stats
 
@@ -293,28 +292,84 @@ def prediction_path(model_dir, split):
     return os.path.join(model_dir, f"{split}_predictions.h5")
 
 
+def _row_starts(dataset, device):
+    """For every row, the row index where its stay starts."""
+    index_ptr = dataset.index_ptr
+    lengths = index_ptr[1:] - index_ptr[:-1]
+    return torch.repeat_interleave(index_ptr[:-1], lengths).to(device)
+
+
+def build_windows(dataset, trajectories, row_starts, ends):
+    """Vectorised equivalent of DynamicDeepHitTransformerDataset.__getitem__ for a batch of window ends.
+
+    Padding by repeating a stay's first timestep is the same as clamping each
+    window's row indices to the stay start, so a whole batch is one gather.
+    Applies the same final-row masking (only when actions_shift is False) and
+    the same local-time feature as the Dataset.
+
+    trajectories: dataset.trajectories (actions already dropped if applicable), on the target device.
+    row_starts:   from _row_starts, same device. ends: (B,) long tensor of window-end rows.
+    Returns (B, window_length, n_features + 1).
+    """
+    W = dataset.window_length
+    device = trajectories.device
+    k = torch.arange(W, device=device)
+    starts = row_starts[ends]
+    idx = torch.maximum(ends[:, None] - (W - 1) + k[None, :], starts[:, None])   # (B, W)
+    x = trajectories[idx]                                                       # (B, W, F), a new tensor
+
+    if not dataset.actions_shift:
+        zero_ind = list(dataset.response_zero_ind)
+        cf_ind = list(dataset.carry_forward_ind)
+        if len(zero_ind) > 0:
+            x[:, -1, zero_ind] = 0.0
+        if len(cf_ind) > 0:
+            x[:, -1, cf_ind] = x[:, -2, cf_ind]
+
+    pad = (W - (ends - starts + 1)).clamp(min=0)                                # padded steps per window
+    local_time = torch.maximum(k[None, :], pad[:, None]).float() / (W - 1)       # (B, W)
+    return torch.cat([x, local_time.unsqueeze(-1)], dim=-1)
+
+
+def verify_windows(dataset, trajectories, row_starts, n_check=256, rng_seed=0):
+    """Check build_windows against the Dataset's own __getitem__ on a sample of rows.
+
+    Samples include each checked stay's first rows (where padding applies) and
+    random rows. Raises if any window differs.
+    """
+    rng = np.random.default_rng(rng_seed)
+    index_ptr = dataset.index_ptr.numpy()
+    stays = rng.choice(len(index_ptr) - 1, size=min(n_check // 4, len(index_ptr) - 1), replace=False)
+    first_rows = np.concatenate([np.arange(index_ptr[i], min(index_ptr[i] + 3, index_ptr[i + 1])) for i in stays])
+    random_rows = rng.choice(dataset.n_windows, size=n_check, replace=False)
+    rows = np.unique(np.concatenate([first_rows, random_rows]))
+
+    ends = torch.as_tensor(rows, dtype=torch.long, device=trajectories.device)
+    fast = build_windows(dataset, trajectories, row_starts, ends).cpu()
+    for j, r in enumerate(rows):
+        ref = dataset[int(r)]["features"]          # window_end_indices = arange, so item r ends at row r
+        if not torch.allclose(fast[j], ref, atol=1e-6):
+            raise AssertionError(f"Vectorised window differs from Dataset.__getitem__ at row {r}")
+    print(f"  verified {len(rows)} windows against Dataset.__getitem__")
+
+
 @torch.no_grad()
-def _predict_dataset(model, dataset, batch_size, num_workers):
+def _predict_dataset(model, dataset, trajectories, row_starts, batch_size):
     """Final-timestep risk logits (N, n_risks, n_bins) and latents (N, d_model) for every window."""
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    device = next(model.parameters()).device
+    device = trajectories.device
     model.eval()
-    n = len(dataset)
+    n = dataset.n_windows
     logits_out = np.empty((n, model.num_targets, model.num_time_bins), dtype=np.float32)
     latents_out = np.empty((n, model.d_model), dtype=np.float32)
-    pos = 0
-    for batch in loader:
-        features = batch["features"].to(device, non_blocking=True)
+    for pos in range(0, n, batch_size):
+        ends = torch.arange(pos, min(pos + batch_size, n), device=device)
+        features = build_windows(dataset, trajectories, row_starts, ends)
         risk_logits, _, output = model(features, padding_mask=None)
         logits = torch.stack([l[:, -1, :] for l in risk_logits], dim=1)
         if torch.isnan(logits).any() or torch.isnan(output).any():
-            raise ValueError(f"NaNs in model outputs for rows {pos}-{pos + len(features)}")
-        b = logits.shape[0]
-        logits_out[pos:pos + b] = logits.float().cpu().numpy()
-        latents_out[pos:pos + b] = output.float().cpu().numpy()
-        pos += b
-    if pos != n:
-        raise RuntimeError(f"Expected {n} windows, got {pos}")
+            raise ValueError(f"NaNs in model outputs for rows {pos}-{pos + len(ends)}")
+        logits_out[pos:pos + len(ends)] = logits.float().cpu().numpy()
+        latents_out[pos:pos + len(ends)] = output.float().cpu().numpy()
     return logits_out, latents_out
 
 
@@ -332,21 +387,24 @@ def _save_predictions(data, path, logits, latents):
 
 
 def run_predictions(models, data_by_split, splits=("train", "val", "test"),
-                    batch_size=512, num_workers=0, overwrite=False):
+                    batch_size=1024, overwrite=False, n_verify=256):
     """Predict every split for every loaded model, using data that is already in memory.
 
     models: list of (model, config_manager, hyperparams, seed) for ONE variant.
     data_by_split: {split: loaded data} (e.g. the `processors` dict from load_dataset).
 
-    For each split the training Dataset is built once and shared by all seeds
-    (they must have identical input settings, which is checked), each seed's
-    predictions are written to <run folder>/<split>_predictions.h5 and freed,
-    then the Dataset is freed before the next split. The loaded data is not
-    modified. Existing files are skipped unless overwrite=True.
+    For each split, the training Dataset is built once (its constructor handles
+    action removal and masking settings) and shared by all seeds, which must have
+    identical input settings. Windows are then built in vectorised batches on the
+    model's device and checked against Dataset.__getitem__ on a sample of rows.
+    Each seed's predictions are written to <run folder>/<split>_predictions.h5
+    and freed. The loaded data is not modified. Existing files are skipped
+    unless overwrite=True.
     """
     settings = {_input_settings(cm) for _, cm, _, _ in models}
     if len(settings) != 1:
         raise ValueError(f"Seeds have different input settings, cannot share a Dataset: {settings}")
+    device = next(models[0][0].parameters()).device
 
     for split in splits:
         todo = [m for m in models
@@ -355,19 +413,26 @@ def run_predictions(models, data_by_split, splits=("train", "val", "test"),
             print(f"{split}: all seeds already done, skipping")
             continue
         dataset = build_inference_dataset(todo[0][1], data_by_split[split], split)
-        print(f"{split}: {len(dataset)} windows, {len(dataset.feature_names) + 1} inputs")
+        trajectories = dataset.trajectories.to(device)
+        row_starts = _row_starts(dataset, device)
+        print(f"{split}: {dataset.n_windows} windows, {len(dataset.feature_names) + 1} inputs, "
+              f"actions_shift={dataset.actions_shift}")
+        if n_verify:
+            verify_windows(dataset, trajectories, row_starts, n_check=n_verify)
+
         for model, config_manager, _, seed in todo:
             check_inputs(model, config_manager, dataset)
-            logits, latents = _predict_dataset(model, dataset, batch_size, num_workers)
+            logits, latents = _predict_dataset(model, dataset, trajectories, row_starts, batch_size)
             path = prediction_path(config_manager.experiment_dir, split)
             _save_predictions(data_by_split[split], path, logits, latents)
             print(f"  seed {seed}: saved to {path}")
             del logits, latents
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        del dataset
+
+        del dataset, trajectories, row_starts
         gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 def load_test_predictions(models, keys_to_exclude=("compressed_latents", "model_outputs")):

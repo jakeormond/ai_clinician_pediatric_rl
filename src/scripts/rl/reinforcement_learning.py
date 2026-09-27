@@ -145,6 +145,9 @@ def parse_arguments():
 
     parser.add_argument('--frac', type=float, default = 0.,                  
                     help='Fraction of data to use for behaviour cloning - 0. means use all data')
+
+    parser.add_argument('--include_actions_in_state', type=str, default='True',
+        choices=['True', 'False'], help='Whether to include actions in the state (default: True)')    
     
     args = parser.parse_args()
 

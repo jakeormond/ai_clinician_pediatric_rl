@@ -74,7 +74,8 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --cohort sepsis \
     --unit PICU \
     --filter_old True \
-    --reward_cohort restricted \
+    --reward_cohort picu \
+    --include_actions_in_state False \
     --action_mode continuous_only \
     --start_time $START_TIME
 

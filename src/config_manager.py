@@ -388,18 +388,33 @@ class ConfigManager:
                 elif self.reward_cohort == 'picu':
                     split_name = os.path.join(split_name, f"{self.unit.lower()}")
 
-                final_model_dir = os.path.join(
-                    reward_path,
-                    split_name,
-                    "final_model"
-                )
+                if self.include_actions_in_state:
+                    final_model_dir = os.path.join(
+                        reward_path,
+                        split_name,
+                        "with_actions"
+                    )
+                else:
+                    final_model_dir = os.path.join(
+                        reward_path,
+                        split_name,
+                        "without_actions"
+                    )
+                                
+                # final_model_dir = os.path.join(
+                #     reward_path,
+                #     split_name,
+                #     "final_model"
+                # )
                 # find the folder in final_model_dir 
+
                 model_folders = [f for f in os.listdir(final_model_dir) if os.path.isdir(os.path.join(final_model_dir, f))]
                 if len(model_folders) > 1:
                     raise ValueError("Multiple model folders found in reward path, please specify one")
                 model_folder = model_folders[0]
-                reward_path = os.path.join(final_model_dir, model_folder)
-                self._data_config['reward_path'] = reward_path
+                
+                reward_path = os.path.join(final_model_dir, model_folder) # this is not the final folder
+                self._data_config['reward_path'] = reward_path 
 
             if self._data_config['use_behavior_cloning_latents']:
                 bc_latents_path = os.path.join(

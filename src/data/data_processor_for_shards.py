@@ -108,11 +108,24 @@ class ShardProcessor:
                 # final_model_dir = os.listdir(supervised_model_dir)[0]
 
                 final_model_dir = config_manager.data_config['reward_path']
+                seed = config_manager.training_config['seed']
 
                 pred_split = self.split
                 if self.split == 'tuning':
                     pred_split = 'train' # the tuning set predictions are generated from the model trained on the training set, so we need to load the train_set_predictions.h5 file
 
+                # find the folders inside final_model_dir that begin "unknown" or "local"
+                seed_folders = [folder for folder in os.listdir(final_model_dir) if folder.startswith("unknown") or folder.startswith("local")]
+                for seed_folder in seed_folders:
+                    # load results.json and check if the seed matches the config_manager.data_config['reward_seed']
+                    results_file = os.path.join(final_model_dir, seed_folder, "results.json")
+                    with open(results_file, 'r') as f:
+                        results = json.load(f)
+                        results_seed = results['hyperparameters']['seed']
+                        if results_seed == seed:
+                            final_model_dir = os.path.join(final_model_dir, seed_folder)
+                            break
+               
                 prediction_file_path = os.path.join(final_model_dir, f"{pred_split}_predictions.h5")
 
                 self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 

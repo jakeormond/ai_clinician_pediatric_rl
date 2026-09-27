@@ -472,14 +472,20 @@ def single_split_training(config_manager):
     # create processors
     # NEED TO ADD CONFIGURATION OPTION TO USE THE FEATURE DATA OR THE TRANSFORMER OUTPUT FROM DYNAMIC DEEPHIT MODEL
     # NEED TO ADD REWARD PROCESSING HERE
-    train_processor, val_processor, test_processor = create_processor_from_shards(
-        config_manager, 
-        normalize=True
-        )
+    ################ MOVED ###############################
+    # train_processor, val_processor, test_processor = create_processor_from_shards(
+    #     config_manager, 
+    #     normalize=True
+    #     )
 
     early_stopping = get_early_stopping_config(config_manager)
     if config_manager.search_variant == 'random_search':
         logger.info(" Hyperparameter tuning mode enabled.")
+
+        train_processor, val_processor, test_processor = create_processor_from_shards(
+                        config_manager, 
+                        normalize=True
+                    )
 
         # hyperparameter optimization
         best_val_loss = optimize_hyperparameters(
@@ -504,6 +510,11 @@ def single_split_training(config_manager):
             hyperparams[config_manager.hyperparameter_to_sweep] = value
             logger.info(f"Training with {config_manager.hyperparameter_to_sweep}={value}...")
 
+            train_processor, val_processor, test_processor = create_processor_from_shards(
+                            config_manager, 
+                            normalize=True
+                        )
+
             # train model
             train_with_hyperparameters(
                 train_processor, 
@@ -523,6 +534,11 @@ def single_split_training(config_manager):
 
             # get fixed hyperparameters
             hyperparams = get_fixed_hyperparameters(config_manager)
+
+            train_processor, val_processor, test_processor = create_processor_from_shards(
+                config_manager, 
+                normalize=True
+            )
 
             # train model
             train_with_hyperparameters(
@@ -546,6 +562,11 @@ def single_split_training(config_manager):
             hyperparams['cql_alpha'] = config_manager.cql_alpha  # override cql_alpha with fixed value
             config_manager.training_config['cql_alpha'] = config_manager.cql_alpha  # also set in training_config for logging
 
+            train_processor, val_processor, test_processor = create_processor_from_shards(
+                            config_manager, 
+                            normalize=True
+                        )
+
             # train model
             train_with_hyperparameters(
                 train_processor, 
@@ -559,6 +580,11 @@ def single_split_training(config_manager):
 
         # get fixed hyperparameters
         hyperparams = get_fixed_hyperparameters(config_manager)
+
+        train_processor, val_processor, test_processor = create_processor_from_shards(
+                        config_manager, 
+                        normalize=True
+                    )
 
         # train model
         train_with_hyperparameters(

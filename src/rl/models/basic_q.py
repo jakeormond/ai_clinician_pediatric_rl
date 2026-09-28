@@ -714,17 +714,23 @@ def get_evaluator(state_dim, action_dim, config_manager):
         # find the folders inside that begin "unknown" or "local"
         inner_folders = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and (f.startswith("unknown") or f.startswith("local"))]
         seed = config_manager.training_config['seed']
-        for f in inner_folders:
-            # load results.json from the folder and check if the seed matches
-            results_path = os.path.join(model_path, f, "results.json")
-            if os.path.exists(results_path):
-                with open(results_path, "r") as file:
-                    results = json.load(file)
-                    if results["hyperparameters"]["seed"] == seed:
-                        model_path = os.path.join(model_path, f)
-                        break
-
-
+        model_flag = 0
+        while True:           
+            for f in inner_folders:
+                # load results.json from the folder and check if the seed matches
+                results_path = os.path.join(model_path, f, "results.json")
+                if os.path.exists(results_path):
+                    with open(results_path, "r") as file:
+                        results = json.load(file)
+                        if results["hyperparameters"]["seed"] == seed:
+                            model_path = os.path.join(model_path, f)
+                            model_flag = 1
+                            break
+            if model_flag == 1:
+                break
+            else:
+                seed = 0
+    
     critic, hyperparams = load_critic(state_dim, action_dim,model_path=model_path)
 
     evaluator = Q_Learner(

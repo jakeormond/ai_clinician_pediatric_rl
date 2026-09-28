@@ -704,7 +704,7 @@ def get_evaluator(state_dim, action_dim, config_manager):
                 raise ValueError("Health score scale is not 0.0, but this is not supported in the current implementation.")
         
     else:
-        model_path = os.path.join(model_path, "without_actions")    
+        model_path = os.path.join(model_path, "without_actions", "five_seeds")    
         # we need to find the right model because we only have the five seeds here
         # find the folder inside model_path that begins with config_manager.hospital
         inner_folders = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith(config_manager.hospital)]

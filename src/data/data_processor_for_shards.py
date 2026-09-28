@@ -108,38 +108,58 @@ class ShardProcessor:
                 # final_model_dir = os.listdir(supervised_model_dir)[0]
 
                 final_model_dir = config_manager.data_config['reward_path']
-
+                state_model_dir = config_manager.data_config['state_path']
                 seed = config_manager.training_config['seed']
 
                 pred_split = self.split
                 if self.split == 'tuning':
                     pred_split = 'train' # the tuning set predictions are generated from the model trained on the training set, so we need to load the train_set_predictions.h5 file
 
-                # find the folders inside final_model_dir that begin "unknown" or "local"
-                seed_folders = [folder for folder in os.listdir(final_model_dir) if folder.startswith("unknown") or folder.startswith("local")]
-                if config_manager.seed_mode == 'single_seed':
-                    if len(seed_folders) == 0:
-                        raise ValueError(f"No seed folders found in {final_model_dir}. Expected at least one folder starting with 'unknown' or 'local'.")
-                    elif len(seed_folders) > 1:
-                        raise ValueError(f"Multiple seed folders found in {final_model_dir}. Expected only one. Found: {seed_folders}")
-                    else:
-                        final_model_dir = os.path.join(final_model_dir, seed_folders[0])
-                else:              
-                    for seed_folder in seed_folders:
-                        # load results.json and check if the seed matches the config_manager.data_config['reward_seed']
-                        results_file = os.path.join(final_model_dir, seed_folder, "results.json")
-                        with open(results_file, 'r') as f:
-                            results = json.load(f)
-                            results_seed = results['hyperparameters']['seed']
-                            if results_seed == seed:
-                                final_model_dir = os.path.join(final_model_dir, seed_folder)
-                                break
-               
-                prediction_file_path = os.path.join(final_model_dir, f"{pred_split}_predictions.h5")
+                model_dirs = {"reward": final_model_dir, "state": state_model_dir}
+                predictions = {}
+                for key, model_dir in model_dirs.items():
+                    if not os.path.exists(model_dir):
+                        raise ValueError(f"{key} model directory does not exist: {model_dir}. Please check that the path is correct and that the model has been trained and saved correctly.")
 
-                self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
-                    keys_to_exclude=['predictions', 'entropy', 'compressed_latents'])
+                    # find the folders inside final_model_dir that begin "unknown" or "local"
+                    seed_folders = [folder for folder in os.listdir(model_dir) if folder.startswith("unknown") or folder.startswith("local")]
+                    if config_manager.seed_mode == 'single_seed':
+                        if len(seed_folders) == 0:
+                            raise ValueError(f"No seed folders found in {model_dir}. Expected at least one folder starting with 'unknown' or 'local'.")
+                        elif len(seed_folders) > 1:
+                            raise ValueError(f"Multiple seed folders found in {model_dir}. Expected only one. Found: {seed_folders}")
+                        else:
+                            model_dir = os.path.join(model_dir, seed_folders[0])
+                    else:              
+                        for seed_folder in seed_folders:
+                            # load results.json and check if the seed matches the config_manager.data_config['reward_seed']
+                            results_file = os.path.join(model_dir, seed_folder, "results.json")
+                            with open(results_file, 'r') as f:
+                                results = json.load(f)
+                                results_seed = results['hyperparameters']['seed']
+                                if results_seed == seed:
+                                    model_dir = os.path.join(model_dir, seed_folder)
+                                    break
+                
+                    prediction_file_path = os.path.join(model_dir, f"{pred_split}_predictions.h5")
 
+                    if key == "reward":
+                        self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
+                            keys_to_exclude=['predictions', 'entropy', 'compressed_latents', 'carry_forward_ind', 'response_zero_ind'])
+
+                    elif key == "state":
+                        if final_model_dir != state_model_dir:
+                            logger.info(f"Loading state model predictions from {prediction_file_path}")
+                            dynamic_deephit_state_model_outputs = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
+                                keys_to_load=['model_outputs'])
+
+                            # confirm shapes match
+                            assert self.dynamic_deephit_predictions['model_outputs'].shape[0] == dynamic_deephit_state_model_outputs['model_outputs'].shape[0], \
+                                "Shapes of model outputs do not match!"
+
+                            self.dynamic_deephit_predictions['model_outputs'] = dynamic_deephit_state_model_outputs['model_outputs']
+
+            
                 # load behavioural cloning latents if using
                 if config_manager.data_config['use_behavior_cloning_latents']:
                     self.use_behavior_cloning_latents = True

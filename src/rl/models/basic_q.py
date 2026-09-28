@@ -674,29 +674,57 @@ def get_evaluator(state_dim, action_dim, config_manager):
     else:
         raise ValueError(f"Unknown unit: {unit}. Must be 'picu'.")
 
-    if reward_type == 'terminal':             
-        # load sorted_runs_health_score.csv
-        sorted_runs_path = os.path.join(model_path, "sorted_runs_terminal.csv")
-        if os.path.exists(sorted_runs_path):
-            sorted_runs = pd.read_csv(sorted_runs_path)
-            # get the last row, which has the best run
-            best_run = sorted_runs.iloc[0]
-            best_run_folder = best_run['run_dir']
-            model_path = os.path.join(model_path, best_run_folder)
+    if config_manager.include_actions_in_state == 'True':
+        model_path = os.path.join(model_path, "with_actions")
 
-    elif reward_type == 'health_score':
-        # load sorted_runs_health_score.csv
-        sorted_runs_path = os.path.join(model_path, "sorted_runs_health_score.csv")
-        if os.path.exists(sorted_runs_path):
-            sorted_runs = pd.read_csv(sorted_runs_path)
-            # get the last row, which has the best run
-            best_run = sorted_runs.iloc[0]
-            best_run_folder = best_run['run_dir']
-            model_path = os.path.join(model_path, best_run_folder)
-        else:
-            #### not using ######
-            raise ValueError("Health score scale is not 0.0, but this is not supported in the current implementation.")
-    
+        # currently just using the best run from the hypeparameter sweep (could switch to 
+        # proper seed, but doesn't matter, this is just for online evaluation)
+
+        if reward_type == 'terminal':             
+                # load sorted_runs_health_score.csv
+                sorted_runs_path = os.path.join(model_path, "sorted_runs_terminal.csv")
+                if os.path.exists(sorted_runs_path):
+                    sorted_runs = pd.read_csv(sorted_runs_path)
+                    # get the last row, which has the best run
+                    best_run = sorted_runs.iloc[0]
+                    best_run_folder = best_run['run_dir']
+                    model_path = os.path.join(model_path, best_run_folder)
+        
+        elif reward_type == 'health_score':
+            # load sorted_runs_health_score.csv
+            sorted_runs_path = os.path.join(model_path, "sorted_runs_health_score.csv")
+            if os.path.exists(sorted_runs_path):
+                sorted_runs = pd.read_csv(sorted_runs_path)
+                # get the last row, which has the best run
+                best_run = sorted_runs.iloc[0]
+                best_run_folder = best_run['run_dir']
+                model_path = os.path.join(model_path, best_run_folder)
+            else:
+                #### not using ######
+                raise ValueError("Health score scale is not 0.0, but this is not supported in the current implementation.")
+        
+    else:
+        model_path = os.path.join(model_path, "without_actions")    
+        # we need to find the right model because we only have the five seeds here
+        # find the folder inside model_path that begins with config_manager.hospital
+        inner_folders = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith(config_manager.hospital)]
+        if len(inner_folders) == 0 or len(inner_folders) > 1:
+            raise ValueError(f"Could not find a unique model folder for hospital {config_manager.hospital} in {model_path}. Found: {inner_folders}")
+        model_path = os.path.join(model_path, inner_folders[0])
+        # find the folders inside that begin "unknown" or "local"
+        inner_folders = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and (f.startswith("unknown") or f.startswith("local"))]
+        seed = config_manager.training_config['seed']
+        for f in inner_folders:
+            # load results.json from the folder and check if the seed matches
+            results_path = os.path.join(model_path, f, "results.json")
+            if os.path.exists(results_path):
+                with open(results_path, "r") as file:
+                    results = json.load(file)
+                    if results["hyperparameters"]["seed"] == seed:
+                        model_path = os.path.join(model_path, f)
+                        break
+
+
     critic, hyperparams = load_critic(state_dim, action_dim,model_path=model_path)
 
     evaluator = Q_Learner(

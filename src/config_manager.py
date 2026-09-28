@@ -400,11 +400,17 @@ class ConfigManager:
                         split_name,
                         "with_actions"
                     )
+                    state_model_dir = final_model_dir
                 else:
                     final_model_dir = os.path.join(
                         reward_path,
                         split_name,
                         "without_actions"
+                    )
+                    state_model_dir = os.path.join(
+                        reward_path,
+                        split_name,
+                        "with_actions"
                     )
                                 
                 # final_model_dir = os.path.join(
@@ -414,32 +420,38 @@ class ConfigManager:
                 # )
                 # find the folder in final_model_dir 
 
-                # check if we're single seed or 5 seeds
-                if self.seeds is not None and len(self.seeds) > 1:
-                    final_model_dir = os.path.join(final_model_dir, "five_seeds")
-                else:
-                    final_model_dir = os.path.join(final_model_dir, "single_seed")
+                state_and_reward_model_dirs = {
+                    "state_model_dir": state_model_dir,
+                    "reward_model_dir": final_model_dir
+                }
 
-                # check if there is a folder inside final_model_dir that begins with "choc"
-                inner_folders = [f for f in os.listdir(final_model_dir) if os.path.isdir(os.path.join(final_model_dir, f))]
-                choc_folders = [f for f in inner_folders if f.startswith(self.hospital.lower())]
-                if len(choc_folders) > 1:
-                    raise ValueError("Multiple choc folders found in final_model_dir, please specify one")
-                elif len(choc_folders) == 1:
-                    final_model_dir = os.path.join(final_model_dir, choc_folders[0])
-                else:
-                    raise ValueError("No choc folders found in final_model_dir, please specify one")
+                for key, path in state_and_reward_model_dirs.items():
+                    # check if we're single seed or 5 seeds
+                    if self.seeds is not None and len(self.seeds) > 1:
+                        path = os.path.join(path, "five_seeds")
+                    else:
+                        path = os.path.join(path, "single_seed")
 
+                    # check if there is a folder inside final_model_dir that begins with "choc"
+                    inner_folders = [f for f in os.listdir(path) if os.path.isdir(os.path.join(path, f))]
+                    choc_folders = [f for f in inner_folders if f.startswith(self.hospital.lower())]
+                    if len(choc_folders) > 1:
+                        raise ValueError("Multiple choc folders found in final_model_dir, please specify one")
+                    elif len(choc_folders) == 1:
+                        path = os.path.join(path, choc_folders[0])
+                    else:
+                        raise ValueError("No choc folders found in final_model_dir, please specify one")
 
-
-                # model_folders = [f for f in os.listdir(final_model_dir) if os.path.isdir(os.path.join(final_model_dir, f))]
-                # if len(model_folders) > 1:
-                #     raise ValueError("Multiple model folders found in reward path, please specify one")
-                # model_folder = model_folders[0]
-                
-                # reward_path = os.path.join(final_model_dir, model_folder) # this is not the final folder
-                reward_path = final_model_dir # this is not the final folder
-                self._data_config['reward_path'] = reward_path 
+                    # model_folders = [f for f in os.listdir(final_model_dir) if os.path.isdir(os.path.join(final_model_dir, f))]
+                    # if len(model_folders) > 1:
+                    #     raise ValueError("Multiple model folders found in reward path, please specify one")
+                    # model_folder = model_folders[0]
+                    
+                    # reward_path = os.path.join(final_model_dir, model_folder) # this is not the final folder
+                    if key == "state_model_dir":
+                        self._data_config['state_path'] = path
+                    elif key == "reward_model_dir":
+                        self._data_config['reward_path'] = path 
 
             if self._data_config['use_behavior_cloning_latents']:
                 bc_latents_path = os.path.join(

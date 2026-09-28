@@ -21,6 +21,11 @@ class ConfigManager:
         if not hasattr(args, "experiment_variant"):
             self.experiment_variant = None
 
+        if args.seeds is None or len(args.seeds) == 1:
+            self.seed_mode = "single_seed"
+        else:
+            self.seed_mode = 'five_seeds'
+
         if self.experiment_type != "supervised_learning":
             self.prediction_type = None  # prediction type is for supervised learning only
  
@@ -180,6 +185,7 @@ class ConfigManager:
                                     self.paths["rl_models_dir"], self.model_type,
                                     f"split_{self.split_num}", self.cohort.lower(), self.actions,
                                     f"{self.unit.lower()}_patients_health_score_from_picu_dataset",
+                                    "with_actions",
                                     f"best_results_{self.reward_type}.json"
                                 )
 
@@ -388,7 +394,7 @@ class ConfigManager:
                 elif self.reward_cohort == 'picu':
                     split_name = os.path.join(split_name, f"{self.unit.lower()}")
 
-                if self.include_actions_in_state:
+                if self.include_actions_in_state == 'True':
                     final_model_dir = os.path.join(
                         reward_path,
                         split_name,
@@ -408,12 +414,31 @@ class ConfigManager:
                 # )
                 # find the folder in final_model_dir 
 
-                model_folders = [f for f in os.listdir(final_model_dir) if os.path.isdir(os.path.join(final_model_dir, f))]
-                if len(model_folders) > 1:
-                    raise ValueError("Multiple model folders found in reward path, please specify one")
-                model_folder = model_folders[0]
+                # check if we're single seed or 5 seeds
+                if self.seeds is not None and len(self.seeds) > 1:
+                    final_model_dir = os.path.join(final_model_dir, "five_seeds")
+                else:
+                    final_model_dir = os.path.join(final_model_dir, "single_seed")
+
+                # check if there is a folder inside final_model_dir that begins with "choc"
+                inner_folders = [f for f in os.listdir(final_model_dir) if os.path.isdir(os.path.join(final_model_dir, f))]
+                choc_folders = [f for f in inner_folders if f.startswith(self.hospital.lower())]
+                if len(choc_folders) > 1:
+                    raise ValueError("Multiple choc folders found in final_model_dir, please specify one")
+                elif len(choc_folders) == 1:
+                    final_model_dir = os.path.join(final_model_dir, choc_folders[0])
+                else:
+                    raise ValueError("No choc folders found in final_model_dir, please specify one")
+
+
+
+                # model_folders = [f for f in os.listdir(final_model_dir) if os.path.isdir(os.path.join(final_model_dir, f))]
+                # if len(model_folders) > 1:
+                #     raise ValueError("Multiple model folders found in reward path, please specify one")
+                # model_folder = model_folders[0]
                 
-                reward_path = os.path.join(final_model_dir, model_folder) # this is not the final folder
+                # reward_path = os.path.join(final_model_dir, model_folder) # this is not the final folder
+                reward_path = final_model_dir # this is not the final folder
                 self._data_config['reward_path'] = reward_path 
 
             if self._data_config['use_behavior_cloning_latents']:

@@ -108,6 +108,7 @@ class ShardProcessor:
                 # final_model_dir = os.listdir(supervised_model_dir)[0]
 
                 final_model_dir = config_manager.data_config['reward_path']
+
                 seed = config_manager.training_config['seed']
 
                 pred_split = self.split
@@ -116,15 +117,23 @@ class ShardProcessor:
 
                 # find the folders inside final_model_dir that begin "unknown" or "local"
                 seed_folders = [folder for folder in os.listdir(final_model_dir) if folder.startswith("unknown") or folder.startswith("local")]
-                for seed_folder in seed_folders:
-                    # load results.json and check if the seed matches the config_manager.data_config['reward_seed']
-                    results_file = os.path.join(final_model_dir, seed_folder, "results.json")
-                    with open(results_file, 'r') as f:
-                        results = json.load(f)
-                        results_seed = results['hyperparameters']['seed']
-                        if results_seed == seed:
-                            final_model_dir = os.path.join(final_model_dir, seed_folder)
-                            break
+                if config_manager.seed_mode == 'single_seed':
+                    if len(seed_folders) == 0:
+                        raise ValueError(f"No seed folders found in {final_model_dir}. Expected at least one folder starting with 'unknown' or 'local'.")
+                    elif len(seed_folders) > 1:
+                        raise ValueError(f"Multiple seed folders found in {final_model_dir}. Expected only one. Found: {seed_folders}")
+                    else:
+                        final_model_dir = os.path.join(final_model_dir, seed_folders[0])
+                else:              
+                    for seed_folder in seed_folders:
+                        # load results.json and check if the seed matches the config_manager.data_config['reward_seed']
+                        results_file = os.path.join(final_model_dir, seed_folder, "results.json")
+                        with open(results_file, 'r') as f:
+                            results = json.load(f)
+                            results_seed = results['hyperparameters']['seed']
+                            if results_seed == seed:
+                                final_model_dir = os.path.join(final_model_dir, seed_folder)
+                                break
                
                 prediction_file_path = os.path.join(final_model_dir, f"{pred_split}_predictions.h5")
 

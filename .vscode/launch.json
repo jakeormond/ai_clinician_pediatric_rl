@@ -899,6 +899,7 @@
                 "--filter_old", "True",
                 "--reward_cohort", "picu",
                 "--n_epochs", "400",
+                "--include_actions_in_state", "False",
                 "--action_mode", "continuous_only",  
             ],
             "console": "integratedTerminal",

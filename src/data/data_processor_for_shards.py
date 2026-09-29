@@ -426,6 +426,14 @@ class ShardProcessor:
                 vaso_dose = vaso_dose / np.max(vaso_dose)
                 # scale by hyperparameter
                 vaso_dose *= hyperparams['vaso_reward_coefficient']
+                
+                # if we're using shifted actions (from the next time step), we need to shift the vaso_dose back one index, 
+                # as we want the reward based on next vaso dose
+                vaso_dose = vaso_dose[1:]
+                
+                # append on a final 0
+                vaso_dose = np.append(vaso_dose, 0.0)
+
                 health_score_total += vaso_dose
 
 

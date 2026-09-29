@@ -17,6 +17,7 @@ Expects, already in your session (or importable):
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+from src.rl.evaluate_terminal_reward_models import generate_model_outputs
 
 FLUID_COLOR = "#2471a3"
 VASO_COLOR = "#c0392b"

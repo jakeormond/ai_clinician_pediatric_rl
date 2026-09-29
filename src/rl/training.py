@@ -510,6 +510,13 @@ def single_split_training(config_manager):
             hyperparams[config_manager.hyperparameter_to_sweep] = value
             logger.info(f"Training with {config_manager.hyperparameter_to_sweep}={value}...")
 
+            if config_manager.hyperparameter_to_sweep == 'vaso_reward_coefficient':
+                # set add_reward_to_vaso_dosing to True
+                hyperparams['add_reward_to_vaso_dosing'] = True
+            if config_manager.hyperparameter_to_sweep != 'cql_alpha':
+                # set add_reward_to_vent_dosing to True
+                hyperparams['cql_alpha'] = config_manager.cql_alpha
+            
             train_processor, val_processor, test_processor = create_processor_from_shards(
                             config_manager, 
                             normalize=True

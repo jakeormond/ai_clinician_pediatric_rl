@@ -589,6 +589,9 @@ class CQL:
 		fluid_mean_reg_scale: float = 0.05,  # Weight for the vaso mean regularization term
 		vaso_mean_reg_scale: float = 0.05,  # Weight for the vaso mean regularization term
 
+		vaso_mean_floor: typing.Optional[float] = None,   # raw-logit floor for vaso magnitude mean; None = off
+		vaso_mean_floor_scale: float = 0.05,
+
 		device: str = "CUDA" if torch.cuda.is_available() else "CPU",
 		action_mode: str = "continuous",
 		dose_actions: int = 2,  #  Number of dose actions
@@ -631,6 +634,9 @@ class CQL:
 		# self.actor_loss_mag_entropy_scale = actor_loss_mag_entropy_scale
 		self.fluid_mean_reg_scale = fluid_mean_reg_scale
 		self.vaso_mean_reg_scale = vaso_mean_reg_scale
+
+		self.vaso_mean_floor = vaso_mean_floor
+		self.vaso_mean_floor_scale = vaso_mean_floor_scale
 
 		self.device = device
 		self.action_mode = action_mode
@@ -986,6 +992,18 @@ class CQL:
 			v_gate_uncertainty_weight = (0.5 - (v_p - 0.5).abs()).clamp(min=0)
 			v_mean_saturation_penalty = (v_gate_uncertainty_weight * v_raw_mean.pow(2)).mean()
 
+			# Floor on the vaso magnitude mean (NOT gate-weighted). The gate-weighted
+			# penalty above vanishes when the vaso gate is near-closed (p ~ 0.02), and the
+			# magnitude head only gets Q-gradient on fired samples, so v_raw_mean can
+			# drift to ~-12 where sigmoid'(x) ~ 3e-6 and neither head can recover.
+			# One-sided hinge: zero above the floor, so it doesn't bias doses in the
+			# normal range. None -> disabled (reproduces previous runs exactly).
+			if self.vaso_mean_floor is not None:
+				v_mean_floor_penalty = torch.relu(self.vaso_mean_floor - v_raw_mean).pow(2).mean()
+			else:
+				v_mean_floor_penalty = torch.zeros((), device=v_raw_mean.device)
+
+
 			# --- per-drug magnitude entropy, masked mean over FIRED samples only ---
 			# (mag_lp is exactly 0 for non-fired samples via the fire-mask multiply,
 			# so a plain batch mean would dilute proportionally to firing rate --
@@ -1008,7 +1026,8 @@ class CQL:
 				alpha_mag_fluid * f_mag_lp_mean +
 				alpha_mag_vaso * v_mag_lp_mean +
 				self.fluid_mean_reg_scale * f_mean_saturation_penalty +
-				self.vaso_mean_reg_scale * v_mean_saturation_penalty
+				self.vaso_mean_reg_scale * v_mean_saturation_penalty + 
+				self.vaso_mean_floor_scale * v_mean_floor_penalty
 			)
 
 
@@ -1056,6 +1075,8 @@ class CQL:
 				"gate_temperature": current_gate_temp,
 				"f_mean_saturation_penalty": f_mean_saturation_penalty.item(),
 				"v_mean_saturation_penalty": v_mean_saturation_penalty.item(),
+				"v_mean_floor_penalty": v_mean_floor_penalty.item(),
+				"v_raw_mean_median": v_raw_mean.median().item(),				
 				"alpha_mag_fluid": alpha_mag_fluid.item(),
 				"alpha_mag_vaso": alpha_mag_vaso.item(),
 				"f_mag_lp_mean": f_mag_lp_mean.item(),
@@ -1404,6 +1425,9 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 
 		fluid_mean_reg_scale=hyperparams.get('fluid_mean_reg_scale', 0.05),
 		vaso_mean_reg_scale=hyperparams['vaso_mean_reg_scale'],
+
+		vaso_mean_floor=hyperparams.get('vaso_mean_floor', None),
+		vaso_mean_floor_scale=hyperparams.get('vaso_mean_floor_scale', 0.05),
 
 		num_samples=hyperparams['num_samples'],
 

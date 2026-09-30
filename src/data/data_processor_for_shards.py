@@ -123,6 +123,7 @@ class ShardProcessor:
 
                     # find the folders inside final_model_dir that begin "unknown" or "local"
                     seed_folders = [folder for folder in os.listdir(model_dir) if folder.startswith("unknown") or folder.startswith("local")]
+                    
                     if config_manager.seed_mode == 'single_seed':
                         if len(seed_folders) == 0:
                             raise ValueError(f"No seed folders found in {model_dir}. Expected at least one folder starting with 'unknown' or 'local'.")

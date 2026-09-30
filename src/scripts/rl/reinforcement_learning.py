@@ -116,6 +116,12 @@ def parse_arguments():
     parser.add_argument('--cql_alpha', type=float, default = None,
                         help='CQL alpha parameter (default: None)')
 
+    parser.add_argument('--vaso_mean_floor', type=float, default = None,
+                        help='Vaso mean floor parameter (default: None)')
+
+    parser.add_argument('--vaso_mean_floor_scale', type=float, default = None,
+                        help='Vaso mean floor scale parameter (default: None)')
+
     parser.add_argument('--cohort', type=str, default=None,
         choices=['all', 'sepsis_strict', 'sepsis_broad', 'sepsis',
             'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad'],

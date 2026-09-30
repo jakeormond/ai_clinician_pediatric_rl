@@ -557,7 +557,7 @@ def single_split_training(config_manager):
             )       
 
     elif config_manager.search_variant == 'best_hyperparameters_fixed_cql_alpha' and \
-        config_manager.seeds is not None and len(config_manager.seeds) > 0:
+        config_manager.seeds is not None:
         logger.info(" Best hyperparameter training mode enabled.")
 
         # train model with best hyperparameters for each seed
@@ -567,14 +567,22 @@ def single_split_training(config_manager):
 
             # get fixed hyperparameters
             hyperparams = get_fixed_hyperparameters(config_manager)
+            
+            # set cql_alpha, vaso_mean_floor, and vaso_mean_floor_scale
             hyperparams['cql_alpha'] = config_manager.cql_alpha  # override cql_alpha with fixed value
             config_manager.training_config['cql_alpha'] = config_manager.cql_alpha  # also set in training_config for logging
+
+            hyperparams['vaso_mean_floor'] = config_manager.vaso_mean_floor  # override vaso_mean_floor with fixed value
+            config_manager.training_config['vaso_mean_floor'] = config_manager.vaso_mean_floor  # also set in training_config for logging
+
+            hyperparams['vaso_mean_floor_scale'] = config_manager.vaso_mean_floor_scale  # override vaso_mean_floor_scale with fixed value
+            config_manager.training_config['vaso_mean_floor_scale'] = config_manager.vaso_mean_floor_scale  # also set in training_config for logging
 
             train_processor, val_processor, test_processor = create_processor_from_shards(
                             config_manager, 
                             normalize=True
                         )
-
+            
             # train model
             train_with_hyperparameters(
                 train_processor, 

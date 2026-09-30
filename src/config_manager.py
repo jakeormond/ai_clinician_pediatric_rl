@@ -394,6 +394,9 @@ class ConfigManager:
                 elif self.reward_cohort == 'picu':
                     split_name = os.path.join(split_name, f"{self.unit.lower()}")
 
+                if not hasattr(self, "include_actions_in_state"):
+                    self.include_actions_in_state = "True"
+
                 if self.include_actions_in_state == 'True':
                     final_model_dir = os.path.join(
                         reward_path,

@@ -137,14 +137,24 @@ def plot_clinician_vaso_raw(training_actions, floor, model_raw_means=None, save_
 # Loading helpers
 # =============================================================================
 
+def effective_vaso_coef(hp):
+    """vaso_reward_coefficient only takes effect when add_reward_to_vaso_dosing is
+    True (older runs sometimes set the coefficient with the flag off)."""
+    if not hp.get("add_reward_to_vaso_dosing", False):
+        return 0.0
+    return float(hp.get("vaso_reward_coefficient", 0.0))
+
+
 def load_models(model_dir, state_dim, label_fmt="seed {seed}"):
-    """Loads every run under model_dir -> {label: model_entry}."""
+    """Loads every run under model_dir -> {label: model_entry}.
+    {coef} in label_fmt is the EFFECTIVE vaso reward coefficient (0 unless
+    add_reward_to_vaso_dosing is True)."""
     out = {}
     for d in get_model_dirs(model_dir):
         entry = load_actor_and_critic(model_dir=d, model_type="cql", state_dim=state_dim)
         hp = entry[3]
         label = label_fmt.format(seed=hp.get("seed"), alpha=hp.get("cql_alpha"),
-                                 coef=hp.get("vaso_reward_coefficient"))
+                                 coef=f"{effective_vaso_coef(hp):g}")
         if label in out:
             label = f"{label} ({os.path.basename(d)})"
         out[label] = entry
@@ -193,7 +203,7 @@ def saturation_summary(model_entry, processor, floor):
     tri_w = np.clip(0.5 - np.abs(vp - 0.5), 0, None)
     return {
         "cql_alpha": hp.get("cql_alpha"),
-        "vaso_coef": hp.get("vaso_reward_coefficient", 0.0) if hp.get("add_reward_to_vaso_dosing") else 0.0,
+        "vaso_coef": effective_vaso_coef(hp),
         "vaso_mean_floor": hp.get("vaso_mean_floor"),
         "v_raw_median": np.median(vr),
         "v_raw_p10": np.percentile(vr, 10),
@@ -306,3 +316,252 @@ def evaluate_models(models, processor, hs, sev_edges, sarsa_models,
         results[label] = [vrs.summarise_model(entry, processor, hs, sev_edges, sarsa_models,
                                               training_actions, training_health_score, **kwargs)]
     return results
+
+
+# =============================================================================
+# 5. Where does the SARSA advantage change come from? (fluid vs vaso)
+# =============================================================================
+
+def sarsa_advantage_decomposition(model_entry, processor, sarsa_models):
+    """
+    Splits each SARSA critic's advantage of the (deterministic) policy action
+    over the clinician action into a fluid part and a vaso part:
+
+        A_total = Q(s, a_pi) - Q(s, a_clin)
+                = [Q(s, [f_pi, 0]) - Q(s, a_clin)]      <- "fluid part" (policy with vaso removed)
+                + [Q(s, a_pi) - Q(s, [f_pi, 0])]        <- "vaso part"  (nonzero only where the policy fires)
+
+    Normalised by each SARSA critic's Q IQR at clinician actions (as in the alpha
+    sweep). Uses the mean of the twin heads, so absolute values can differ slightly
+    from compute_model_advantage; the split is internally consistent.
+    Caveat: the SARSA critics carry the confounded vaso penalty (severity-graded,
+    -1.3 HS pts per unit dose at clinician-vaso states), so a negative vaso part is
+    expected for ANY vaso-giving policy and is not independent evidence of harm.
+    """
+    from .evaluate_cql_alpha_sweep import get_critic
+
+    actor = model_entry[0]
+    states = _np(processor.rl_dataset["states"])
+    clin = _np(processor.rl_dataset["actions"]).astype(np.float32)
+    pol = vrs.actor_gate_outputs(actor, states)["actions"].astype(np.float32)
+    pol_novaso = pol.copy()
+    pol_novaso[:, 1] = 0.0
+    fired = pol[:, 1] > VASO_THRESHOLD
+    clin_v = clin[:, 1] > VASO_THRESHOLD
+
+    rows = []
+    for k, entry in enumerate(sarsa_models):
+        critic = get_critic(entry)
+        q_clin = vrs.critic_q(critic, states, clin)
+        q_pol = vrs.critic_q(critic, states, pol)
+        q_novaso = vrs.critic_q(critic, states, pol_novaso)
+        iqr = np.subtract(*np.percentile(q_clin, [75, 25]))
+        a_total = (q_pol - q_clin) / iqr
+        a_fluid = (q_novaso - q_clin) / iqr
+        a_vaso = (q_pol - q_novaso) / iqr
+        rows.append({
+            "sarsa_seed": k + 1,
+            "adv_total": a_total.mean(),
+            "adv_fluid_part": a_fluid.mean(),
+            "adv_vaso_part": a_vaso.mean(),
+            "vaso_part_per_fired_state": a_vaso[fired].mean() if fired.any() else np.nan,
+            "vaso_part_fired_at_clin_vaso": a_vaso[fired & clin_v].mean() if (fired & clin_v).any() else np.nan,
+            "vaso_part_fired_at_clin_zero": a_vaso[fired & ~clin_v].mean() if (fired & ~clin_v).any() else np.nan,
+            "policy_fire_%": 100 * fired.mean(),
+            "fired_at_clin_vaso_%_of_fires": 100 * (fired & clin_v).sum() / max(fired.sum(), 1),
+        })
+    df = pd.DataFrame(rows).set_index("sarsa_seed")
+    df.loc["mean"] = df.mean()
+    return df
+
+
+def sarsa_advantage_decomposition_table(models, processor, sarsa_models):
+    """{label: model_entry} -> one row per model (mean over SARSA seeds)."""
+    return pd.DataFrame({label: sarsa_advantage_decomposition(entry, processor, sarsa_models).loc["mean"]
+                         for label, entry in models.items()}).T
+
+
+# =============================================================================
+# 6. Is the floor setting the dose? (floor runs)
+# =============================================================================
+
+def fire_rate_by_dose_threshold(model_entry, processor, training_actions,
+                                clinician_pcts=(0, 1, 5, 10, 25)):
+    """
+    Deterministic vaso fire rate when a 'fire' must reach a clinically meaningful
+    dose: thresholds = percentiles of clinician nonzero doses (TRAIN). The 1e-4
+    rate counts floor-level (~0.05) doses that clinicians essentially never give.
+    """
+    actor = model_entry[0]
+    states = _np(processor.rl_dataset["states"])
+    clin = _np(processor.rl_dataset["actions"])
+    clin_v = clin[:, 1] > VASO_THRESHOLD
+    pol_v = vrs.actor_gate_outputs(actor, states)["actions"][:, 1]
+    tv = _np(training_actions)[:, 1]
+    tv = tv[tv > VASO_THRESHOLD]
+    rows = [{"threshold": "1e-4 (any)", "dose_threshold": VASO_THRESHOLD}]
+    rows += [{"threshold": f"clinician p{p}", "dose_threshold": float(np.percentile(tv, p))} for p in clinician_pcts]
+    for r in rows:
+        f = pol_v > r["dose_threshold"]
+        r.update({"fire_%": 100 * f.mean(),
+                  "fire_%_clin_vaso": 100 * f[clin_v].mean(),
+                  "fire_%_clin_zero": 100 * f[~clin_v].mean(),
+                  "clinician_fire_%": 100 * (clin[:, 1] > r["dose_threshold"]).mean()})
+    return pd.DataFrame(rows).set_index("threshold")
+
+
+def q_dose_curve_at_fired(model_entry, processor, floor,
+                          vaso_grid=(0.0, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5)):
+    """
+    Own-critic Q(s, [f_pi, v]) - Q(s, [f_pi, 0]) (HS points), fluid held at the
+    POLICY's fluid, at states where the policy fires -- split by clinician vaso
+    and by whether the actor's mean sits near the floor.
+      - curve peaking at the smallest nonzero dose / falling with dose => the
+        critic wants 'as little vaso as possible'; the floor sets the dose
+      - near-zero gain at the floor dose => those fires are near-indifference
+    Also returns the fraction of states whose critic-argmax dose is 0.
+    """
+    actor, critic, _, hp = model_entry
+    states = _np(processor.rl_dataset["states"])
+    clin_v = _np(processor.rl_dataset["actions"])[:, 1] > VASO_THRESHOLD
+    g = vrs.actor_gate_outputs(actor, states)
+    p = actor_raw_params(actor, states)
+    pol = g["actions"].astype(np.float32)
+    fired = pol[:, 1] > VASO_THRESHOLD
+    near_floor = p["v_raw_mean"] < floor + 0.5
+    scale = vrs._reward_scale(hp, "CQL")
+    grid = np.asarray(vaso_grid, dtype=np.float32)
+
+    groups = {"fired @ clin-vaso": fired & clin_v,
+              "fired @ clin-zero": fired & ~clin_v,
+              "fired, mean near floor": fired & near_floor,
+              "fired, mean well above floor": fired & ~near_floor,
+              "not fired (all)": ~fired}
+    rows = {}
+    for name, m in groups.items():
+        idx = np.where(m)[0]
+        if len(idx) == 0:
+            continue
+        curves = vrs.q_vaso_dose_curves(critic, states[idx], pol[idx], grid) / scale
+        curves = curves - curves[:, [0]]
+        row = {"n": len(idx)}
+        row.update({f"v={v:g}": c for v, c in zip(grid, curves.mean(0))})
+        row["argmax_dose_is_0_%"] = 100 * (curves.argmax(1) == 0).mean()
+        row["argmax_dose_median"] = float(np.median(grid[curves.argmax(1)]))
+        rows[name] = row
+    return pd.DataFrame(rows).T
+
+
+# =============================================================================
+# 7. Does the actor's dose follow its critic's preferred dose? (floor runs)
+# =============================================================================
+
+def _interp_rows(x, grid, curves):
+    """Row-wise linear interpolation of curves (n, G) at points x (n,)."""
+    x = np.clip(x, grid[0], grid[-1])
+    j = np.clip(np.searchsorted(grid, x, side="right") - 1, 0, len(grid) - 2)
+    w = (x - grid[j]) / (grid[j + 1] - grid[j])
+    rows = np.arange(len(x))
+    y0, y1 = curves[rows, j], curves[rows, j + 1]
+    return y0 + w * (y1 - y0), (y1 - y0) / (grid[j + 1] - grid[j])
+
+
+def actor_vs_critic_dose(model_entry, processor, floor,
+                         grid=np.round(np.arange(0.0, 0.605, 0.01), 3)):
+    """
+    At states where the policy fires: the actor's deterministic dose vs its own
+    critic's preferred dose (argmax of Q(s, [f_pi, v]) over a fine vaso grid,
+    fluid held at the policy's). Per state it also returns
+      - regret: Q(best dose) - Q(actor dose), HS points (value left on the table)
+      - slope:  dQ/dv at the actor's dose, HS points per unit dose
+                (> 0 => critic wants MORE vaso than the actor gives)
+    Returns (summary DataFrame by group, per-state DataFrame).
+    """
+    actor, critic, _, hp = model_entry
+    states = _np(processor.rl_dataset["states"])
+    clin_v = _np(processor.rl_dataset["actions"])[:, 1] > VASO_THRESHOLD
+    pol = vrs.actor_gate_outputs(actor, states)["actions"].astype(np.float32)
+    raw = actor_raw_params(actor, states)["v_raw_mean"]
+    idx = np.where(pol[:, 1] > VASO_THRESHOLD)[0]
+    grid = np.asarray(grid, dtype=np.float64)
+    scale = vrs._reward_scale(hp, "CQL")
+
+    curves = vrs.q_vaso_dose_curves(critic, states[idx], pol[idx], grid) / scale
+    curves = curves - curves[:, [0]]
+    best = grid[curves.argmax(1)]
+    actor_dose = pol[idx, 1].astype(np.float64)
+    q_actor, slope = _interp_rows(actor_dose, grid, curves)
+
+    per_state = pd.DataFrame({
+        "state_idx": idx,
+        "clin_vaso": clin_v[idx],
+        "near_floor": raw[idx] < floor + 0.5,
+        "actor_dose": actor_dose,
+        "critic_best_dose": best,
+        "q_gain_actor": q_actor,
+        "q_gain_best": curves.max(1),
+        "regret": curves.max(1) - q_actor,
+        "slope_at_actor_dose": slope,
+    })
+
+    def summarise(d):
+        pos = d["critic_best_dose"] > 0
+        return pd.Series({
+            "n": len(d),
+            "critic_best_is_0_%": 100 * (~pos).mean(),
+            "spearman_actor_vs_best": stats.spearmanr(d["actor_dose"], d["critic_best_dose"])[0] if len(d) > 10 else np.nan,
+            "spearman_actor_vs_best (best>0)": (stats.spearmanr(d.loc[pos, "actor_dose"], d.loc[pos, "critic_best_dose"])[0]
+                                                if pos.sum() > 10 else np.nan),
+            "actor_dose_median": d["actor_dose"].median(),
+            "critic_best_median": d["critic_best_dose"].median(),
+            "actor_below_best_%": 100 * (d["actor_dose"] < d["critic_best_dose"]).mean(),
+            "median_ratio_actor/best (best>0)": (d.loc[pos, "actor_dose"] / d.loc[pos, "critic_best_dose"]).median(),
+            "regret_median_HS": d["regret"].median(),
+            "regret_mean_HS": d["regret"].mean(),
+            "q_gain_best_median_HS": d["q_gain_best"].median(),
+            "slope_at_actor_median": d["slope_at_actor_dose"].median(),
+            "slope>0_%": 100 * (d["slope_at_actor_dose"] > 0).mean(),
+        })
+
+    groups = {"all fired": per_state,
+              "fired @ clin-vaso": per_state[per_state.clin_vaso],
+              "fired @ clin-zero": per_state[~per_state.clin_vaso],
+              "mean near floor": per_state[per_state.near_floor],
+              "mean well above floor": per_state[~per_state.near_floor]}
+    summary = pd.DataFrame({k: summarise(v) for k, v in groups.items() if len(v)}).T
+    return summary, per_state
+
+
+def plot_actor_vs_critic_dose(per_state, floor, save_path=None):
+    """2D histograms of actor dose vs critic-preferred dose (identity line and
+    floor dose marked), plus the regret distribution, by clinician vaso."""
+    floor_dose = _sigmoid(floor)
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.8))
+    hi = max(per_state["actor_dose"].max(), per_state["critic_best_dose"].max()) * 1.02
+    bins = np.linspace(0, hi, 40)
+    for ax, (name, m) in zip(axes[:2], [("clinician gave vaso", per_state.clin_vaso),
+                                        ("clinician gave none", ~per_state.clin_vaso)]):
+        d = per_state[m]
+        h = ax.hist2d(d["critic_best_dose"], d["actor_dose"], bins=[bins, bins], cmap="Blues", cmin=1)
+        fig.colorbar(h[3], ax=ax, label="states")
+        ax.plot([0, hi], [0, hi], color="k", lw=0.8, ls="--", label="actor = critic")
+        ax.axhline(floor_dose, color="#c0392b", lw=0.8, ls=":", label=f"floor dose {floor_dose:.3f}")
+        ax.set_xlabel("critic-preferred dose (argmax Q)")
+        ax.set_ylabel("actor dose (deterministic)")
+        ax.set_title(f"Fired @ {name} (n={len(d)})", fontsize=10)
+        ax.legend(frameon=False, fontsize=8, loc="upper left")
+    ax = axes[2]
+    rb = np.linspace(0, np.percentile(per_state["regret"], 99), 50)
+    for name, m, c in [("clinician gave vaso", per_state.clin_vaso, "#c0392b"),
+                       ("clinician gave none", ~per_state.clin_vaso, "#2471a3")]:
+        ax.hist(per_state.loc[m, "regret"], bins=rb, histtype="step", lw=1.5, color=c, density=True, label=name)
+    ax.set_xlabel("regret: Q(best) - Q(actor dose)  (HS points)")
+    ax.set_ylabel("density")
+    ax.set_title("Value left on the table", fontsize=10)
+    ax.legend(frameon=False, fontsize=8)
+    for a in axes:
+        a.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    return fig

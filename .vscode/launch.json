@@ -928,7 +928,7 @@
                 "--cql_alpha", "0.022",
                 "--vaso_mean_floor", "-2.939",
                 "--vaso_mean_floor_scale", "0.05",
-                "--seeds", "42",
+                "--seeds", "0", "1", "2", "3", "4",
                 "--cohort", "sepsis",
                 "--unit", "PICU",
                 "--filter_old", "True",

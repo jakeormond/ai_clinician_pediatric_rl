@@ -45,7 +45,8 @@ echo "Job ID: $PBS_JOBID"
 echo "Job Name: $PBS_JOBNAME"
 echo "Node(s): $PBS_NODEFILE"
 echo "CPUs allocated (NCPUS): ${NCPUS:-unknown}"
-echo "CPUs per node (PBS_NUM_PPN): ${PBS_NUM_PPN:-unknown}"echo "Memory: 64GB"
+echo "CPUs per node (PBS_NUM_PPN): ${PBS_NUM_PPN:-unknown}"
+echo "Memory: 128GB"
 echo "OMP_NUM_THREADS: ${OMP_NUM_THREADS:-unknown}"
 echo "Start time: $(date)"
 echo "Working directory: $(pwd)"
@@ -67,7 +68,9 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --split_num 0 \
     --search_variant best_hyperparameters_fixed_cql_alpha \
     --cql_alpha 0.022 \
-    --seeds "0" "1" "2" "3" "4" \
+    --vaso_mean_floor -2.939 \
+    --vaso_mean_floor_scale 0.05 \
+    --seeds "42" \
     --n_epochs 400 \
     --action_mode continuous_only \
     --cohort sepsis \

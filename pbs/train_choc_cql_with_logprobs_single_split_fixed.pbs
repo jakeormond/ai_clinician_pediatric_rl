@@ -74,7 +74,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --filter_old True \
     --reward_cohort picu \
     --action_mode continuous_only \
-    --seeds 42 \
+    --seeds 0 1 2 3 4 \
     --start_time $START_TIME 
     
 exit_code=$?

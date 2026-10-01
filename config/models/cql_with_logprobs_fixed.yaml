@@ -1,14 +1,11 @@
     project: "AI_Clininician"
     "group": "reinforcement_learning"
     name: "cql_with_logprobs"
+    device: "cuda"  # Device (cuda or cpu) 
     
     tuning: False
     
-    use_smoothing: False  
-
     n_episodes: 1000  # How many episodes run during evaluation
-    # n_epochs: 10  # Max time steps to run environment - should be 1000, but for testing we set to 10 - NOW ADDED TO COMMAND LINE ARGUMENTS
-    checkpoints_path: "/home/jake/Documents/AI_Clinician/model_checkpoints"  # Save path
        
     reward_type: "health_score" # "terminal" # "health_score"
     discount: 0.975  # Discount factor
@@ -20,65 +17,68 @@
     health_score_scale: 0. # [0.05, 0.1, 0.2]  # Scaling factor for health score component of reward
     health_score_hourly_change_scale: 1. # [0.5,
     total_health_score_scale: 1.  # Scaling factor for total health score component of reward
-    potential_based_reward_shaping: False 
+    # potential_based_reward_shaping: False 
     # terminal_health_score_reward: 100.  # the scale of terminal reward (used with pbrs) relative to the health score reward - this is added as a terminal reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
     terminal_reward_scale: 10.  # the scale of terminal reward 
     
-    # frac: 0.  # Best data fraction to use - NOW ADDED TO COMMAND LINE ARGUMENTS
-    # max_traj_len: 2000  # Max trajectory length - probably need to change this
-    device: "cuda"  # Device (cuda or cpu)
-    learning_rate_critic: 1.e-4 # 5e-6 # "loguniform(1e-4, 1e-3)"   
-    learning_rate_actor: 1.e-4  # "loguniform(1e-4, 1e-3)"   
-    dropout: 0.25 # 0.05 # "uniform(0.0, 0.5)"
+    # seeds 
+    # use_fixed_seed: True # # Whether to use a fixed seed for reproducibility, otherwise randomly generated
+    # seed: 42 # Seed value to use if use_fixed_seed is True
+
+    # add reward to vaso dosing as positive control expt
+    add_reward_to_vaso_dosing: False  # Whether to add reward to vaso dosing as positive control expt - this is added as a reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
+    vaso_reward_coefficient: 0.0 # [1.0, 5.0] # [0.2, 0.5, 1.0, 5.0]
+
+    learning_rate_critic: 0.0005 # 5e-6 # "loguniform(1e-4, 1e-3)"   
+    learning_rate_actor: 0.001  # "loguniform(1e-4, 1e-3)"   
+    dropout: 0.3 # 0.05 # "uniform(0.0, 0.5)"
     tau: 0.001 # 0.0005 # Target network update rate
-    weight_decay: 5.e-4 #1e-4 # L2 regularization strength
+    weight_decay: 0.01 #1e-4 # L2 regularization strength
     
     policy_noise: 0.2 # Noise added to target policy during critic updates
     noise_clip: 0.5 # Range to clip target policy noise
     policy_freq: 2 # Frequency of delayed policy updates
 
-    cql_alpha: 0.008 # 0.1 # 0.001 # 0.01 # 0.001 #.001 # Weighting for CQL penalty term
+    cql_alpha: 0.022 # 0.1 # 0.001 # 0.01 # 0.001 #.001 # Weighting for CQL penalty term
     temp: 1.0 # Temperature for CQL penalty term
     num_samples: 10 # Number of samples for CQL penalty term
 
     batch_size: 1024 # [256, 512, 1024]  # Batch size for all networks
-    hidden_dim: 64 # 256 # [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
+    critic_hidden_dim: 256 # 256 # [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
+    actor_hidden_dim: 64 # 256 # [[128, 128], [128, 256, 256]]  # Hidden dimension for all networks
 
     # Early stopping parameters (fixed for all combinations)
     early_stopping_flag: True  # Whether to use early stopping
     patience: 15        # Stop if no improvement for 15 evaluations
     eval_freq: 1       # Evaluate every 20 epochs  
-    min_delta: 0.01   # Minimum improvement threshold
-
-    # evaluation parameters
-    monitor_v0: True  # Whether to monitor V0 during training - specific to TD3-BC
+    min_delta: 0.0001   # Minimum improvement threshold
 
     # validation loss
     loss_metric: "bellman_loss"  # Which metric to use for validation loss
 
-    # changes to reward structure
-    make_rewards_positive: False  # Whether to shift rewards to be positive
-
     # include next actions
     include_next_actions: True  # needed for SARSA
+    actions_shift: True # temporal shift to maintain causality.
 
     # gradient clipping
     grad_clip: 1.0
 
-    actor_loss_bc_scale: 0.
     actor_loss_q_scale: 10.
-    # actor_loss_entropy_scale: 0.02 # 5.e-4
     actor_loss_gate_entropy_scale: 0. # 0.02 # 5.e-4
     actor_loss_mag_entropy_scale: 0. # 5.e-4
 
-    vaso_mean_reg_scale: 0. # 0.0005  
-
-
-    n_step: 0  # Number of steps to use for n-step returns (set to 1 or None to disable n-step returns)
-
-
+    vaso_mean_reg_scale: 0. # [0.0005, 0.001, 0.002, 0.005] # [0.001, 0.005, 0.01, 0.025]  
+    
     use_compressed_latents: False  # Whether to use compressed latents as states instead of raw features or transformer output - specific to basic Q model, not used for TD3-BC or CQL
 
     # get temp
     gate_temp_start: 1.0   # e.g. 1.0
     gate_temp_end: 0.3       # e.g. 0.3
+
+    n_step: 0  # Number of steps to use for n-step returns (set to 1 or None to disable n-step returns)
+
+    vaso_mean_floor: -2.939
+    vaso_mean_floor_scale: 0.05
+    vaso_gate_logit_bound: 4.0
+    vaso_gate_logit_bound_scale: 0.05
+

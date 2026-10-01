@@ -565,3 +565,324 @@ def plot_actor_vs_critic_dose(per_state, floor, save_path=None):
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
     return fig
+
+
+# =============================================================================
+# 8. Multi-model (multi-seed) wrappers for sections 6-7
+# =============================================================================
+
+def floor_binding(model_entry, processor, floor):
+    """Where the actor fires (gate p > 0.5): how often its vaso mean sits at/below
+    the floor, and the dose distribution, split by clinician vaso."""
+    clin_v = _np(processor.rl_dataset["actions"])[:, 1] > VASO_THRESHOLD
+    p = actor_raw_params(model_entry[0], processor.rl_dataset["states"])
+    fired = p["v_p"] > 0.5
+    vr = p["v_raw_mean"]
+    rows = {}
+    for name, m in [("all fired", fired), ("fired @ clin-vaso", fired & clin_v), ("fired @ clin-zero", fired & ~clin_v)]:
+        if not m.any():
+            rows[name] = {"n": 0}
+            continue
+        d10, d50, d90 = _sigmoid(np.percentile(vr[m], [10, 50, 90]))
+        rows[name] = {"n": int(m.sum()),
+                      "below_floor_%": 100 * (vr[m] < floor).mean(),
+                      "within_0.5_of_floor_%": 100 * (vr[m] < floor + 0.5).mean(),
+                      "dose_p10": d10, "dose_p50": d50, "dose_p90": d90}
+    return pd.DataFrame(rows).T
+
+
+def _stack(per_model):
+    """{label: DataFrame} -> one DataFrame indexed (model, row)."""
+    return pd.concat(per_model, names=["model", "group"])
+
+
+def seed_aggregate(stacked):
+    """Mean / min / max over models for each group (row) of a stacked table."""
+    num = stacked.apply(pd.to_numeric, errors="coerce")
+    return num.groupby(level=1, sort=False).agg(["mean", "min", "max"])
+
+
+def floor_binding_table(models, processor, floor):
+    return _stack({k: floor_binding(m, processor, floor) for k, m in models.items()})
+
+
+def fire_rate_by_dose_threshold_table(models, processor, training_actions, **kwargs):
+    return _stack({k: fire_rate_by_dose_threshold(m, processor, training_actions, **kwargs)
+                   for k, m in models.items()})
+
+
+def q_dose_curve_at_fired_table(models, processor, floor, **kwargs):
+    out = {}
+    for k, m in models.items():
+        print(f"  Q-dose curves: {k}", flush=True)
+        out[k] = q_dose_curve_at_fired(m, processor, floor, **kwargs)
+    return _stack(out)
+
+
+def actor_vs_critic_dose_table(models, processor, floor, **kwargs):
+    """Returns (stacked summary, {label: per-state DataFrame})."""
+    summaries, per_state = {}, {}
+    for k, m in models.items():
+        print(f"  actor vs critic dose: {k}", flush=True)
+        summaries[k], per_state[k] = actor_vs_critic_dose(m, processor, floor, **kwargs)
+    return _stack(summaries), per_state
+
+
+def clinically_meaningful_rates(per_state, processor, training_actions, pcts=(5, 10)):
+    """
+    Fire rate at clinically meaningful doses (clinician TRAIN percentiles):
+    the actor's actual dose vs the dose its own critic prefers (upper bound),
+    as % of ALL states, alongside the clinicians' rate at the same threshold.
+    """
+    tv = _np(training_actions)[:, 1]
+    tv = tv[tv > VASO_THRESHOLD]
+    clin = _np(processor.rl_dataset["actions"])[:, 1]
+    n_states = len(clin)
+    rows = []
+    for p in pcts:
+        thr = float(np.percentile(tv, p))
+        r = {"threshold": f"clinician p{p}", "dose_threshold": thr,
+             "actor_fire_%_of_states": 100 * (per_state.actor_dose >= thr).sum() / n_states,
+             "critic_best_fire_%_of_states": 100 * (per_state.critic_best_dose >= thr).sum() / n_states,
+             "clinician_fire_%": 100 * (clin > thr).mean()}
+        for name, m in [("clin-vaso", per_state.clin_vaso), ("clin-zero", ~per_state.clin_vaso)]:
+            d = per_state[m]
+            r[f"fired@{name}: actor>=thr_%"] = 100 * (d.actor_dose >= thr).mean() if len(d) else np.nan
+            r[f"fired@{name}: critic_best>=thr_%"] = 100 * (d.critic_best_dose >= thr).mean() if len(d) else np.nan
+        rows.append(r)
+    return pd.DataFrame(rows).set_index("threshold")
+
+
+def clinically_meaningful_rates_table(per_state_by_model, processor, training_actions, **kwargs):
+    return _stack({k: clinically_meaningful_rates(ps, processor, training_actions, **kwargs)
+                   for k, ps in per_state_by_model.items()})
+
+
+# =============================================================================
+# 9. Gate decisiveness and seed agreement (floor runs)
+# =============================================================================
+
+def gate_decisiveness(model_entry, processor):
+    """
+    How decisive is the vaso gate where it fires? Many fired states with p just
+    above 0.5 => the deterministic fire/no-fire split is set by near-indifference
+    (tiny critic differences + gate entropy bonus), not by a clear critic preference.
+    """
+    hp = model_entry[3]
+    p = actor_raw_params(model_entry[0], processor.rl_dataset["states"])["v_p"]
+    fired = p > 0.5
+    return {
+        "gate_entropy_scale": hp.get("actor_loss_gate_entropy_scale"),
+        "fire_%": 100 * fired.mean(),
+        "gate_p_median_when_fired": np.median(p[fired]) if fired.any() else np.nan,
+        "fired_with_p<0.6_%": 100 * (p[fired] < 0.6).mean() if fired.any() else np.nan,
+        "fired_with_p>0.9_%": 100 * (p[fired] > 0.9).mean() if fired.any() else np.nan,
+        "all_states_p_in_[0.4,0.6]_%": 100 * ((p > 0.4) & (p < 0.6)).mean(),
+        "all_states_p<0.1_%": 100 * (p < 0.1).mean(),
+    }
+
+
+def gate_decisiveness_table(models, processor):
+    return pd.DataFrame({k: gate_decisiveness(m, processor) for k, m in models.items()}).T
+
+
+def seed_agreement(models, processor, dose_threshold=VASO_THRESHOLD):
+    """
+    Per state: how many models (seeds) give vaso above dose_threshold.
+    Returns (summary DataFrame by number of agreeing seeds, per-state counts).
+    States where most seeds agree are the policy's robust vaso recommendations;
+    states where only one or two seeds fire are seed-dependent.
+    """
+    states = _np(processor.rl_dataset["states"])
+    clin = _np(processor.rl_dataset["actions"])[:, 1]
+    clin_v = clin > VASO_THRESHOLD
+    fires = np.stack([vrs.actor_gate_outputs(m[0], states)["actions"][:, 1] > dose_threshold
+                      for m in models.values()])
+    count = fires.sum(0)
+    n_models = fires.shape[0]
+    rows = []
+    for k in range(n_models + 1):
+        m = count == k
+        rows.append({"n_seeds_firing": k, "n_states": int(m.sum()), "%_of_states": 100 * m.mean(),
+                     "clin_vaso_%_within": 100 * clin_v[m].mean() if m.any() else np.nan})
+    df = pd.DataFrame(rows).set_index("n_seeds_firing")
+    pairwise = [np.mean(fires[i] & fires[j]) / max(np.mean(fires[i] | fires[j]), 1e-12)
+                for i in range(n_models) for j in range(i + 1, n_models)]
+    print(f"dose threshold {dose_threshold:.3g}: mean pairwise Jaccard of fired states across seeds = "
+          f"{np.mean(pairwise):.3f} (range {np.min(pairwise):.3f}-{np.max(pairwise):.3f}); "
+          f"clinician vaso prevalence {100 * clin_v.mean():.1f}%")
+    return df, count
+
+
+# =============================================================================
+# 10. Do the seeds' CRITICS agree about vaso? And are the gates saturated?
+# =============================================================================
+
+def critic_vaso_gain(model_entry, processor, dose=0.1):
+    """Own-critic Q(s, [f_clin, dose]) - Q(s, [f_clin, 0]) at every state (HS points).
+    Clinician fluid is used so every model is evaluated on the same action pair."""
+    _, critic, _, hp = model_entry
+    states = _np(processor.rl_dataset["states"])
+    clin = _np(processor.rl_dataset["actions"]).astype(np.float32)
+    a1, a0 = clin.copy(), clin.copy()
+    a1[:, 1], a0[:, 1] = dose, 0.0
+    scale = vrs._reward_scale(hp, "CQL")
+    return (vrs.critic_q(critic, states, a1) - vrs.critic_q(critic, states, a0)) / scale
+
+
+def critic_agreement(models, processor, dose=0.1):
+    """
+    Across seeds: do the critics agree on WHERE vaso is least penalised / helpful,
+    and do the gates follow their own critic vs the other seeds' critics?
+      - pairwise Spearman of critic gain across states (all / clinician-vaso)
+      - sign agreement: % of states where all critics agree on the sign of the gain
+      - per model: Spearman(gate logit, own critic gain) vs mean Spearman with the
+        OTHER seeds' critics; and gate saturation at fired states the own critic
+        disfavours (gain < 0 but gate p > 0.99)
+    Critics agree but gates don't => actor-side problem (e.g. gate saturation).
+    Critics disagree => the vaso signal itself is not reproducible across seeds.
+    """
+    labels = list(models)
+    clin_v = _np(processor.rl_dataset["actions"])[:, 1] > VASO_THRESHOLD
+    gains = np.stack([critic_vaso_gain(models[k], processor, dose) for k in labels])
+    gate_p = np.stack([actor_raw_params(models[k][0], processor.rl_dataset["states"])["v_p"] for k in labels])
+    gate_logit = _logit(gate_p, eps=1e-6)
+
+    def pairwise(mask):
+        n = len(labels)
+        M = np.eye(n)
+        for i in range(n):
+            for j in range(i + 1, n):
+                M[i, j] = M[j, i] = stats.spearmanr(gains[i, mask], gains[j, mask])[0]
+        return pd.DataFrame(M, index=labels, columns=labels)
+
+    all_mask = np.ones(gains.shape[1], bool)
+    rho_all, rho_cv = pairwise(all_mask), pairwise(clin_v)
+    off = ~np.eye(len(labels), dtype=bool)
+    signs = np.sign(gains)
+    print(f"critic gain at dose {dose}: mean pairwise Spearman across seeds = "
+          f"{rho_all.values[off].mean():.3f} (all states), {rho_cv.values[off].mean():.3f} (clinician-vaso states)")
+    print(f"  all critics agree on sign of gain at {100 * (np.abs(signs.sum(0)) == len(labels)).mean():.1f}% of states; "
+          f"gain > 0 in ALL critics at {100 * (gains > 0).all(0).mean():.2f}% of states")
+
+    rows = {}
+    for i, k in enumerate(labels):
+        fired = gate_p[i] > 0.5
+        others = [stats.spearmanr(gate_logit[i], gains[j])[0] for j in range(len(labels)) if j != i]
+        disfav = fired & (gains[i] < 0)
+        rows[k] = {
+            "spearman_gate_vs_own_critic": stats.spearmanr(gate_logit[i], gains[i])[0],
+            "spearman_gate_vs_other_critics_mean": np.mean(others),
+            "own_critic_gain>0_%": 100 * (gains[i] > 0).mean(),
+            "fired_where_own_critic_gain<0_%": 100 * disfav.sum() / max(fired.sum(), 1),
+            "of_those_gate_p>0.99_%": 100 * (gate_p[i][disfav] > 0.99).mean() if disfav.any() else np.nan,
+            "not_fired_where_own_critic_gain>0_%": 100 * (~fired & (gains[i] > 0)).sum() / max((gains[i] > 0).sum(), 1),
+        }
+    return {"rho_all": rho_all, "rho_clin_vaso": rho_cv, "per_model": pd.DataFrame(rows).T, "gains": gains}
+
+
+# =============================================================================
+# 11. Generalised critic agreement: SARSA critics, and fluid as well as vaso
+# =============================================================================
+
+DRUG_IDX = {"fluid": 0, "vaso": 1}
+
+
+def cql_critics(models):
+    """{label: CQL model_entry} -> {label: (critic, reward_scale)}"""
+    return {k: (m[1], vrs._reward_scale(m[3], k)) for k, m in models.items()}
+
+
+def sarsa_critics(sarsa_models):
+    """[(critic, cm, hp), ...] -> {'SARSA k': (critic, reward_scale)}"""
+    from .evaluate_cql_alpha_sweep import get_critic
+    out = {}
+    for k, entry in enumerate(sarsa_models):
+        hp = entry[2] if len(entry) >= 3 else {}
+        out[f"SARSA {k + 1}"] = (get_critic(entry), vrs._reward_scale(hp, f"SARSA {k + 1}"))
+    return out
+
+
+def critic_gain(critic, scale, states, clin, drug="vaso", mode="absolute", dose=0.1, delta=0.1):
+    """
+    Per-state critic gain for one drug, the other drug held at the clinician's dose (HS points).
+      mode="absolute": Q(dose) - Q(0)                   -- is giving the drug better than none?
+      mode="local":    Q(d_clin + delta) - Q(d_clin - delta), doses clipped to [0, 1]
+                                                         -- would the critic give more or less
+                                                            than the clinician did? (fluid is
+                                                            given at ~91% of states, so this is
+                                                            the more relevant fluid question)
+    """
+    j = DRUG_IDX[drug]
+    clin = clin.astype(np.float32)
+    hi, lo = clin.copy(), clin.copy()
+    if mode == "absolute":
+        hi[:, j], lo[:, j] = dose, 0.0
+    elif mode == "local":
+        hi[:, j] = np.clip(clin[:, j] + delta, 0, 1)
+        lo[:, j] = np.clip(clin[:, j] - delta, 0, 1)
+    else:
+        raise ValueError(mode)
+    return (vrs.critic_q(critic, states, hi) - vrs.critic_q(critic, states, lo)) / scale
+
+
+def critic_gain_agreement(critics, processor, drug="vaso", mode="absolute", dose=None, delta=0.1):
+    """
+    Agreement across a set of critics (e.g. the 5 CQL floor seeds, or the 5 SARSA seeds)
+    on a per-state gain for one drug.
+      - pairwise Spearman across states (all states / states where the clinician gave the drug)
+      - sign agreement, and what INDEPENDENT critics with the same base rates would give
+      - ensemble view: % states where the mean gain > 0, where all > 0, and where the
+        lower 95% bound across critics (mean - 1.96 SD/sqrt(n)) > 0
+    dose=None -> vaso 0.1; fluid = median clinician nonzero fluid dose.
+    """
+    states = _np(processor.rl_dataset["states"])
+    clin = _np(processor.rl_dataset["actions"])
+    j = DRUG_IDX[drug]
+    if dose is None:
+        nz = clin[clin[:, j] > VASO_THRESHOLD, j]
+        dose = 0.1 if drug == "vaso" else float(np.median(nz))
+    labels = list(critics)
+    gains = np.stack([critic_gain(c, s, states, clin, drug, mode, dose, delta) for c, s in critics.values()])
+    clin_given = clin[:, j] > VASO_THRESHOLD
+
+    def pairwise(mask):
+        n = len(labels)
+        M = np.eye(n)
+        for a in range(n):
+            for b in range(a + 1, n):
+                M[a, b] = M[b, a] = stats.spearmanr(gains[a, mask], gains[b, mask])[0]
+        return pd.DataFrame(M, index=labels, columns=labels)
+
+    rho_all = pairwise(np.ones(gains.shape[1], bool))
+    rho_given = pairwise(clin_given)
+    off = ~np.eye(len(labels), dtype=bool)
+
+    pos = gains > 0
+    p_pos = pos.mean(1)
+    observed_sign_agree = (pos.all(0) | (~pos).all(0)).mean()
+    expected_sign_agree = np.prod(p_pos) + np.prod(1 - p_pos)
+    mean_g, sd_g = gains.mean(0), gains.std(0, ddof=1)
+    lcb = mean_g - 1.96 * sd_g / np.sqrt(len(labels))
+
+    desc = f"{drug}, {mode}" + (f", dose={dose:.3g}" if mode == "absolute" else f", delta={delta}")
+    summary = pd.Series({
+        "setting": desc,
+        "n_critics": len(labels),
+        "mean_pairwise_spearman_all": rho_all.values[off].mean(),
+        f"mean_pairwise_spearman_clin_{drug}_given": rho_given.values[off].mean(),
+        "gain>0_%_per_critic (mean)": 100 * p_pos.mean(),
+        "gain>0_%_per_critic (range)": f"{100 * p_pos.min():.1f}-{100 * p_pos.max():.1f}",
+        "sign_agreement_observed_%": 100 * observed_sign_agree,
+        "sign_agreement_if_independent_%": 100 * expected_sign_agree,
+        "ensemble_mean_gain>0_%": 100 * (mean_g > 0).mean(),
+        "all_critics_gain>0_%": 100 * pos.all(0).mean(),
+        "ensemble_lower_bound>0_%": 100 * (lcb > 0).mean(),
+        "ensemble_mean_gain_median_HS": float(np.median(mean_g)),
+    })
+    return {"summary": summary, "rho_all": rho_all, f"rho_clin_{drug}_given": rho_given, "gains": gains}
+
+
+def critic_agreement_table(results):
+    """{name: critic_gain_agreement output} -> one summary table."""
+    return pd.DataFrame({k: v["summary"] for k, v in results.items()}).T

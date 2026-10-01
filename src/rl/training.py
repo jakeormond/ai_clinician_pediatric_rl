@@ -594,21 +594,29 @@ def single_split_training(config_manager):
     else:
         logger.info(" Fixed hyperparameter training mode enabled.")
 
-        # get fixed hyperparameters
-        hyperparams = get_fixed_hyperparameters(config_manager)
+        seeds = config_manager.seeds
+        if seeds is None or len(seeds) == 0:
+            seeds = [config_manager.training_config.get('seed', 42)]  # default seed if none provided
 
-        train_processor, val_processor, test_processor = create_processor_from_shards(
-                        config_manager, 
-                        normalize=True
-                    )
+        for seed in config_manager.seeds:
+            # get fixed hyperparameters
+            hyperparams = get_fixed_hyperparameters(config_manager)
+            hyperparams['seed'] = seed
+            config_manager.training_config['seed'] = seed  # also set in training_config for logging
+            logger.info(f"Training with fixed hyperparameters for seed {seed}...")
 
-        # train model
-        train_with_hyperparameters(
-            train_processor, 
-            val_processor, 
-            config_manager, 
-            hyperparams,
-        )
+            train_processor, val_processor, test_processor = create_processor_from_shards(
+                            config_manager, 
+                            normalize=True
+                        )
+
+            # train model
+            train_with_hyperparameters(
+                train_processor, 
+                val_processor, 
+                config_manager, 
+                hyperparams,
+            )
 
 
 def optimize_hyperparameters(train_processor, val_processor, config_manager):

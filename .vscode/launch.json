@@ -640,7 +640,7 @@
                 "--unit", "PICU",
                 "--filter_old", "True",
                 "--reward_cohort", "picu",
-                "--include_actions_in_state", "False",
+                "--include_actions_in_state", "True",
                 "--action_mode", "continuous_only",
             ],
             "console": "integratedTerminal",
@@ -808,7 +808,6 @@
                 "--reward_type", "health_score",
                 "--mode", "single_split", 
                 "--split_num", "0",
-                "--model_dir", "sepsis_models/intake_vis",
                 "--search_variant", "fixed_hyperparameters",
                 "--cohort", "sepsis",
                 "--unit", "PICU",
@@ -816,7 +815,7 @@
                 "--reward_cohort", "picu",
                 "--n_epochs", "200",
                 "--action_mode", "continuous_only",  
-                "--seeds", "0", "1", "2", "3", "4"          
+                "--seeds", "42"          
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",

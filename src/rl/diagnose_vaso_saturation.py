@@ -886,3 +886,113 @@ def critic_gain_agreement(critics, processor, drug="vaso", mode="absolute", dose
 def critic_agreement_table(results):
     """{name: critic_gain_agreement output} -> one summary table."""
     return pd.DataFrame({k: v["summary"] for k, v in results.items()}).T
+
+
+# =============================================================================
+# 12. Is the critic disagreement extrapolation? (in-distribution vs OOD Q values)
+# =============================================================================
+
+def q_value_agreement(critics, processor, ood_vaso_dose=0.1):
+    """
+    Across a set of critics: pairwise Spearman of Q VALUES (not action gains) on
+      - in-distribution actions:  Q(s, a_clin) at all states, and at clinician-vaso states
+      - out-of-distribution:      Q(s, [f_clin, ood_vaso_dose]) at clinician-ZERO states
+                                  (vaso where clinicians gave none)
+    High agreement in-distribution but low OOD => the disagreement is extrapolation
+    error on actions the data don't cover (which only enter CQL's Bellman targets and
+    conservative penalty once the actor starts proposing them).
+    Low agreement in-distribution too => the critics differ more broadly.
+    """
+    states = _np(processor.rl_dataset["states"])
+    clin = _np(processor.rl_dataset["actions"]).astype(np.float32)
+    clin_v = clin[:, 1] > VASO_THRESHOLD
+    a_ood = clin.copy()
+    a_ood[:, 1] = ood_vaso_dose
+
+    q_in = np.stack([vrs.critic_q(c, states, clin) / s for c, s in critics.values()])
+    q_ood = np.stack([vrs.critic_q(c, states, a_ood) / s for c, s in critics.values()])
+
+    def mean_pairwise(Q, mask):
+        n = Q.shape[0]
+        vals = [stats.spearmanr(Q[i, mask], Q[j, mask])[0] for i in range(n) for j in range(i + 1, n)]
+        return float(np.mean(vals)), float(np.min(vals)), float(np.max(vals))
+
+    out = {}
+    for name, Q, mask in [("Q(s,a_clin) all states", q_in, np.ones(len(clin), bool)),
+                          ("Q(s,a_clin) clin-vaso states", q_in, clin_v),
+                          ("Q(s,a_clin) clin-zero states", q_in, ~clin_v),
+                          (f"Q(s,[f_clin,v={ood_vaso_dose}]) clin-zero states (OOD)", q_ood, ~clin_v)]:
+        m, lo, hi = mean_pairwise(Q, mask)
+        out[f"{name}: mean"] = m
+        out[f"{name}: range"] = f"{lo:.2f}-{hi:.2f}"
+    return pd.Series(out)
+
+
+def q_value_agreement_table(critic_sets, processor, **kwargs):
+    rows = {}
+    for name, critics in critic_sets.items():
+        print(f"  Q-value agreement: {name}", flush=True)
+        rows[name] = q_value_agreement(critics, processor, **kwargs)
+    return pd.DataFrame(rows).T
+
+
+# =============================================================================
+# 13. Critic sanity: state values vs action effects
+# =============================================================================
+
+def critic_sanity(critic_sets, processor, health_score, sarsa_key="SARSA", fixed_action=(0.5, 0.0)):
+    """
+    Per critic, separates how much of Q(s, a_clin) is STATE value vs ACTION effect:
+      - Q_fixed(s) = Q(s, fixed_action): a common action at every state -> a state-value proxy
+      - action part = Q(s, a_clin) - Q_fixed(s)
+    Reports, per critic:
+      - Spearman(Q_fixed, health score)            -- does the critic value healthier states more?
+      - Spearman(Q_fixed, SARSA-ensemble Q_fixed)   -- does it agree with the bonus-free reference?
+      - action_share = var(action part) / var(Q(s, a_clin))
+      - Q(s, a_clin) mean and IQR (HS points)
+    and, per set, the mean pairwise Spearman of Q_fixed (state-value agreement across seeds).
+    If critics agree on Q_fixed but not on Q(s, a_clin), their disagreement is in the ACTION
+    effects (e.g. fluid), not in how they value states.
+    """
+    states = _np(processor.rl_dataset["states"])
+    clin = _np(processor.rl_dataset["actions"]).astype(np.float32)
+    a_fix = np.tile(np.asarray(fixed_action, dtype=np.float32), (len(clin), 1))
+    hs = np.asarray(health_score)
+
+    q_fix, q_clin = {}, {}
+    for set_name, critics in critic_sets.items():
+        for lab, (c, s) in critics.items():
+            key = (set_name, lab)
+            q_fix[key] = vrs.critic_q(c, states, a_fix) / s
+            q_clin[key] = vrs.critic_q(c, states, clin) / s
+
+    sarsa_ref = None
+    sarsa_keys = [k for k in q_fix if k[0] == sarsa_key]
+    if sarsa_keys:
+        sarsa_ref = np.mean([q_fix[k] for k in sarsa_keys], axis=0)
+
+    rows = {}
+    for key in q_fix:
+        qa, qf = q_clin[key], q_fix[key]
+        act = qa - qf
+        rows[key] = {
+            "spearman_Qfixed_vs_health_score": stats.spearmanr(qf, hs)[0],
+            "spearman_Qfixed_vs_SARSA": stats.spearmanr(qf, sarsa_ref)[0] if sarsa_ref is not None else np.nan,
+            "action_share_of_Q_variance": act.var() / qa.var(),
+            "Q_clin_mean_HS": qa.mean(),
+            "Q_clin_IQR_HS": np.subtract(*np.percentile(qa, [75, 25])),
+            "Q_fixed_IQR_HS": np.subtract(*np.percentile(qf, [75, 25])),
+        }
+    per_critic = pd.DataFrame(rows).T
+    per_critic.index = pd.MultiIndex.from_tuples(per_critic.index, names=["set", "critic"])
+
+    agree = {}
+    for set_name in critic_sets:
+        keys = [k for k in q_fix if k[0] == set_name]
+        vals = [stats.spearmanr(q_fix[a], q_fix[b])[0] for i, a in enumerate(keys) for b in keys[i + 1:]]
+        if not vals:   # a set with a single critic has no pairs
+            agree[set_name] = {"Q_fixed_pairwise_spearman_mean": np.nan, "Q_fixed_pairwise_spearman_range": "n/a (1 critic)"}
+            continue
+        agree[set_name] = {"Q_fixed_pairwise_spearman_mean": np.mean(vals),
+                           "Q_fixed_pairwise_spearman_range": f"{np.min(vals):.2f}-{np.max(vals):.2f}"}
+    return per_critic, pd.DataFrame(agree).T

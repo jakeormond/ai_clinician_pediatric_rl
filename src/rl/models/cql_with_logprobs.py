@@ -198,7 +198,6 @@ class Actor(nn.Module):
 				components = {
 					"f_fire": f_fire, "v_fire": v_fire,
 					"f_mag_lp": f_mag_lp, "v_mag_lp": v_mag_lp,
-					"f_gate_logit": f_gate_logit, "v_gate_logit": v_gate_logit,
 				}
 
 		else:
@@ -593,9 +592,6 @@ class CQL:
 		vaso_mean_floor: typing.Optional[float] = None,   # raw-logit floor for vaso magnitude mean; None = off
 		vaso_mean_floor_scale: float = 0.05,
 
-		vaso_gate_logit_bound: typing.Optional[float] = None,   # |vaso gate logit| bound; None = off
-		vaso_gate_logit_bound_scale: float = 0.05,
-
 		device: str = "CUDA" if torch.cuda.is_available() else "CPU",
 		action_mode: str = "continuous",
 		dose_actions: int = 2,  #  Number of dose actions
@@ -641,9 +637,6 @@ class CQL:
 
 		self.vaso_mean_floor = vaso_mean_floor
 		self.vaso_mean_floor_scale = vaso_mean_floor_scale
-
-		self.vaso_gate_logit_bound = vaso_gate_logit_bound
-		self.vaso_gate_logit_bound_scale = vaso_gate_logit_bound_scale
 
 		self.device = device
 		self.action_mode = action_mode
@@ -1010,16 +1003,6 @@ class CQL:
 			else:
 				v_mean_floor_penalty = torch.zeros((), device=v_raw_mean.device)
 
-			# Two-sided bound on the vaso GATE logit. With actor_loss_gate_entropy_scale = 0
-			# nothing stops gate logits running to extremes (p > 0.99 / < 0.01), where the
-			# straight-through gradient ~ p(1-p) vanishes and the gate stops following the
-			# critic. Zero inside [-bound, bound] (no bias toward 0.5); only resists leaving it.
-			# None -> disabled (reproduces previous runs exactly).
-			v_gate_logit_flat = components["v_gate_logit"].squeeze(-1)
-			if self.vaso_gate_logit_bound is not None:
-				v_gate_bound_penalty = torch.relu(v_gate_logit_flat.abs() - self.vaso_gate_logit_bound).pow(2).mean()
-			else:
-				v_gate_bound_penalty = torch.zeros((), device=v_gate_logit_flat.device)
 
 			# --- per-drug magnitude entropy, masked mean over FIRED samples only ---
 			# (mag_lp is exactly 0 for non-fired samples via the fire-mask multiply,
@@ -1044,8 +1027,7 @@ class CQL:
 				alpha_mag_vaso * v_mag_lp_mean +
 				self.fluid_mean_reg_scale * f_mean_saturation_penalty +
 				self.vaso_mean_reg_scale * v_mean_saturation_penalty + 
-				self.vaso_mean_floor_scale * v_mean_floor_penalty +
-				self.vaso_gate_logit_bound_scale * v_gate_bound_penalty
+				self.vaso_mean_floor_scale * v_mean_floor_penalty
 			)
 
 
@@ -1094,10 +1076,6 @@ class CQL:
 				"f_mean_saturation_penalty": f_mean_saturation_penalty.item(),
 				"v_mean_saturation_penalty": v_mean_saturation_penalty.item(),
 				"v_mean_floor_penalty": v_mean_floor_penalty.item(),
-				"v_gate_bound_penalty": v_gate_bound_penalty.item(),
-				"v_gate_logit_abs_p95": v_gate_logit_flat.detach().abs().quantile(0.95).item(),
-				"v_gate_beyond_bound_frac": ((v_gate_logit_flat.detach().abs() > self.vaso_gate_logit_bound).float().mean().item()
-											 if self.vaso_gate_logit_bound is not None else float('nan')),
 				"v_raw_mean_median": v_raw_mean.median().item(),				
 				"alpha_mag_fluid": alpha_mag_fluid.item(),
 				"alpha_mag_vaso": alpha_mag_vaso.item(),
@@ -1375,6 +1353,7 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 	learning_rate_actor = float(hyperparams['learning_rate_actor'])
 	weight_decay = float(hyperparams.get('weight_decay', 0.01)) # New hyperparam
 	device = config_manager.training_config['device']
+
 	
 	actor = Actor(
 		state_dim=state_dim, 
@@ -1449,9 +1428,6 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams):
 
 		vaso_mean_floor=hyperparams.get('vaso_mean_floor', None),
 		vaso_mean_floor_scale=hyperparams.get('vaso_mean_floor_scale', 0.05),
-
-		vaso_gate_logit_bound=hyperparams.get('vaso_gate_logit_bound', None),
-		vaso_gate_logit_bound_scale=hyperparams.get('vaso_gate_logit_bound_scale', 0.05),
 
 		num_samples=hyperparams['num_samples'],
 

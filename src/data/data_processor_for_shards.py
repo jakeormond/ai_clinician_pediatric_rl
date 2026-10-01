@@ -140,25 +140,27 @@ class ShardProcessor:
                                 results_seed = results['hyperparameters']['seed']
                                 if results_seed == seed:
                                     model_dir = os.path.join(model_dir, seed_folder)
-                                    break
-                
-                    prediction_file_path = os.path.join(model_dir, f"{pred_split}_predictions.h5")
-
+                                    break                
+                    
                     if key == "reward":
+                        parent_dir = os.path.dirname(model_dir)
+                        prediction_file_path = os.path.join(parent_dir, f"{pred_split}_predictions.h5") 
+                        logger.info(f"Loading reward model predictions from {prediction_file_path}")                       
                         self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
-                            keys_to_exclude=['predictions', 'entropy', 'compressed_latents', 'carry_forward_ind', 'response_zero_ind'])
+                            keys_to_exclude=['predictions', 'model_outputs', 'entropy', 'compressed_latents', 'carry_forward_ind', 'response_zero_ind'])
 
                     elif key == "state":
-                        if final_model_dir != state_model_dir:
-                            logger.info(f"Loading state model predictions from {prediction_file_path}")
-                            dynamic_deephit_state_model_outputs = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
-                                keys_to_load=['model_outputs'])
+                        prediction_file_path = os.path.join(model_dir, f"{pred_split}_predictions.h5")                        
+                        # if final_model_dir != state_model_dir:
+                        logger.info(f"Loading state model predictions from {prediction_file_path}")
+                        dynamic_deephit_state_model_outputs = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
+                            keys_to_load=['model_outputs'])
 
-                            # confirm shapes match
-                            assert self.dynamic_deephit_predictions['model_outputs'].shape[0] == dynamic_deephit_state_model_outputs['model_outputs'].shape[0], \
-                                "Shapes of model outputs do not match!"
+                # confirm shapes match
+                assert self.dynamic_deephit_predictions['health_score'].shape[0] == dynamic_deephit_state_model_outputs['model_outputs'].shape[0], \
+                    "Shapes of model outputs do not match!"
 
-                            self.dynamic_deephit_predictions['model_outputs'] = dynamic_deephit_state_model_outputs['model_outputs']
+                self.dynamic_deephit_predictions['model_outputs'] = dynamic_deephit_state_model_outputs['model_outputs']
 
             
                 # load behavioural cloning latents if using

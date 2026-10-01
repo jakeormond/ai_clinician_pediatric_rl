@@ -14,8 +14,10 @@ import os
 import gc
 import json
 import pickle
+from datetime import datetime
 from types import SimpleNamespace
 
+import h5py
 import numpy as np
 import pandas as pd
 import torch
@@ -617,6 +619,269 @@ def plot_agreement(corr_df, title, save_path=None):
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return fig
+
+
+# ----------------------------------------------------------------------------
+# Agreement across seeds and the seed-averaged (ensemble) health score
+# ----------------------------------------------------------------------------
+_HS_ONLY_EXCLUDE = ("compressed_latents", "model_outputs", "predictions", "entropy")
+
+
+def load_health_scores(models, split):
+    """Health score of every seed for one split, loading nothing heavy.
+
+    models: list of (model, config_manager, hyperparams, seed) for ONE variant.
+    Returns (hs_by_seed {seed: (N,) array}, meta) where meta is the first seed's
+    loaded dict minus the per-model keys (stay_ids, index_ptr, event, ...).
+    Raises if stays or row counts differ between seeds.
+    """
+    hs_by_seed, meta = {}, None
+    for _, config_manager, _, seed in models:
+        path = prediction_path(config_manager.experiment_dir, split)
+        preds = ShardProcessor.load_dynamic_deephit_predictions_from_h5(
+            path, keys_to_exclude=list(_HS_ONLY_EXCLUDE))
+        if meta is None:
+            meta = {k: v for k, v in preds.items() if k != "health_score"}
+        else:
+            for key in ("index_ptr", "stay_ids"):
+                if not np.array_equal(np.asarray(preds[key]), np.asarray(meta[key])):
+                    raise ValueError(f"{key} differs between seeds ({split}, seed {seed})")
+        hs_by_seed[seed] = np.asarray(preds["health_score"], dtype=np.float64)
+        del preds
+    return dict(sorted(hs_by_seed.items())), meta
+
+
+def _demean_within_stays(x, index_ptr):
+    lengths = np.diff(index_ptr)
+    stay_means = np.add.reduceat(x, index_ptr[:-1]) / lengths
+    return x - np.repeat(stay_means, lengths)
+
+
+def _mean_offdiag(m):
+    m = np.asarray(m)
+    return m[~np.eye(len(m), dtype=bool)].mean()
+
+
+def seed_agreement_summary(hs_by_seed, index_ptr):
+    """How similar the seeds' health scores and rewards are.
+
+    Pooled health-score correlation is dominated by differences between
+    patients; the within-stay and reward rows measure agreement on the
+    hour-to-hour changes the RL agent actually receives.
+    Returns a one-column DataFrame of metrics.
+    """
+    index_ptr = np.asarray(index_ptr)
+    seeds = list(hs_by_seed)
+    hs = np.stack([hs_by_seed[s] for s in seeds])                    # (S, N)
+    rewards = np.stack([within_stay_reward(h, index_ptr) for h in hs])
+    hs_within = np.stack([_demean_within_stays(h, index_ptr) for h in hs])
+
+    across_seed_sd = hs.std(axis=0, ddof=1)
+    nonzero = np.all(rewards != 0, axis=0)
+    signs = np.sign(rewards[:, nonzero])
+    all_same_sign = np.mean(np.all(signs == signs[0], axis=0))
+
+    # each seed's reward vs the mean of the OTHER seeds (avoids self-inflation)
+    loo = [stats.pearsonr(rewards[i], np.delete(rewards, i, axis=0).mean(axis=0))[0]
+           for i in range(len(seeds))]
+
+    out = {
+        "n_seeds": len(seeds),
+        "n_rows": hs.shape[1],
+        "health_score_pearson_mean": _mean_offdiag(np.corrcoef(hs)),
+        "health_score_pearson_min": np.corrcoef(hs)[~np.eye(len(seeds), dtype=bool)].min(),
+        "health_score_within_stay_pearson_mean": _mean_offdiag(np.corrcoef(hs_within)),
+        "reward_pearson_mean": _mean_offdiag(np.corrcoef(rewards)),
+        "reward_pearson_min": np.corrcoef(rewards)[~np.eye(len(seeds), dtype=bool)].min(),
+        "reward_vs_other_seeds_mean_pearson": float(np.mean(loo)),
+        "reward_all_seeds_same_sign": float(all_same_sign),
+        "health_score_sd_between_rows": hs.mean(axis=0).std(),
+        "health_score_mean_across_seed_sd": across_seed_sd.mean(),
+        "health_score_p95_across_seed_sd": np.percentile(across_seed_sd, 95),
+        "share_of_variance_from_seed": (hs.var(axis=0, ddof=1).mean()
+                                        / hs.reshape(-1).var(ddof=1)),
+        "reward_sd_single_seed_mean": rewards.std(axis=1).mean(),
+        "reward_sd_ensemble": rewards.mean(axis=0).std(),
+    }
+    return pd.DataFrame.from_dict(out, orient="index", columns=["value"])
+
+
+def plot_seed_trajectories(hs_by_seed, meta, dataset=None, ensemble=None, n_stays=6, rng_seed=0, save_path=None):
+    """Health score of every seed, plus the seed mean, for a few random stays.
+
+    Outcomes come from `dataset` (e.g. processors["test"]), since prediction
+    files don't store them; its stay_ids must match the predictions. Without a
+    dataset, stays are sampled without regard to outcome.
+
+    ensemble: optional dict from load_ensemble_health_score. If given, the saved
+    seed-averaged score (with a +/-1 SD band) is drawn instead of a mean computed
+    here, after checking it matches the seeds' own scores.
+    """
+    rng = np.random.default_rng(rng_seed)
+    index_ptr = np.asarray(meta["index_ptr"])
+    n_total = len(index_ptr) - 1
+
+    events = None
+    if dataset is not None:
+        ddd = _dataset_dict(dataset)
+        if not np.array_equal(np.asarray(ddd["stay_ids"]), np.asarray(meta["stay_ids"])):
+            raise ValueError("stay_ids of the dataset and the predictions differ")
+        events = np.asarray(ddd["event"])
+    elif "event" in meta:
+        events = np.asarray(meta["event"])
+
+    if ensemble is not None:
+        if not np.array_equal(np.asarray(ensemble["stay_ids"]), np.asarray(meta["stay_ids"])):
+            raise ValueError("stay_ids of the ensemble file and the predictions differ")
+        ens_seeds = [int(x) for x in ensemble["attr_seeds"]]
+        if sorted(ens_seeds) != sorted(hs_by_seed):
+            raise ValueError(f"Ensemble averaged seeds {ens_seeds}, predictions have {list(hs_by_seed)}")
+        recomputed = np.mean([hs_by_seed[s] for s in ens_seeds], axis=0)
+        if not np.allclose(recomputed, ensemble["health_score"], atol=1e-3):
+            raise ValueError("Saved ensemble health_score does not match the mean of the seeds' scores")
+
+    if events is not None:
+        deaths, survivors = np.flatnonzero(events == 1), np.flatnonzero(events == 0)
+        k = n_stays // 2
+        stays = np.concatenate([rng.choice(deaths, min(k, len(deaths)), replace=False),
+                                rng.choice(survivors, min(n_stays - k, len(survivors)), replace=False)])
+    else:
+        stays = rng.choice(n_total, size=min(n_stays, n_total), replace=False)
+
+    ncols = 3
+    nrows = int(np.ceil(len(stays) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 3.2 * nrows), squeeze=False)
+    for ax, stay in zip(axes.ravel(), stays):
+        a, b = index_ptr[stay], index_ptr[stay + 1]
+        hours = np.arange(b - a)
+        seed_curves = np.stack([hs[a:b] for hs in hs_by_seed.values()])
+        for seed, curve in zip(hs_by_seed, seed_curves):
+            ax.plot(hours, curve, lw=0.8, alpha=0.6, label=f"seed {seed}")
+        if ensemble is not None:
+            ens_mean = np.asarray(ensemble["health_score"][a:b])
+            ens_sd = np.asarray(ensemble["health_score_sd"][a:b])
+            ax.fill_between(hours, ens_mean - ens_sd, ens_mean + ens_sd, color="k", alpha=0.15, lw=0)
+            ax.plot(hours, ens_mean, color="k", lw=2, label="ensemble (saved)")
+        else:
+            ax.plot(hours, seed_curves.mean(axis=0), color="k", lw=2, label="mean")
+        outcome = "" if events is None else (" (died)" if events[stay] == 1 else " (survived)")
+        ax.set_title(f"stay {meta['stay_ids'][stay]}{outcome}")
+        ax.set_xlabel("Hour of stay")
+        ax.set_ylabel("Health score")
+    for ax in axes.ravel()[len(stays):]:
+        ax.axis("off")
+    axes[0, 0].legend(fontsize=7)
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return fig
+
+
+def ensemble_dir(models):
+    """The job folder holding all seeds' run folders (and config_manager.pkl).
+
+    Raises if the seeds do not all sit in the same parent folder.
+    """
+    parents = {os.path.dirname(os.path.normpath(cm.experiment_dir)) for _, cm, _, _ in models}
+    if len(parents) != 1:
+        raise ValueError(f"Seeds are not in a single job folder: {sorted(parents)}")
+    return parents.pop()
+
+
+def build_ensemble_health_score(models, split, data, out_dir=None, overwrite=False):
+    """Average the seeds' health scores for one split and save for RL training.
+
+    data: the loaded dataset for this split (e.g. processors[split]); supplies
+    feature_names and event, which prediction files do not return.
+
+    Written with h5py to <out_dir>/<split>_predictions.h5 using the same dataset
+    names/dtypes as ShardProcessor.dynamic_deephit_dataset_to_h5 for the shared
+    keys (feature_names, stay_ids, index_ptr, carry_forward_ind, response_zero_ind),
+    plus event and:
+      health_score        mean across seeds  -> the shared reward source
+      health_score_sd     across-seed SD
+      health_score_seeds  (N, n_seeds) per-seed scores, columns in the order of the 'seeds' attribute
+    No latents are included: RL states still come from each seed's own file.
+    The file is read back with the standard prediction loader to confirm health_score
+    survives the round trip. ensemble_info.json records which runs were averaged.
+
+    out_dir defaults to the job folder that holds the seeds' run folders and
+    config_manager.pkl (see ensemble_dir).
+    """
+    if out_dir is None:
+        out_dir = ensemble_dir(models)
+    os.makedirs(out_dir, exist_ok=True)
+    path = prediction_path(out_dir, split)
+    if os.path.exists(path) and not overwrite:
+        try:
+            with h5py.File(path, "r") as f:
+                complete = "health_score" in f and "health_score_seeds" in f
+        except OSError:
+            complete = False
+        if complete:
+            print(f"{split}: ensemble exists, skipping ({path})")
+            return path
+        print(f"{split}: existing file is incomplete (no health_score), rebuilding ({path})")
+
+    hs_by_seed, meta = load_health_scores(models, split)
+    ddd = _dataset_dict(data)
+    for key in ("stay_ids", "index_ptr"):
+        if not np.array_equal(np.asarray(ddd[key]), np.asarray(meta[key])):
+            raise ValueError(f"{key} of the loaded {split} dataset and the predictions differ")
+
+    seeds = list(hs_by_seed)
+    stacked = np.stack([hs_by_seed[s] for s in seeds], axis=1)        # (N, S)
+    mean_hs = stacked.mean(axis=1).astype(np.float32)
+
+    with h5py.File(path, "w") as f:
+        f.create_dataset("feature_names",
+                         data=np.array([n.encode("utf-8") for n in ddd["feature_names"]], dtype="S"))
+        f.create_dataset("stay_ids", data=np.asarray(meta["stay_ids"]), dtype=np.int32)
+        f.create_dataset("index_ptr", data=np.asarray(meta["index_ptr"]), dtype=np.int32)
+        for key in ("carry_forward_ind", "response_zero_ind"):
+            if key in meta:
+                f.create_dataset(key, data=np.asarray(meta[key]))
+        f.create_dataset("event", data=np.asarray(ddd["event"]))
+        f.create_dataset("health_score", data=mean_hs)
+        f.create_dataset("health_score_sd", data=stacked.std(axis=1, ddof=1).astype(np.float32))
+        f.create_dataset("health_score_seeds", data=stacked.astype(np.float32))
+        f.attrs["seeds"] = np.asarray(seeds, dtype=np.int32)
+        f.attrs["include_actions_in_state"] = str(models[0][1].include_actions_in_state)
+
+    # round-trip through the standard loader the RL code uses
+    try:
+        back = ShardProcessor.load_dynamic_deephit_predictions_from_h5(path, keys_to_exclude=[])
+        ok = "health_score" in back and np.allclose(np.asarray(back["health_score"]), mean_hs)
+        print(f"{split}: standard loader returns keys {sorted(back)}; health_score intact: {ok}")
+    except Exception as e:  # report rather than fail: the file itself is complete
+        print(f"{split}: standard loader could not read the ensemble file ({type(e).__name__}: {e}); "
+              f"use load_ensemble_health_score instead")
+
+    info_path = os.path.join(out_dir, "ensemble_info.json")
+    info = json.load(open(info_path)) if os.path.exists(info_path) else {}
+    info.update({
+        "seeds": seeds,
+        "run_dirs": {str(seed): cm.experiment_dir for _, cm, _, seed in models},
+        "include_actions_in_state": str(models[0][1].include_actions_in_state),
+        "splits_written": sorted(set(info.get("splits_written", [])) | {split}),
+        "created": datetime.now().isoformat(timespec="seconds"),
+    })
+    with open(info_path, "w") as f:
+        json.dump(info, f, indent=2)
+    print(f"{split}: ensemble of seeds {seeds} saved to {path}")
+    return path
+
+
+def load_ensemble_health_score(path):
+    """Read an ensemble file written by build_ensemble_health_score (all keys, plus attributes)."""
+    out = {}
+    with h5py.File(path, "r") as f:
+        for key in f.keys():
+            out[key] = f[key][()]
+        out.update({f"attr_{k}": v for k, v in f.attrs.items()})
+    out["feature_names"] = [n.decode("utf-8") for n in out["feature_names"]]
+    return out
 
 
 # ----------------------------------------------------------------------------

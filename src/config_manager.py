@@ -181,13 +181,22 @@ class ConfigManager:
                                     f"best_results_{self.reward_type}.json"
                                 )
                             elif self.reward_cohort.lower() == 'picu':
-                                self.best_results_path = os.path.join(
-                                    self.paths["rl_models_dir"], self.model_type,
-                                    f"split_{self.split_num}", self.cohort.lower(), self.actions,
-                                    f"{self.unit.lower()}_patients_health_score_from_picu_dataset",
-                                    "with_actions",
-                                    f"best_results_{self.reward_type}.json"
-                                )
+                                if self.model_type == "cql_with_logprobs_floor_bound":
+                                    self.best_results_path = os.path.join(
+                                        self.paths["rl_models_dir"], "cql_with_logprobs",
+                                        f"split_{self.split_num}", self.cohort.lower(), self.actions,
+                                        f"{self.unit.lower()}_patients_health_score_from_picu_dataset",
+                                        "with_actions",
+                                        f"best_results_{self.reward_type}.json"
+                                    )
+                                else:
+                                    self.best_results_path = os.path.join(
+                                        self.paths["rl_models_dir"], self.model_type,
+                                        f"split_{self.split_num}", self.cohort.lower(), self.actions,
+                                        f"{self.unit.lower()}_patients_health_score_from_picu_dataset",
+                                        "with_actions",
+                                        f"best_results_{self.reward_type}.json"
+                                    )
 
         elif self.mode == "analyse_features":
             self.set_experiment_name()

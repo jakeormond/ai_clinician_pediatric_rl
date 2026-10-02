@@ -70,6 +70,10 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --cql_alpha 0.022 \
     --vaso_mean_floor -2.939 \
     --vaso_mean_floor_scale 0.05 \
+    --vaso_gate_logit_bound 4.0 \
+    --vaso_gate_logit_bound_scale 0.05 \
+    --fluid_mean_reg_scale 0.05 \
+    --vaso_mean_reg_scale 0.05 \
     --seeds 0 1 2 3 4 \
     --n_epochs 400 \
     --action_mode continuous_only \

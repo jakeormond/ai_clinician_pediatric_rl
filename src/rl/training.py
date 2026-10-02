@@ -37,6 +37,7 @@ MODEL_MODULES = {
     "td3_bc": "src.rl.models.td3_bc",
     "conservative_q_learning": "src.rl.models.conservative_q_learning",
     "cql_with_logprobs": "src.rl.models.cql_with_logprobs",
+    "cql_with_logprobs_floor_bound": "src.rl.models.cql_with_logprobs_floor_bound",
     "cvp": "src.rl.models.cvp",
     "iql": "src.rl.models.iql",
     "iql_with_sarsa": "src.rl.models.iql_with_sarsa",
@@ -577,6 +578,18 @@ def single_split_training(config_manager):
 
             hyperparams['vaso_mean_floor_scale'] = config_manager.vaso_mean_floor_scale  # override vaso_mean_floor_scale with fixed value
             config_manager.training_config['vaso_mean_floor_scale'] = config_manager.vaso_mean_floor_scale  # also set in training_config for logging
+
+            hyperparams['vaso_gate_logit_bound'] = config_manager.vaso_gate_logit_bound  # override vaso_gate_logit_bound with fixed value
+            config_manager.training_config['vaso_gate_logit_bound'] = config_manager.vaso_gate_logit_bound  # also set in training_config for logging
+
+            hyperparams['vaso_gate_logit_bound_scale'] = config_manager.vaso_gate_logit_bound_scale  # override vaso_gate_logit_bound_scale with fixed value
+            config_manager.training_config['vaso_gate_logit_bound_scale'] = config_manager.vaso_gate_logit_bound_scale  # also set in training_config for logging           
+            
+            hyperparams['fluid_mean_reg_scale'] = config_manager.fluid_mean_reg_scale  # override fluid_mean_reg_scale with fixed value
+            config_manager.training_config['fluid_mean_reg_scale'] = config_manager.fluid_mean_reg_scale  # also set in training_config for logging
+
+            hyperparams['vaso_mean_reg_scale'] = config_manager.vaso_mean_reg_scale  # override vaso_mean_reg_scale with fixed value
+            config_manager.training_config['vaso_mean_reg_scale'] = config_manager.vaso_mean_reg_scale  # also set in training_config for logging
 
             train_processor, val_processor, test_processor = create_processor_from_shards(
                             config_manager, 

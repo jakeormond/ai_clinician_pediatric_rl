@@ -56,7 +56,8 @@ def parse_arguments():
                         default='any_percent_bc', 
                         choices=[
                             'any_percent_bc', 'td3_bc', 'basic_q', 'reward_analysis',
-                            'conservative_q_learning', 'cql_with_logprobs', 'cvp', 'iql', 
+                            'conservative_q_learning', 'cql_with_logprobs', 'cql_with_logprobs_floor_bound', 
+                            'cvp', 'iql', 
                             'iql_with_sarsa', 'bc_with_logprobs', 'fqe'
                             ], 
                         help='Model type to train (default: any_percent_bc)') 
@@ -116,12 +117,29 @@ def parse_arguments():
     parser.add_argument('--cql_alpha', type=float, default = None,
                         help='CQL alpha parameter (default: None)')
 
+    
+    
     parser.add_argument('--vaso_mean_floor', type=float, default = None,
                         help='Vaso mean floor parameter (default: None)')
 
     parser.add_argument('--vaso_mean_floor_scale', type=float, default = None,
                         help='Vaso mean floor scale parameter (default: None)')
 
+    parser.add_argument('--vaso_gate_logit_bound', type=float, default = None,
+                            help='Vaso gate logit bound parameter (default: None)')
+    
+    parser.add_argument('--vaso_gate_logit_bound_scale', type=float, default = None,
+                            help='Vaso gate logit bound scale parameter (default: None)')
+
+    parser.add_argument('--fluid_mean_reg_scale', type=float, default = None,
+                                help='fluid mean regularization scale parameter (default: None)')
+        
+    parser.add_argument('--vaso_mean_reg_scale', type=float, default = None,
+                                help='Vaso mean regularization scale parameter (default: None)')
+
+    
+    
+    
     parser.add_argument('--cohort', type=str, default=None,
         choices=['all', 'sepsis_strict', 'sepsis_broad', 'sepsis',
             'ards_strict', 'ards_broad', 'aki_strict', 'aki_broad'],

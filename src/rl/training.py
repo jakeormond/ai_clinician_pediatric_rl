@@ -1120,7 +1120,7 @@ def train_with_hyperparameters(
         torch.save(checkpoint, model_path)
     
     elif config_manager.model_type in ['td3_bc', 'conservative_q_learning', 
-                                       'cql_with_logprobs']:
+                                       'cql_with_logprobs', 'cql_with_logprobs_floor_bound']:
         checkpoint = {
             'total_it': trainer.total_it,
             'actor_state_dict': trainer.actor.state_dict(),

@@ -68,8 +68,6 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --split_num 0 \
     --search_variant best_hyperparameters_fixed_cql_alpha \
     --cql_alpha 0.022 \
-    --vaso_mean_floor -2.939 \
-    --vaso_mean_floor_scale 0.05 \
     --seeds 0 1 2 3 4 \
     --n_epochs 400 \
     --action_mode continuous_only \

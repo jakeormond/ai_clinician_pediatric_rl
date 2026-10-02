@@ -144,7 +144,7 @@ class ShardProcessor:
                     
                     if key == "reward":
                         parent_dir = os.path.dirname(model_dir)
-                        prediction_file_path = os.path.join(parent_dir, f"{pred_split}_predictions.h5") 
+                        prediction_file_path = os.path.join(parent_dir, f"{pred_split}_predictions.h5") # this is the reward averaged across all seeds
                         logger.info(f"Loading reward model predictions from {prediction_file_path}")                       
                         self.dynamic_deephit_predictions = self.load_dynamic_deephit_predictions_from_h5(prediction_file_path, 
                             keys_to_exclude=['predictions', 'model_outputs', 'entropy', 'compressed_latents', 'carry_forward_ind', 'response_zero_ind'])

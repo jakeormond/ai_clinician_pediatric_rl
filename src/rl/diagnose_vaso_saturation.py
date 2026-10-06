@@ -27,6 +27,7 @@ Workflow:
 """
 
 import os
+import json
 
 import numpy as np
 import pandas as pd
@@ -996,3 +997,147 @@ def critic_sanity(critic_sets, processor, health_score, sarsa_key="SARSA", fixed
         agree[set_name] = {"Q_fixed_pairwise_spearman_mean": np.mean(vals),
                            "Q_fixed_pairwise_spearman_range": f"{np.min(vals):.2f}-{np.max(vals):.2f}"}
     return per_critic, pd.DataFrame(agree).T
+
+
+# =============================================================================
+# 14. Dynamic DeepHit seeds: matched processors, DDH comparison, and which DDH
+#     seed a model was trained on (Bellman residual)
+# =============================================================================
+#
+# The data processor (data_processor_for_shards.py) picks the DDH output like this:
+#   seed_mode == 'single_seed' -> the one 'unknown*'/'local*' folder in state_path/reward_path
+#   otherwise                  -> the folder whose results.json hyperparameters.seed
+#                                 == config_manager.training_config['seed']
+# Both STATES (model_outputs) and REWARDS (health score) come from that DDH output,
+# so RL models trained on different DDH seeds see different state embeddings AND
+# different health-score rewards. Embeddings from different DDH runs are different
+# coordinate systems: a model must be evaluated on the embedding it was trained on.
+
+def list_ddh_seed_folders(ddh_dir):
+    """{ddh_seed: folder path} for the seed folders inside one DDH results directory."""
+    out = {}
+    for f in sorted(os.listdir(ddh_dir)):
+        if not (f.startswith("unknown") or f.startswith("local")):
+            continue
+        rj = os.path.join(ddh_dir, f, "results.json")
+        seed = None
+        if os.path.isfile(rj):
+            with open(rj) as fh:
+                seed = json.load(fh).get("hyperparameters", {}).get("seed")
+        out[seed] = os.path.join(ddh_dir, f)
+    return out
+
+
+def load_processors_for_ddh(base_config_manager, base_hyperparams, ddh_dir, seed_mode, ddh_seed=None):
+    """
+    Processors built on a specific DDH output. Copies the base config manager,
+    points state_path/reward_path at ddh_dir, and (for multi-seed DDH dirs) sets
+    training_config['seed'] = ddh_seed so the processor picks that DDH seed folder.
+    seed_mode: 'single_seed' or the multi-seed value your five-seed runs use
+               (read it from one of their config managers: m[2].seed_mode).
+    """
+    import copy as _copy
+    from src.rl import evaluate_terminal_reward_models as _etm
+    cm = _copy.deepcopy(base_config_manager)
+    cm.data_config["state_path"] = ddh_dir
+    cm.data_config["reward_path"] = ddh_dir
+    cm.seed_mode = seed_mode
+    if ddh_seed is not None:
+        cm.training_config["seed"] = ddh_seed
+    hp = dict(base_hyperparams)
+    hp["add_reward_to_vaso_dosing"] = False
+    procs = {}
+    procs["train"], procs["val"], procs["test"] = _etm.load_data(cm, hp)
+    return procs
+
+
+def check_row_alignment(processors_by_key, split="val"):
+    """Do the processors line up row-for-row (same stays, same timesteps)? Required
+    before comparing models trained on different DDH seeds state-by-state."""
+    keys = list(processors_by_key)
+    ref = processors_by_key[keys[0]][split]
+    ref_ptr = np.asarray(ref.dynamic_deephit_predictions["index_ptr"])
+    ref_act = _np(ref.rl_dataset["actions"])
+    rows = {}
+    for k in keys:
+        p = processors_by_key[k][split]
+        ptr = np.asarray(p.dynamic_deephit_predictions["index_ptr"])
+        act = _np(p.rl_dataset["actions"])
+        rows[k] = {"n_states": len(act),
+                   "same_index_ptr_as_first": ptr.shape == ref_ptr.shape and np.array_equal(ptr, ref_ptr),
+                   "same_actions_as_first": act.shape == ref_act.shape and np.allclose(act, ref_act)}
+    return pd.DataFrame(rows).T
+
+
+def compare_ddh_seeds(processors_by_key, split="val"):
+    """
+    Across DDH seeds (same rows required): per-timestep agreement of the health score
+    and of its hourly change -- i.e. how different the REWARD is between DDH seeds.
+    Latent embeddings are not compared (not comparable across separately trained models).
+    """
+    keys = list(processors_by_key)
+    hs, dhs = {}, {}
+    for k in keys:
+        hs[k], dhs[k] = per_state_health_score(processors_by_key[k][split])
+    n = len(keys)
+    rho_hs, rho_dhs = np.eye(n), np.eye(n)
+    for i in range(n):
+        for j in range(i + 1, n):
+            rho_hs[i, j] = rho_hs[j, i] = stats.spearmanr(hs[keys[i]], hs[keys[j]])[0]
+            rho_dhs[i, j] = rho_dhs[j, i] = stats.spearmanr(dhs[keys[i]], dhs[keys[j]])[0]
+    summary = pd.DataFrame({k: {"hs_mean": hs[k].mean(), "hs_sd": hs[k].std(),
+                                "dhs_sd": dhs[k].std()} for k in keys}).T
+    return {"summary": summary,
+            "rho_health_score": pd.DataFrame(rho_hs, index=keys, columns=keys),
+            "rho_hourly_change": pd.DataFrame(rho_dhs, index=keys, columns=keys)}
+
+
+def _next_rows(processor):
+    """Index of the next state within the same trajectory (-1 at trajectory ends)."""
+    dones = np.asarray(processor.rl_dataset["dones"]).astype(bool)
+    nxt = np.arange(len(dones)) + 1
+    nxt[dones] = -1
+    nxt[nxt >= len(dones)] = -1
+    return nxt
+
+
+def bellman_residual(critic, processor, gamma, batch_size=4096):
+    """
+    SARSA-style residual using the logged data: |Q(s,a) - (r + gamma * Q(s',a'))|,
+    with a' = the clinician's next action, terminal rows using r only.
+    A critic evaluated on the states it was trained on should have a much smaller
+    residual than on another DDH seed's states -- used to identify a model's DDH seed.
+    Reward is taken from processor.rl_dataset['rewards'] (same reward settings as the
+    processor's config; compare candidates RELATIVE to each other).
+    """
+    states = _np(processor.rl_dataset["states"])
+    actions = _np(processor.rl_dataset["actions"]).astype(np.float32)
+    rewards = _np(processor.rl_dataset["rewards"]).reshape(-1)
+    nxt = _next_rows(processor)
+    q = vrs.critic_q(critic, states, actions, batch_size)
+    has_next = nxt >= 0
+    q_next = np.zeros_like(q)
+    q_next[has_next] = q[nxt[has_next]]
+    target = rewards + gamma * q_next * has_next
+    res = np.abs(q - target)
+    return {"median_abs_residual": float(np.median(res)), "mean_abs_residual": float(res.mean()),
+            "Q_sd": float(q.std())}
+
+
+def identify_ddh_seed(models, processors_by_key, split="val", gamma=None):
+    """
+    For each model, Bellman residual of its critic on each candidate DDH processor.
+    The matched DDH seed is the column with the smallest residual (relative to Q_sd).
+    Returns a table of median |residual| / Q_sd (lower = better match) and the best match.
+    """
+    rows = {}
+    for label, m in models.items():
+        hp = m[3]
+        g = gamma if gamma is not None else hp.get("discount", 0.975)
+        r = {}
+        for key, procs in processors_by_key.items():
+            br = bellman_residual(m[1], procs[split], g)
+            r[key] = br["median_abs_residual"] / max(br["Q_sd"], 1e-8)
+        r["best_match"] = min((k for k in processors_by_key), key=lambda k: r[k])
+        rows[label] = r
+    return pd.DataFrame(rows).T

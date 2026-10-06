@@ -167,25 +167,70 @@ def load_vaso_sweep_models(sweep_dir, state_dim, baseline_dir=None, verify_check
 # Per-state data helpers (health score, hourly change, severity)
 # =============================================================================
 
+def _row_keys(x, decimals=5):
+    """Hashable keys for matrix rows (rounded so float32/float64 copies compare equal)."""
+    x = np.ascontiguousarray(np.round(np.asarray(x, dtype=np.float64), decimals))
+    x[x == 0] = 0.0      # normalise -0.0 to 0.0 so byte keys match
+    return [row.tobytes() for row in x]
+
+
+def rl_row_index(processor, which="states"):
+    """
+    For each RL row, the index of the Dynamic-DeepHit row it came from, found by matching
+    rl_dataset[which] (states or next_states) to dynamic_deephit_predictions['model_outputs'].
+    Loader-agnostic: works however the loader selects rows (dropped first/last steps,
+    excluded stays, ...), as long as RL states are the model_outputs rows themselves.
+    Raises if any RL row has no match or an ambiguous one.
+    """
+    lat = processor.dynamic_deephit_predictions.get("model_outputs")
+    if lat is None:
+        raise KeyError("dynamic_deephit_predictions has no 'model_outputs' to match RL states against")
+    lat = lat.detach().cpu().numpy() if torch.is_tensor(lat) else np.asarray(lat)
+    st = processor.rl_dataset[which]
+    st = st.detach().cpu().numpy() if torch.is_tensor(st) else np.asarray(st)
+    if lat.shape[1] != st.shape[1]:
+        raise ValueError(f"model_outputs width {lat.shape[1]} != RL state width {st.shape[1]}")
+    lat_keys, st_keys = _row_keys(lat), _row_keys(st)
+    lookup = {}
+    dup = set()
+    for i, k in enumerate(lat_keys):
+        if k in lookup:
+            dup.add(k)
+        lookup[k] = i
+    idx = np.array([lookup.get(k, -1) for k in st_keys])
+    n_missing = int((idx < 0).sum())
+    n_ambiguous = int(sum(k in dup for k in st_keys))
+    if n_missing or n_ambiguous:
+        raise ValueError(f"could not align RL {which} to model_outputs: {n_missing} unmatched, "
+                         f"{n_ambiguous} ambiguous rows (are RL states transformed after loading?)")
+    return idx
+
+
 def per_state_health_score(processor):
     """
-    Health score and next-hour change, aligned 1:1 with processor.rl_dataset
-    rows (each trajectory's final timestep dropped, as in the notebooks).
-    Returns (hs, dhs) with dhs[i] = HS(t+1) - HS(t): the unclipped,
-    unscaled health component of the reward at state i.
+    Health score and next-hour change, aligned 1:1 with processor.rl_dataset rows.
+    Returns (hs, dhs): hs[i] = HS at RL state i, dhs[i] = HS(next state) - HS(state), the
+    unclipped, unscaled health component of the reward at row i.
+
+    Fast path (old loader): the RL dataset keeps every timestep except each stay's last.
+    Otherwise (e.g. a loader that drops other rows) rows are aligned by matching RL states
+    and next states to the Dynamic-DeepHit model_outputs.
     """
     hs_full = np.asarray(processor.dynamic_deephit_predictions["health_score"], dtype=np.float64)
     ptr = np.asarray(processor.dynamic_deephit_predictions["index_ptr"])
-    hs, dhs = [], []
-    for s, e in zip(ptr[:-1], ptr[1:]):
-        traj = hs_full[s:e]
-        hs.append(traj[:-1])
-        dhs.append(np.diff(traj))
-    hs, dhs = np.concatenate(hs), np.concatenate(dhs)
     n_states = processor.rl_dataset["states"].shape[0]
-    if len(hs) != n_states:
-        raise ValueError(f"health score alignment failed: {len(hs)} vs {n_states} RL states")
-    return hs, dhs
+
+    if len(hs_full) - (len(ptr) - 1) == n_states:
+        hs, dhs = [], []
+        for s, e in zip(ptr[:-1], ptr[1:]):
+            traj = hs_full[s:e]
+            hs.append(traj[:-1])
+            dhs.append(np.diff(traj))
+        return np.concatenate(hs), np.concatenate(dhs)
+
+    idx = rl_row_index(processor, "states")
+    nidx = rl_row_index(processor, "next_states")
+    return hs_full[idx], hs_full[nidx] - hs_full[idx]
 
 
 def severity_edges_from_train(train_hs, n_bins=10):
@@ -866,86 +911,3 @@ def plot_reward_gap_by_severity(gap_df, save_path=None):
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
     return fig
-
-
-# =============================================================================
-# Numerical summaries for sections 4-6 (tables mirroring the figures)
-# =============================================================================
-
-def behaviour_table(results, clin_ref):
-    """Section 4 numbers: seed-mean behaviour per c, plus a clinician row.
-    PPV = fraction of the policy's vaso recommendations made at states where
-    the clinician also gave vaso (derived from the stored rates)."""
-    prev = clin_ref["vaso_fire_rate"]
-    rows = []
-    for c in sorted(results):
-        m = lambda k: np.nanmean([r.get(k, np.nan) for r in results[c]])
-        fr, fr_v = m("vaso_fire_rate"), m("vaso_fire_rate_at_clin_vaso")
-        rows.append({"coef": c, "n_seeds": len(results[c]),
-                     "fire_%": 100 * fr, "fire_%_clin_vaso": 100 * fr_v,
-                     "fire_%_clin_zero": 100 * m("vaso_fire_rate_at_clin_zero"),
-                     "PPV_%": 100 * fr_v * prev / fr if fr > 0 else np.nan,
-                     "gate_p_mean": m("vaso_gate_p_mean"), "gate_auroc": m("vaso_gate_auroc"),
-                     "dose_when_fired": m("vaso_dose_mean_when_fired"),
-                     "magnitude_mean": m("vaso_magnitude_mean"),
-                     "dose_spearman_cofired": m("vaso_dose_spearman_cofired"),
-                     "fluid_fire_%": 100 * m("fluid_fire_rate"), "fluid_dose_mean": m("fluid_dose_mean"),
-                     "sarsa_adv_norm": m("sarsa_adv_norm"),
-                     "occupancy_%": 100 * m("occupancy_support_frac")})
-    df = pd.DataFrame(rows).set_index("coef")
-    clin = pd.DataFrame([{"fire_%": 100 * prev, "fire_%_clin_vaso": 100.0, "fire_%_clin_zero": 0.0,
-                          "PPV_%": 100.0, "dose_when_fired": clin_ref["vaso_dose_mean_when_fired"],
-                          "fluid_fire_%": 100 * clin_ref["fluid_fire_rate"],
-                          "fluid_dose_mean": clin_ref["fluid_dose_mean"]}], index=["clinician"])
-    return pd.concat([clin, df])
-
-
-def critic_table(results, sarsa_ref=None):
-    """Section 5 numbers: dQ per unit dose, fraction of states favouring the
-    clinician's vaso, and the local slope d(dQ)/dc between consecutive c
-    (~1 expected if the gap carries only the immediate bonus)."""
-    coefs, dq, *_ = _agg(results, "dq_vaso_per_unit_dose")
-    _, frac, *_ = _agg(results, "dq_vaso_frac_positive")
-    _, dq_raw, *_ = _agg(results, "dq_vaso_mean")
-    slope = np.r_[np.nan, np.diff(dq) / np.diff(coefs)]
-    df = pd.DataFrame({"dq_per_unit_dose": dq, "dq_at_clin_dose": dq_raw,
-                       "frac_states_dq>0_%": 100 * frac, "slope_vs_prev_c": slope},
-                      index=pd.Index(coefs, name="coef"))
-    if sarsa_ref:
-        for k, s in enumerate(sarsa_ref):
-            df.loc[f"SARSA_{k + 1}"] = [s["dq_vaso_per_unit_dose"], s["dq_vaso_mean"],
-                                        100 * s["dq_vaso_frac_positive"], np.nan]
-    return df
-
-
-def q_curve_table(results, sarsa_ref=None):
-    """Mean Q(v) - Q(0) at clinician-vaso states (HS points); rows c, cols dose.
-    argmax column = critic's preferred dose on average."""
-    grid = next(iter(results.values()))[0]["vaso_grid"]
-    rows = {c: np.nanmean([r["q_vaso_curve_mean"] for r in results[c]], axis=0) for c in sorted(results)}
-    if sarsa_ref:
-        rows["SARSA_mean"] = np.mean([s["q_vaso_curve_mean"] for s in sarsa_ref], axis=0)
-    df = pd.DataFrame(rows, index=[f"v={v:.1f}" for v in grid]).T
-    df["argmax_dose"] = grid[np.argmax(df[[f"v={v:.1f}" for v in grid]].values, axis=1)]
-    return df
-
-
-def severity_tables(results, clin_ref, sev_edges, sarsa_ref=None, sarsa_sev=None):
-    """Section 6 numbers: (a) vaso fire rate (%) by severity decile, clinician
-    row first; (b) critic dQ (clinician vaso vs none, HS pts) by decile."""
-    n_bins = len(sev_edges) - 1
-    cols = [f"D{i + 1}" for i in range(n_bins)]
-    fire = {"clinician": 100 * clin_ref["vaso_fire_rate_by_severity"]}
-    for c in sorted(results):
-        fire[c] = 100 * np.nanmean([r["vaso_fire_rate_by_severity"] for r in results[c]], axis=0)
-    fire_df = pd.DataFrame(fire, index=cols).T
-
-    def by_bin(dq, sev):
-        return np.array([dq[sev == b].mean() if (sev == b).sum() >= 5 else np.nan for b in range(n_bins)])
-
-    pen = {c: np.nanmean([by_bin(r["dq_vaso_states"], r["dq_vaso_severity"]) for r in results[c]], axis=0)
-           for c in sorted(results)}
-    if sarsa_ref and sarsa_sev is not None:
-        pen["SARSA_mean"] = np.nanmean([by_bin(s["dq_vaso_states"], sarsa_sev) for s in sarsa_ref], axis=0)
-    pen_df = pd.DataFrame(pen, index=cols).T
-    return fire_df, pen_df

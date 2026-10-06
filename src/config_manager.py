@@ -288,6 +288,37 @@ class ConfigManager:
         else:
             self._data_config['cohort'] = 'all'
 
+
+    def reset_unit(self,unit):
+        """Reset the unit in the data config."""
+        self.unit = unit
+        if hasattr(self, 'unit') and self.unit is not None:
+            self._data_config['unit'] = self.unit.lower()
+            self.data_config['unit_stay_ids_path'] = os.path.join(
+                self.get_data_dir, 'cohorts',
+                'icu_units',
+                f"{self._data_config['unit'].lower()}_stay_ids.csv"
+            )
+        else:
+            self._data_config['unit'] = None
+            self.data_config['unit_stay_ids_path'] = None
+
+
+    def reset_age(self):
+        """Reset the age in the data config."""
+        if self.filter_old:  
+            self.data_config['age_dir'] = os.path.join(
+                self.get_data_dir,
+                'cohorts',
+                'age'
+            )
+            self.data_config['age_stay_ids_path'] = os.path.join(
+                self.data_config['age_dir'],
+                'pediatric_stay_ids.csv'
+            )
+        else:
+            self._data_config['age'] = None
+
                 
     def get_config_path(self, config_type, custom_path=None):
         """Get config file path with variant support."""
@@ -715,5 +746,7 @@ def load_configuration(config_manager_path):
         config_manager.config_dir = Path(config_manager.paths['config_dir'])
     config_manager.set_data()
     config_manager.reset_cohort(config_manager.cohort)
+    config_manager.reset_unit(config_manager.unit)
+    config_manager.reset_age()
 
     return config_manager

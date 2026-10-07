@@ -497,6 +497,20 @@ class ShardProcessor:
             median_reward = np.median(self.mc_reward)
             return median_reward
 
+        elif self.reward_type == 'terminal_bellman':
+            # sparse terminal reward, propagated by Bellman backups (uses the algorithm's gamma, not terminal_discount)
+            scale = hyperparams.get('terminal_reward_scale', 1.0)
+            survival_reward = hyperparams.get('terminal_reward_survival', scale)
+            death_reward = hyperparams.get('terminal_reward_death', -scale)
+            step_reward = hyperparams.get('terminal_step_reward', 0.0)
+
+            bellman_reward = self.compute_bellman_terminal_rewards(
+                index_ptr, mortality, survival_reward, death_reward, step_reward)
+            # stored here so the (optional) n-step block in create_rl_dataset works unchanged
+            self.terminal_reward = bellman_reward.astype(np.float32)
+            median_reward = np.median(self.terminal_reward)
+            return median_reward
+
         else: 
             raise ValueError(f"Invalid reward type: {self.reward_type}. Supported reward types are: 'health_score' and 'time_to_event'.")
 
@@ -551,6 +565,51 @@ class ShardProcessor:
             mc_reward[start:end] = discounts * signed_outcome[i]
 
         return mc_reward   
+
+
+    def compute_bellman_terminal_rewards(self, index_ptr, mortality, survival_reward, death_reward, step_reward=0.0):
+        """
+        Sparse terminal reward for standard Bellman (TD) training: zero (or a constant
+        step_reward) on every transition, with the outcome reward on the final transition
+        s_{T-2} -> s_{T-1} of each trajectory. The algorithm's own gamma and the existing
+        `dones` flags do the backpropagation; no discounting is applied here.
+
+        Convention: reward[t] is the reward for transition t -> t+1 (state-aligned, same as
+        the health_score reward), so index with [state_ind], NOT [state_ind + 1].
+
+        Parameters
+        ----------
+        index_ptr : array (n_trajectories + 1,)  CSR-style trajectory pointers.
+        mortality : array (n_trajectories,)      1 = death, 0 = discharge.
+        survival_reward : float                  Terminal reward for discharge alive.
+        death_reward : float                     Terminal reward for death (pass the sign you want).
+        step_reward : float                      Constant reward on non-terminal transitions
+                                                 (e.g. small negative LOS penalty); default 0.
+
+        Returns
+        -------
+        reward : array (n_timesteps,)  Flat, state-aligned. Final timestep of each
+                 trajectory is 0 (never used as a state).
+        """
+        index_ptr = np.asarray(index_ptr)
+        mortality = np.asarray(mortality)
+        n_timesteps = int(index_ptr[-1])
+
+        reward = np.full(n_timesteps, step_reward, dtype=np.float64)
+
+        starts = index_ptr[:-1]
+        ends = index_ptr[1:]  # one-past-the-end
+
+        # final timestep of each trajectory is never a state (excluded by state_ind)
+        reward[ends - 1] = 0.0
+
+        # length-1 trajectories have no transitions; guard so end-2 doesn't hit the previous trajectory
+        valid = (ends - starts) >= 2
+        last_transition = ends[valid] - 2
+        reward[last_transition] = np.where(mortality[valid] == 1, death_reward, survival_reward)
+
+        return reward
+
 
 
     def create_rl_dataset(
@@ -628,8 +687,12 @@ class ShardProcessor:
         elif self.reward_type == 'terminal':
             print("Using terminal reward type")
             self.rl_dataset['rewards'] = torch.tensor(self.mc_reward[state_ind+1], dtype=torch.float32) # we use +1 because we want last state to be full reward
+        elif self.reward_type == 'terminal_bellman':
+            print("Using terminal_bellman reward type")
+            self.rl_dataset['rewards'] = torch.tensor(self.terminal_reward[state_ind], dtype=torch.float32)  # state-aligned: no +1
+        
         else:
-            raise ValueError(f"Invalid reward type: {self.reward_type}. Supported reward types are: 'health_score' and 'terminal'.")
+            raise ValueError(f"Invalid reward type: {self.reward_type}. Supported reward types are: 'health_score', 'terminal' and 'terminal_bellman'.")
       
         # dones = torch.tensor(np.zeros_like(self.dynamic_deephit_predictions["reward"]), dtype=torch.float32)
         dones = torch.tensor(np.zeros_like(model_outputs[:, 0]), dtype=torch.float32)

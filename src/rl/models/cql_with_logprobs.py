@@ -782,7 +782,9 @@ class CQL:
 		########################## CRITIC TRAINING ##########################
 		# compute the target Q value
 		if self.reward_type != 'terminal': # using monte carlo returns  
-			treat_survival_as_truncated = True # i.e. survival is not terminal. 
+			# health_score: survival treated as truncated (bootstrap past discharge)
+			# terminal_bellman: death AND discharge are true terminals; outcome reward sits on the final transition
+			treat_survival_as_truncated = (self.reward_type != 'terminal_bellman')
 			if treat_survival_as_truncated:
 				# make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
 				done = done * mortality		
@@ -1258,7 +1260,9 @@ class CQL:
 
 		# compute the target Q value
 		if self.reward_type != 'terminal': # using monte carlo returns
-			treat_survival_as_truncated = True
+			# health_score: survival treated as truncated (bootstrap past discharge)
+			# terminal_bellman: death AND discharge are true terminals; outcome reward sits on the final transition
+			treat_survival_as_truncated = (self.reward_type != 'terminal_bellman')
 			if treat_survival_as_truncated:
 					# make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
 				done = done * mortality			

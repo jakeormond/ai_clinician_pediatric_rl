@@ -23,6 +23,8 @@ class ConfigManager:
 
         if args.seeds is None or len(args.seeds) == 1:
             self.seed_mode = "single_seed"
+            if len(args.seeds) == 1:
+                self.seed = args.seeds[0]
         else:
             self.seed_mode = 'five_seeds'
 
@@ -469,11 +471,14 @@ class ConfigManager:
                 }
 
                 for key, path in state_and_reward_model_dirs.items():
+                    # no longer using single seed
                     # check if we're single seed or 5 seeds
-                    if self.seeds is not None and len(self.seeds) > 1:
-                        path = os.path.join(path, "five_seeds")
-                    else:
-                        path = os.path.join(path, "single_seed")
+                    # if self.seeds is not None and len(self.seeds) > 1:
+                    #     path = os.path.join(path, "five_seeds")
+                    # else:
+                    #     path = os.path.join(path, "single_seed")
+
+                    path = os.path.join(path, "five_seeds")
 
                     # check if there is a folder inside final_model_dir that begins with "choc"
                     inner_folders = [f for f in os.listdir(path) if os.path.isdir(os.path.join(path, f))]
@@ -610,6 +615,9 @@ class ConfigManager:
             for k in numeric_int_keys:
                 if k in self.training_config and isinstance(self.training_config[k], str):
                     self.training_config[k] = int(float(self.training_config[k]))
+
+            if self.seed is not None:
+                self.training_config['seed'] = self.seed
 
         else:   
             training_config_path = self.get_config_path("training")

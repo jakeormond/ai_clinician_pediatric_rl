@@ -14,7 +14,7 @@ from .models.basic_q import Critic
 from .models.td3_bc import Actor as TD3Actor
 from .models.conservative_q_learning import Actor as CQLActor
 from .models.conservative_q_learning import Critic as CQLCritic
-from .models.cql_with_logprobs import Actor as CQL_with_logprobs_Actor
+from .models.cql_with_logprobs_v8 import Actor as CQL_with_logprobs_Actor
 from .models.iql import Actor as IQLActor
 from .models.iql import Critic as IQLCritic
 from .models.iql import ValueNetwork as IQLValue

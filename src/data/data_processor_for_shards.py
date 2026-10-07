@@ -124,23 +124,33 @@ class ShardProcessor:
                     # find the folders inside final_model_dir that begin "unknown" or "local"
                     seed_folders = [folder for folder in os.listdir(model_dir) if folder.startswith("unknown") or folder.startswith("local")]
                     
-                    if config_manager.seed_mode == 'single_seed':
-                        if len(seed_folders) == 0:
-                            raise ValueError(f"No seed folders found in {model_dir}. Expected at least one folder starting with 'unknown' or 'local'.")
-                        elif len(seed_folders) > 1:
-                            raise ValueError(f"Multiple seed folders found in {model_dir}. Expected only one. Found: {seed_folders}")
-                        else:
-                            model_dir = os.path.join(model_dir, seed_folders[0])
-                    else:              
-                        for seed_folder in seed_folders:
-                            # load results.json and check if the seed matches the config_manager.data_config['reward_seed']
-                            results_file = os.path.join(model_dir, seed_folder, "results.json")
-                            with open(results_file, 'r') as f:
-                                results = json.load(f)
-                                results_seed = results['hyperparameters']['seed']
-                                if results_seed == seed:
-                                    model_dir = os.path.join(model_dir, seed_folder)
-                                    break                
+                    # if config_manager.seed_mode == 'single_seed':
+                    #     if len(seed_folders) == 0:
+                    #         raise ValueError(f"No seed folders found in {model_dir}. Expected at least one folder starting with 'unknown' or 'local'.")
+                    #     elif len(seed_folders) > 1:
+                    #         raise ValueError(f"Multiple seed folders found in {model_dir}. Expected only one. Found: {seed_folders}")
+                    #     else:
+                    #         model_dir = os.path.join(model_dir, seed_folders[0])
+                    # else:              
+                    #     for seed_folder in seed_folders:
+                    #         # load results.json and check if the seed matches the config_manager.data_config['reward_seed']
+                    #         results_file = os.path.join(model_dir, seed_folder, "results.json")
+                    #         with open(results_file, 'r') as f:
+                    #             results = json.load(f)
+                    #             results_seed = results['hyperparameters']['seed']
+                    #             if results_seed == seed:
+                    #                 model_dir = os.path.join(model_dir, seed_folder)
+                                    # break       
+
+                    for seed_folder in seed_folders:
+                        # load results.json and check if the seed matches the config_manager.data_config['reward_seed']
+                        results_file = os.path.join(model_dir, seed_folder, "results.json")
+                        with open(results_file, 'r') as f:
+                            results = json.load(f)
+                            results_seed = results['hyperparameters']['seed']
+                            if results_seed == seed:
+                                model_dir = os.path.join(model_dir, seed_folder)
+                                break               
                     
                     if key == "reward":
                         parent_dir = os.path.dirname(model_dir)
@@ -191,6 +201,10 @@ class ShardProcessor:
                 if config_manager.filter_old == 'True':
                     logger.info(f"Filtering dynamic deephit dataset to only include age cohort - under 19s")
                     self.filter_age_cohort(config_manager)
+
+                # check that first dimension of dynamic_deephit_predictions['health_score'] matches shape of dynamic_deephit_dataset['trajectories'], throw error if not
+                if self.dynamic_deephit_predictions['health_score'].shape[0] != self.dynamic_deephit_dataset['trajectories'].shape[0]:
+                    raise ValueError(f"Shape mismatch between dynamic_deephit_predictions['health_score'] and dynamic_deephit_dataset['trajectories']: {self.dynamic_deephit_predictions['health_score'].shape[0]} vs {self.dynamic_deephit_dataset['trajectories'].shape[0]}. Please check that the predictions and dataset are aligned correctly.")
 
                 return
           

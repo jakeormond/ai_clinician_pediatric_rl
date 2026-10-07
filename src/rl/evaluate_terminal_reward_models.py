@@ -14,8 +14,8 @@ import numpy as np
 from ..config_manager import ConfigManager   
 from .models.basic_q import Critic
 from .models.td3_bc import Actor as TD3Actor
-from .models.cql_with_logprobs import Actor as CQLActor
-from .models.cql_with_logprobs import Critic as CQLCritic
+from .models.cql_with_logprobs_v8 import Actor as CQLActor
+from .models.cql_with_logprobs_v8 import Critic as CQLCritic
 from .models.iql import Actor as IQLActor
 from .models.iql import Critic as IQLCritic
 from .models.iql import ValueNetwork as IQLValue

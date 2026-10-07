@@ -294,7 +294,7 @@ def _require(record: RunRecord, key):
 
 
 def _load_cql(record: RunRecord, state_dim: int, device) -> LoadedModel:
-    from src.rl.models.cql_with_logprobs import Actor as CQLActor, Critic as CQLCritic
+    from rl.models.cql_with_logprobs_v8 import Actor as CQLActor, Critic as CQLCritic
     ckpt = _read_checkpoint(record, device)
     actor = CQLActor(state_dim=state_dim, hidden_dim=_require(record, "actor_hidden_dim")).to(device)
     critic = CQLCritic(state_dim=state_dim, action_dim=2, hidden_dim=_require(record, "critic_hidden_dim")).to(device)

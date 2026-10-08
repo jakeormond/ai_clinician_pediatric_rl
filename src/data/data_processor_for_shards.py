@@ -508,7 +508,7 @@ class ShardProcessor:
                 index_ptr, mortality, survival_reward, death_reward, step_reward)
             # stored here so the (optional) n-step block in create_rl_dataset works unchanged
             self.terminal_reward = bellman_reward.astype(np.float32)
-            median_reward = np.median(self.terminal_reward)
+            median_reward = 0.0
             return median_reward
 
         else: 

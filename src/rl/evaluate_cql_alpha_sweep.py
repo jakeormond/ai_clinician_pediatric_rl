@@ -1,485 +1,423 @@
-import argparse
-import json
-import os
-import pickle
-from pathlib import Path
-import matplotlib.pyplot as plt
-import pandas as pd
-import h5py as h5
-import seaborn as sns
-import time
+"""
+src/rl/evaluate_cql_alpha_sweep.py
 
+CQL alpha sweep analysis, run on the VAL split only (alpha selection is a modeling decision;
+the test set stays reserved for the final 5-seed evaluation).
+
+Loading is NOT done here. Runs, models and processors come from src.rl.analysis:
+    runs.py    make_study(...)           -> Study {alpha: {seed: RunRecord}}
+    models.py  load_study_models(study)  -> {(alpha,): {seed: LoadedModel}}
+    data.py    DataStore                 -> processors built from each run's own data identity
+This file holds only what is specific to the alpha sweep.
+
+For every (alpha, seed) it computes:
+  1. Own-critic advantage: Q_own(actor_action) - Q_own(clinician_action)
+     -- an exploitation / red-flag check, not positive evidence on its own.
+  2. SARSA-critic advantage: Q_sarsa(actor_action) - Q_sarsa(clinician_action)
+     -- the primary evidence: an independent, unregularised critic corroborating (or not)
+     that the actor found a real improvement.
+  3. Occupancy support of the actor's ACTUAL chosen actions: the fraction of states whose
+     (severity, fluid, vaso) combination was well supported (count >= min_count) in that
+     seed's training data.
+
+Seed matching. Each seed has its own Dynamic-DeepHit state embedding, so a critic can only
+judge actions on states from its own embedding. CQL seed k is therefore judged by the SARSA
+critic of seed k, on seed k's val states (checked against the run records, raises on mismatch).
+The spread across seeds at each alpha is the spread across these 5 matched (CQL, SARSA) pairs.
+
+Results are a tidy DataFrame, one row per (alpha, seed); summarize_by_alpha() aggregates it.
+
+Typical use (notebook):
+    store = D.DataStore(keep=("train", "val"))
+    df, fig = eval_cql.run_alpha_sweep_analysis(cql_models, sarsa_models, store)
+    eval_cql.summarize_by_alpha(df)
+    eval_cql.plot_combined_alpha_sweep(df, normalized=True, log_scale=True)
+"""
+
+from __future__ import annotations
+
+import os
+import time
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import torch
 from kneed import KneeLocator
 
-import torch
-import numpy as np
-from ..config_manager import ConfigManager   
-from .models.basic_q import Critic
-from .models.td3_bc import Actor as TD3Actor
-from .models.cql_with_logprobs_v8 import Actor as CQLActor
-from .models.cql_with_logprobs_v8 import Critic as CQLCritic
-from .models.iql import Actor as IQLActor
-from .models.iql import Critic as IQLCritic
-from .models.iql import ValueNetwork as IQLValue
-from .training import create_processor_from_shards
-from .replay_buffer import RLDataset
+from src.rl.analysis import data as D
+from src.rl.evaluate_terminal_reward_models import build_joint_state_action_occupancy_counts, _bin_index
 
-# from .evaluate_terminal_reward_models import generate_model_outputs
-from src.rl.evaluate_terminal_reward_models import generate_model_outputs, \
-    build_joint_state_action_occupancy_counts, _bin_index, action_sensitivity_sweep
-
-
-from torch.utils.data import DataLoader, TensorDataset
-from scipy import stats
-from sklearn.metrics import roc_auc_score
-
-from ..setup_environment import load_paths
-
-"""
-Stage 2 CQL alpha sweep analysis, run on the VAL set only (alpha selection
-is a modeling decision — test set stays reserved for the final Stage 3
-5-seed evaluation).
- 
-For each alpha's model, computes:
-  1. Own-critic advantage: Q_own(actor_action) - Q_own(clinician_action)
-     -- an exploitation/red-flag check, not positive evidence on its own.
-  2. SARSA-critic advantage, evaluated against ALL 5 SARSA seeds separately:
-     Q_sarsa_i(actor_action) - Q_sarsa_i(clinician_action) for i in 1..5
-     -- the primary evidence: independent, unregularized, never-adversarial
-     critics corroborating (or not) that the actor found real improvement.
-     Reported as mean + spread across the 5 SARSA seeds per alpha, so you
-     can see whether an apparent improvement is robust to which SARSA seed
-     judges it.
-  3. Occupancy support of the actor's ACTUAL chosen actions (not a sweep
-     grid) — what fraction of states get a recommendation whose (severity,
-     fluid, vaso) combination was well-supported in training data.
- 
-Expects, already in your session:
-    generate_model_outputs                          (your existing function)
-    build_joint_state_action_occupancy_counts, _bin_index   (occupancy module)
-    processors['val']                                 (VAL processor — see note above)
-    sarsa_models  : list of 5 loaded SARSA critics (one per seed), e.g.
-                    [(critic, config, hyperparams), ...] or bare critics —
-                    handled either way below
-    training_actions, training_health_score           (for the occupancy histogram)
-"""
-
-
-ALPHA_COLOR = "#2471a3"
 
 OWN_COLOR = "#c0392b"
 SARSA_COLOR = "#2471a3"
 OCC_COLOR = "#229954"
 KNEE_COLOR = "#7d3c98"
 
+# columns of the per-(alpha, seed) results table that summarize_by_alpha aggregates
+METRICS = ("own_adv", "own_adv_norm", "sarsa_adv", "sarsa_adv_norm", "occupancy_frac")
 
-def get_model_dirs(base_dir):
-    model_dirs = []
-    # find directories in base_dir that begin with choc
-    choc_dirs = [d for d in os.listdir(base_dir) if d.startswith("choc")]
 
-    if choc_dirs == []:
-        print(f"No choc directories found in {base_dir}")
-        # look for directories that begin with unknown or local
-        sub_dirs = [d for d in os.listdir(base_dir) if d.startswith("unknown") or d.startswith("local")]
-        for sub_dir in sub_dirs:
-            model_dirs.append(os.path.join(base_dir, sub_dir))
-            print(f"Found model directory: {os.path.join(base_dir, sub_dir)}")
-    else:
-        for choc_dir in choc_dirs:
-            # find directories that begin with unknown or local
-            sub_dirs = [d for d in os.listdir(os.path.join(base_dir, choc_dir)) if d.startswith("unknown") or d.startswith("local")]
-            for sub_dir in sub_dirs:
-                model_dirs.append(os.path.join(base_dir, choc_dir, sub_dir))
-                print(f"Found model directory: {os.path.join(base_dir, choc_dir, sub_dir)}")
-    return model_dirs      
+# =============================================================================
+# Pairing CQL runs with their SARSA judges
+# =============================================================================
 
- 
-def get_actor_actions(model_entry, processor, batch_size=1024, device="cuda" if torch.cuda.is_available() else "cpu",
-                       stochastic=False):
+def _single_group(models: Dict) -> Dict:
+    """{(): {seed: model}} (a Study with no group_by) -> {seed: model}; a plain {seed: model} passes through."""
+    return models[()] if () in models else models
+
+
+def _models_by_alpha(cql_models: Dict) -> Dict[float, Dict[int, Any]]:
+    """{alpha: {seed: LoadedModel}}, with alpha read from each run's own cql_alpha."""
+    out: Dict[float, Dict[int, Any]] = {}
+    for key, seeds in cql_models.items():
+        alphas = {m.record.get("cql_alpha") for m in seeds.values()}
+        if len(alphas) != 1 or None in alphas:
+            raise ValueError(f"group {key}: expected one cql_alpha across seeds, found {alphas}. "
+                             f"Build the study with group_by=('cql_alpha',).")
+        alpha = alphas.pop()
+        if alpha in out:
+            raise ValueError(f"cql_alpha={alpha} appears in more than one group")
+        out[alpha] = dict(seeds)
+    return dict(sorted(out.items()))
+
+
+def check_judge_matches(model, judge):
+    """Raise unless `judge` (a SARSA LoadedModel) has the same seed and state embedding as `model`."""
+    if model.seed != judge.seed:
+        raise ValueError(f"{model.record.label} paired with {judge.record.label}: different seeds")
+    a, b = model.record.data_identity, judge.record.data_identity
+    norm = lambda p: None if p is None else os.path.normpath(str(p))
+    if (norm(a.state_source), a.state_seed) != (norm(b.state_source), b.state_seed):
+        raise ValueError(f"{model.record.label} and {judge.record.label} were trained on different state "
+                         f"embeddings:\n  {a.short()}\n  {b.short()}")
+
+
+# =============================================================================
+# Actor actions
+# =============================================================================
+
+@torch.no_grad()
+def sample_actor_actions(model, states, batch_size=4096, sample_seed=0) -> np.ndarray:
     """
-    stochastic=False (default): uses generate_model_outputs's existing
-        deterministic actor call (unchanged behavior).
-    stochastic=True: samples actions the same way the actor was TRAINED
-        (rsample() through the actor loss, hard_gate=True), rather than the
-        deterministic mean/hard-threshold action used elsewhere. Use this to
-        check whether a negative own-critic advantage under deterministic
-        evaluation is an artifact of evaluating a stochastically-trained
-        policy at a point (its deterministic mean) training never directly
-        optimized, rather than a real training problem.
+    Stochastic actions, sampled the way the actor was TRAINED (deterministic=False,
+    hard_gate=True), rather than the deterministic mean / hard-threshold action. Use this to
+    check whether a negative own-critic advantage under deterministic evaluation is an artifact
+    of evaluating a stochastically-trained policy at a point training never optimised.
+    Re-seeds torch with sample_seed so results are reproducible.
     """
-    actor = model_entry[0] if isinstance(model_entry, (list, tuple)) else model_entry
+    model.actor.eval()
+    torch.manual_seed(sample_seed)
+    states = np.asarray(states)
+    out = []
+    for i in range(0, len(states), batch_size):
+        s = torch.as_tensor(states[i:i + batch_size], dtype=torch.float32, device=model.device)
+        actions, _, _ = model.actor(s, deterministic=False, hard_gate=True)
+        out.append(actions.detach().cpu())
+    return torch.cat(out).numpy()
 
-    if not stochastic:
-        return generate_model_outputs(
-            processor, model=actor, model_type="actor", batch_size=batch_size, device=device
-        )
 
-    # --- stochastic path: replicate generate_model_outputs' trajectory-batching
-    # loop, but sample via deterministic=False, hard_gate=True (matching how
-    # curr_actions/pi are sampled during actual actor training) ---
-    actor.eval()
-    traj_end_inds = np.where(processor.rl_dataset["dones"] == 1)[0]
-    traj_start_inds = np.concatenate(([0], traj_end_inds + 1))
-    stay_ids = processor.dynamic_deephit_dataset["stay_ids"]
+def actor_actions(model, states, stochastic=False, sample_seed=0, batch_size=4096) -> np.ndarray:
+    """(N, 2) actions of a CQL actor: deterministic (default) or stochastic samples."""
+    if stochastic:
+        return sample_actor_actions(model, states, batch_size=batch_size, sample_seed=sample_seed)
+    return model.actor_outputs(states, batch_size=batch_size)["actions"]
 
-    n_total = processor.rl_dataset["states"].shape[0]
-    action_dim = processor.rl_dataset["actions"].shape[1]
-    actions_all = torch.zeros(n_total, action_dim, dtype=torch.float32).to(device)
 
-    for stay_id in stay_ids:
-        stay_idx = np.where(stay_ids == stay_id)[0][0]
-        start, end = traj_start_inds[stay_idx], traj_start_inds[stay_idx + 1]
-        states = torch.as_tensor(processor.rl_dataset["states"][start:end], dtype=torch.float32).to(device)
+# =============================================================================
+# Advantage
+# =============================================================================
 
-        n_batches = int(np.ceil(states.shape[0] / batch_size))
-        for i in range(n_batches):
-            s, e = i * batch_size, min((i + 1) * batch_size, states.shape[0])
-            states_batch = states[s:e]
-            with torch.no_grad():
-                sampled_actions, _, _ = actor(states_batch, deterministic=False, hard_gate=True)
-            actions_all[start + s:start + e] = sampled_actions
+def _iqr(q: np.ndarray) -> float:
+    return max(float(np.quantile(q, 0.75) - np.quantile(q, 0.25)), 1e-6)
 
-    return actions_all
- 
- 
-def get_critic(model_entry):
-    """Handles (actor, critic, ...) CQL tuples and (critic, ...) SARSA tuples/bare critics."""
-    if isinstance(model_entry, (list, tuple)):
-        # CQL tuples are (actor, critic, config, hyperparams); SARSA tuples are (critic, config, hyperparams)
-        # heuristic: an nn.Module with a `forward` taking (state, action) and returning 2 outputs is a critic —
-        # simplest robust check here is just "the second element if length>=2 and first looks like an actor,
-        # else the first element". Safer to be explicit if you know your own tuple shapes:
-        return model_entry[1] if len(model_entry) >= 2 and hasattr(model_entry[0], "gate_temperature") else model_entry[0]
-    return model_entry
- 
 
-def _iqr_normalize(values, reference_q):
+def compute_model_advantage(model, judge, processor, stochastic=False, sample_seed=0, batch_size=4096) -> Dict[str, Any]:
     """
-    Normalizes `values` (e.g. an advantage array) by the interquartile range
-    of `reference_q` (that critic's own Q-values under real clinician
-    actions) -- same principle as normalize_sensitivity elsewhere in this
-    pipeline, so advantage is comparable across critics with very different
-    absolute Q scales (e.g. terminal vs. health-score).
+    Per-timestep advantage of one CQL model's actions over the clinician's, on `processor`,
+    judged by the model's own critic and by `judge` (the seed-matched SARSA LoadedModel).
+
+    Returns RAW and IQR-NORMALISED advantage for each critic:
+      own_advantage / own_advantage_normalized
+      sarsa_advantage / sarsa_advantage_normalized
+      own_q_iqr / sarsa_q_iqr, actor_actions
+    Each advantage is divided by the IQR of THAT critic's Q-values under the real clinician
+    actions (scale-free, so comparable across critics and across reward types on different
+    absolute Q scales).
     """
-    q25, q75 = torch.quantile(reference_q, 0.25), torch.quantile(reference_q, 0.75)
-    iqr = (q75 - q25).clamp(min=1e-6)
-    return (values / iqr)
+    s = D.states(processor)
+    a_clin = D.actions(processor)
+    a_actor = actor_actions(model, s, stochastic=stochastic, sample_seed=sample_seed, batch_size=batch_size)
+
+    out: Dict[str, Any] = {"actor_actions": a_actor}
+    for name, critic_model in (("own", model), ("sarsa", judge)):
+        q_clin = critic_model.q(s, a_clin, batch_size=batch_size)
+        q_actor = critic_model.q(s, a_actor, batch_size=batch_size)
+        adv = q_actor - q_clin
+        iqr = _iqr(q_clin)
+        out[f"{name}_advantage"] = adv
+        out[f"{name}_advantage_normalized"] = adv / iqr
+        out[f"{name}_q_iqr"] = iqr
+    return out
 
 
-def compute_model_advantage(
-        model_entry, processor, sarsa_models,
-        batch_size=1024, device="cuda" if torch.cuda.is_available() else "cpu",
-        stochastic=False,
-    ):
-    """
-    Returns a dict with both RAW and IQR-NORMALIZED advantage:
-      own_advantage / own_advantage_normalized       (per-timestep arrays)
-      sarsa_advantages / sarsa_advantages_normalized  (lists of 5 per-timestep arrays)
-      actor_actions
- 
-    Normalization divides each critic's advantage by the interquartile
-    range of THAT SAME critic's own Q-values under real clinician actions
-    -- so own-critic advantage is normalized by the own critic's IQR, and
-    each SARSA critic's advantage is normalized by that SAME SARSA critic's
-    own IQR (not shared across seeds or across own/SARSA). This puts
-    advantage on a comparable, scale-free footing across critics/reward
-    types that otherwise sit on very different absolute Q scales (e.g.
-    terminal's MC-return-based Q vs. health-score's summed-difference Q).
-    """
-    own_critic = get_critic(model_entry)
- 
-    actor_actions = get_actor_actions(model_entry, processor, batch_size=batch_size, device=device, stochastic=stochastic)
- 
-    q_own_clinician = generate_model_outputs(
-        processor, model=own_critic, actions_to_use=None, model_type="critic",
-        reduction='mean', batch_size=batch_size, device=device,
-    )
-    q_own_actor = generate_model_outputs(
-        processor, model=own_critic, actions_to_use=actor_actions, model_type="critic",
-        reduction='mean', batch_size=batch_size, device=device,
-    )
-    own_advantage_raw = q_own_actor - q_own_clinician
-    own_advantage_normalized = _iqr_normalize(own_advantage_raw, q_own_clinician)
- 
-    own_iqr = torch.quantile(q_own_clinician, 0.75) - torch.quantile(q_own_clinician, 0.25)
-    print(f"    own-critic Q IQR (real clinician actions): {own_iqr.item():.4f}")
- 
-    sarsa_advantages_raw = []
-    sarsa_advantages_normalized = []
-    for seed_idx, sarsa_entry in enumerate(sarsa_models):
-        sarsa_critic = get_critic(sarsa_entry)
-        q_sarsa_clinician = generate_model_outputs(
-            processor, model=sarsa_critic, actions_to_use=None, model_type="critic",
-            reduction='mean', batch_size=batch_size, device=device,
-        )
-        q_sarsa_actor = generate_model_outputs(
-            processor, model=sarsa_critic, actions_to_use=actor_actions, model_type="critic",
-            reduction='mean', batch_size=batch_size, device=device,
-        )
-        sarsa_adv_raw = q_sarsa_actor - q_sarsa_clinician
-        sarsa_iqr = torch.quantile(q_sarsa_clinician, 0.75) - torch.quantile(q_sarsa_clinician, 0.25)
-        print(f"    SARSA seed {seed_idx+1} Q IQR (real clinician actions): {sarsa_iqr.item():.4f}")
-        sarsa_advantages_raw.append(sarsa_adv_raw.cpu().numpy())
-        sarsa_advantages_normalized.append(_iqr_normalize(sarsa_adv_raw, q_sarsa_clinician).cpu().numpy())
- 
-    return {
-        "own_advantage": own_advantage_raw.cpu().numpy(),
-        "own_advantage_normalized": own_advantage_normalized.cpu().numpy(),
-        "sarsa_advantages": sarsa_advantages_raw,
-        "sarsa_advantages_normalized": sarsa_advantages_normalized,
-        "actor_actions": actor_actions,
-    }
- 
+# =============================================================================
+# Occupancy support
+# =============================================================================
 
- 
-def compute_occupancy_support_of_actions(
-        actions, test_health_score, training_actions, training_health_score,
-        n_severity_bins=20, n_action_bins=10, min_count=10,
-    ):
+@dataclass
+class OccupancyTable:
+    """Joint (severity x fluid-bin x vaso-bin) training-data counts, with the bin edges."""
+    counts: Any
+    severity_edges: Any
+    fluid_edges: Any
+    vaso_edges: Any
+
+
+def build_occupancy_table(train_processor, n_severity_bins=20, n_action_bins=10) -> OccupancyTable:
+    """Occupancy counts from one TRAIN processor (health score and actions aligned to RL rows)."""
+    train_hs, _ = D.health_score(train_processor)
+    train_actions = torch.as_tensor(D.actions(train_processor))
+    counts, sev_edges, fluid_edges, vaso_edges = build_joint_state_action_occupancy_counts(
+        train_hs, train_actions, n_severity_bins=n_severity_bins, n_action_bins=n_action_bins)
+    return OccupancyTable(counts, sev_edges, fluid_edges, vaso_edges)
+
+
+def occupancy_support_of_actions(actions, health_score, table: OccupancyTable, min_count=10):
     """
-    Fraction of timesteps where the actor's ACTUAL chosen (fluid, vaso)
-    combination, given that timestep's own severity bin, was well-supported
-    (count >= min_count) in the training data.
+    Fraction of timesteps where the actor's ACTUAL chosen (fluid, vaso) combination, given that
+    timestep's own severity bin, was well supported (count >= min_count) in the training data.
+    Returns (fraction, per-timestep counts).
     """
-    joint_counts, severity_edges, fluid_edges, vaso_edges = build_joint_state_action_occupancy_counts(
-        training_health_score, training_actions, n_severity_bins=n_severity_bins, n_action_bins=n_action_bins
-    )
-    actions_np = actions.cpu().numpy() if torch.is_tensor(actions) else np.asarray(actions)
-    hs_np = test_health_score.cpu().numpy() if torch.is_tensor(test_health_score) else np.asarray(test_health_score)
- 
-    sev_bin = _bin_index(hs_np, severity_edges)
-    fluid_bin = _bin_index(actions_np[:, 0], fluid_edges)
-    vaso_bin = _bin_index(actions_np[:, 1], vaso_edges)
-    counts = joint_counts[sev_bin, fluid_bin, vaso_bin]
- 
+    actions = np.asarray(actions)
+    hs = np.asarray(health_score)
+    sev_bin = _bin_index(hs, table.severity_edges)
+    fluid_bin = _bin_index(actions[:, 0], table.fluid_edges)
+    vaso_bin = _bin_index(actions[:, 1], table.vaso_edges)
+    counts = table.counts[sev_bin, fluid_bin, vaso_bin]
     return (counts >= min_count).mean(), counts
- 
 
-def run_alpha_sweep_analysis(
-        cql_models_by_alpha,   # dict: {alpha_value: model_entry}
-        processor, sarsa_models,
-        val_health_score, training_actions, training_health_score,
-        n_severity_bins=20, n_action_bins=10, min_count=10,
-        stochastic=False,
-        save_path=None,
-    ):
+
+# =============================================================================
+# The sweep
+# =============================================================================
+
+def run_alpha_sweep_analysis(cql_models, sarsa_models, store, split="val",
+                             n_severity_bins=20, n_action_bins=10, min_count=10,
+                             stochastic=False, sample_seed=0, verbose=True) -> pd.DataFrame:
     """
-    stochastic: if True, evaluates advantage using stochastic action samples
-        (matching training) instead of the deterministic mean action -- see
-        compute_model_advantage / get_actor_actions for why this matters.
+    cql_models   : load_study_models(study) for a study grouped by cql_alpha, {(alpha,): {seed: LoadedModel}}
+    sarsa_models : load_study_models(sarsa_study), {(): {seed: LoadedModel}}; one critic per seed
+    store        : data.DataStore. Use DataStore(keep=("train", "val")) so each seed's data loader
+                   runs once (the train split is needed for the occupancy table).
+    split        : split to evaluate on. Keep "val" for alpha selection.
+    stochastic   : evaluate advantage on stochastic action samples (matching training) rather
+                   than the deterministic action.
+
+    Returns a DataFrame, one row per (alpha, seed):
+      alpha, seed, own_adv, own_adv_norm, sarsa_adv, sarsa_adv_norm, occupancy_frac,
+      own_q_iqr, sarsa_q_iqr, n_rows
+    where *_adv are mean per-timestep advantages (raw Q units) and *_adv_norm the same divided
+    by the matching critic's Q IQR under clinician actions.
     """
-    alphas = sorted(cql_models_by_alpha.keys())
-    results = {}
- 
-    for alpha in alphas:
+    sarsa = _single_group(sarsa_models)
+    by_alpha = _models_by_alpha(cql_models)
+
+    needed = {s for seeds in by_alpha.values() for s in seeds}
+    missing = sorted(needed - set(sarsa), key=str)
+    if missing:
+        raise KeyError(f"no SARSA critic for seeds {missing}; SARSA has seeds {sorted(sarsa, key=str)}")
+
+    # Occupancy tables and severity depend on the seed's data, not on alpha: build once per data identity.
+    tables: Dict[Any, OccupancyTable] = {}
+    val_hs: Dict[Any, np.ndarray] = {}
+
+    def data_key(m):
+        return (m.record.data_identity.key, D.reward_signature(m.record))
+
+    rows = []
+    for alpha, seeds in by_alpha.items():
         t0 = time.time()
-        print(f"=== alpha={alpha} ({'stochastic' if stochastic else 'deterministic'} eval) ===", flush=True)
-        model_entry = cql_models_by_alpha[alpha]
- 
-        adv = compute_model_advantage(model_entry, processor, sarsa_models, stochastic=stochastic)
-        occ_frac, _ = compute_occupancy_support_of_actions(
-            adv["actor_actions"], val_health_score, training_actions, training_health_score,
-            n_severity_bins=n_severity_bins, n_action_bins=n_action_bins, min_count=min_count,
-        )
- 
-        sarsa_means = [a.mean() for a in adv["sarsa_advantages"]]
-        sarsa_means_normalized = [a.mean() for a in adv["sarsa_advantages_normalized"]]
-        results[alpha] = {
-            "own_advantage_mean": adv["own_advantage"].mean(),
-            "own_advantage_mean_normalized": adv["own_advantage_normalized"].mean(),
-            "sarsa_advantage_means": np.array(sarsa_means),
-            "sarsa_advantage_means_normalized": np.array(sarsa_means_normalized),
-            "occupancy_support_frac": occ_frac,
-        }
- 
-        print(f"  own-critic advantage:   raw={adv['own_advantage'].mean():.4f}, "
-              f"normalized={adv['own_advantage_normalized'].mean():.4f}")
-        print(f"  SARSA-critic advantage: raw mean={np.mean(sarsa_means):.4f}, "
-              f"normalized mean={np.mean(sarsa_means_normalized):.4f} "
-              f"(normalized per-seed={np.round(sarsa_means_normalized, 4)})")
-        print(f"  occupancy support of chosen actions: {occ_frac*100:.1f}%")
-        print(f"  done in {time.time()-t0:.1f}s\n", flush=True)
- 
-    # --- plot: 3 panels vs alpha (IQR-normalized advantage, comparable across
-    #     alphas whose own-critic Q-scale may drift, and across reward types
-    #     on different absolute Q scales) ---
+        for seed in sorted(seeds):
+            m, judge = seeds[seed], sarsa[seed]
+            check_judge_matches(m, judge)
+            p = store.processor(m, split)
+            k = data_key(m)
+            if k not in tables:
+                tables[k] = build_occupancy_table(store.processor(m, "train"), n_severity_bins, n_action_bins)
+                val_hs[k] = D.health_score(p)[0]
+
+            adv = compute_model_advantage(m, judge, p, stochastic=stochastic, sample_seed=sample_seed)
+            occ, _ = occupancy_support_of_actions(adv["actor_actions"], val_hs[k], tables[k], min_count)
+            rows.append({
+                "alpha": alpha, "seed": seed,
+                "own_adv": adv["own_advantage"].mean(),
+                "own_adv_norm": adv["own_advantage_normalized"].mean(),
+                "sarsa_adv": adv["sarsa_advantage"].mean(),
+                "sarsa_adv_norm": adv["sarsa_advantage_normalized"].mean(),
+                "occupancy_frac": float(occ),
+                "own_q_iqr": adv["own_q_iqr"], "sarsa_q_iqr": adv["sarsa_q_iqr"],
+                "n_rows": D.n_rows(p),
+            })
+        if verbose:
+            r = pd.DataFrame([x for x in rows if x["alpha"] == alpha])
+            print(f"alpha={alpha:<10g} ({'stochastic' if stochastic else 'deterministic'}, {split}, {len(r)} seeds)  "
+                  f"own_norm={r.own_adv_norm.mean():+.4f}  sarsa_norm={r.sarsa_adv_norm.mean():+.4f} "
+                  f"[{r.sarsa_adv_norm.min():+.4f}, {r.sarsa_adv_norm.max():+.4f}]  "
+                  f"occupancy={r.occupancy_frac.mean() * 100:.1f}%  ({time.time() - t0:.1f}s)", flush=True)
+
+    return pd.DataFrame(rows).sort_values(["alpha", "seed"]).reset_index(drop=True)
+
+
+def summarize_by_alpha(df: pd.DataFrame) -> pd.DataFrame:
+    """Per-alpha mean / min / max / std across seeds for every metric (columns: (metric, stat)), plus n_seeds."""
+    g = df.groupby("alpha")
+    summ = g[list(METRICS)].agg(["mean", "min", "max", "std"])
+    summ["n_seeds"] = g["seed"].nunique()
+    return summ
+
+
+# =============================================================================
+# Plots
+# =============================================================================
+
+def _line_with_band(ax, summ, metric, scale, **kw):
+    x = summ.index.values
+    mean, lo, hi = (summ[(metric, s)].values * scale for s in ("mean", "min", "max"))
+    line, = ax.plot(x, mean, marker=kw.pop("marker", "o"), **kw)
+    ax.fill_between(x, lo, hi, color=line.get_color(), alpha=0.15, linewidth=0)
+    return line
+
+
+def _alpha_filter(df, alpha_range=None, log_scale=False):
+    if alpha_range is not None:
+        lo, hi = alpha_range
+        df = df[(df.alpha >= lo) & (df.alpha <= hi)]
+    if log_scale and (df.alpha == 0).any():
+        print("Note: alpha=0 excluded from plot (log scale can't show it).")
+        df = df[df.alpha != 0]
+    if df.empty:
+        raise ValueError("No alpha values remain after applying alpha_range/log_scale filtering.")
+    return df
+
+
+def plot_alpha_sweep(df, normalized=True, log_scale=True, alpha_range=None, save_path=None):
+    """
+    Three panels vs alpha: own-critic advantage, SARSA-critic advantage, occupancy support.
+    Line = mean across seeds, band = min-max across seeds. normalized=True plots advantage as a
+    fraction of the critic's own Q IQR (comparable across alphas and reward types).
+    """
+    df = _alpha_filter(df, alpha_range, log_scale)
+    summ = summarize_by_alpha(df)
+    sfx = "_norm" if normalized else ""
+    unit = "(fraction of critic's own Q IQR)" if normalized else "(raw Q units)"
+    n_seeds = int(summ["n_seeds"].min())
+
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
- 
-    own_vals = [results[a]["own_advantage_mean_normalized"] for a in alphas]
-    axes[0].plot(alphas, own_vals, marker="o", color="#c0392b")
-    axes[0].set_xscale("log")
-    axes[0].set_xlabel("cql_alpha")
-    axes[0].set_ylabel("Own-critic advantage\n(% of critic's own Q IQR)")
+    _line_with_band(axes[0], summ, f"own_adv{sfx}", 1, color=OWN_COLOR)
+    axes[0].set_ylabel(f"Own-critic advantage\n{unit}")
     axes[0].set_title("Own-critic advantage\n(exploitation red-flag, not positive evidence)", fontsize=10)
-    axes[0].axhline(0, color="grey", linewidth=0.8, linestyle="--")
-    axes[0].spines[["top", "right"]].set_visible(False)
- 
-    sarsa_mean_vals = [results[a]["sarsa_advantage_means_normalized"].mean() for a in alphas]
-    sarsa_min_vals = [results[a]["sarsa_advantage_means_normalized"].min() for a in alphas]
-    sarsa_max_vals = [results[a]["sarsa_advantage_means_normalized"].max() for a in alphas]
-    axes[1].plot(alphas, sarsa_mean_vals, marker="o", color=ALPHA_COLOR, label="mean across 5 SARSA seeds")
-    axes[1].fill_between(alphas, sarsa_min_vals, sarsa_max_vals, color=ALPHA_COLOR, alpha=0.2, label="min-max across seeds")
-    axes[1].set_xscale("log")
-    axes[1].set_xlabel("cql_alpha")
-    axes[1].set_ylabel("SARSA-critic advantage\n(% of critic's own Q IQR)")
+
+    _line_with_band(axes[1], summ, f"sarsa_adv{sfx}", 1, color=SARSA_COLOR)
+    axes[1].set_ylabel(f"SARSA-critic advantage\n{unit}")
     axes[1].set_title("SARSA-critic advantage\n(primary evidence of real improvement)", fontsize=10)
-    axes[1].axhline(0, color="grey", linewidth=0.8, linestyle="--")
-    axes[1].legend(frameon=False, fontsize=8)
-    axes[1].spines[["top", "right"]].set_visible(False)
- 
-    occ_vals = [results[a]["occupancy_support_frac"] * 100 for a in alphas]
-    axes[2].plot(alphas, occ_vals, marker="o", color="#229954")
-    axes[2].set_xscale("log")
-    axes[2].set_xlabel("cql_alpha")
+
+    _line_with_band(axes[2], summ, "occupancy_frac", 100, color=OCC_COLOR)
     axes[2].set_ylabel("% of actions well-supported")
     axes[2].set_title("Occupancy support of\nactor's chosen actions", fontsize=10)
-    axes[2].spines[["top", "right"]].set_visible(False)
- 
+
+    for i, ax in enumerate(axes):
+        if log_scale:
+            ax.set_xscale("log")
+        ax.set_xlabel("cql_alpha")
+        if i < 2:
+            ax.axhline(0, color="grey", linewidth=0.8, linestyle="--")
+        ax.spines[["top", "right"]].set_visible(False)
+    axes[1].text(0.02, 0.02, f"mean and min-max across {n_seeds} seeds", transform=axes[1].transAxes,
+                 fontsize=8, color="grey")
     fig.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
         print(f"Saved to {save_path}")
- 
-    return results, fig
+    return fig
 
- 
-def find_knee_alpha(results, metric="sarsa_advantage", curve="convex", direction="decreasing", S=1.0,
-                     alpha_min=None, normalized=False):
+
+def find_knee_alpha(df, metric="sarsa_advantage", curve="convex", direction="decreasing", S=1.0,
+                    alpha_min=None, normalized=False):
     """
-    Identifies the knee/elbow of a chosen metric vs. alpha, directly from
-    the results dict (no need to hand-copy values out).
- 
-    metric: which curve to run Kneedle on --
-        "sarsa_advantage" -- mean SARSA-critic advantage (default)
-        "own_advantage"   -- own-critic advantage
-        "occupancy"       -- occupancy support (%) -- this one INCREASES,
-                              so direction should be "increasing" if used
-    normalized: if True, uses the IQR-normalized advantage values
-        (own_advantage_mean_normalized / sarsa_advantage_means_normalized)
-        instead of raw Q-unit advantage. Has no effect on "occupancy",
-        which is never normalized (it's already a %). Use normalized=True
-        when comparing knees across critics/reward types on different
-        absolute Q scales (e.g. terminal vs. health-score).
-    curve/direction: passed straight to KneeLocator -- see its docs for
-        the four curve/direction combinations (convex/concave x
-        increasing/decreasing). Must match the actual shape of the chosen
-        metric or the result will be meaningless.
-    alpha_min: if set, restricts the fit to alphas >= alpha_min -- use this
-        when the full curve isn't monotonic in the expected direction
-        (e.g., an early noisy dip before the real increasing trend starts).
-    S: KneeLocator's sensitivity parameter -- higher S finds fewer, more
-        conservative knees; lower S is more sensitive to smaller bends.
-        Default (1.0) is KneeLocator's own default.
- 
-    Returns the alpha value at the identified knee (or None if Kneedle
-    doesn't find one for this curve/direction/S combination).
+    Kneedle knee/elbow of a metric vs alpha, on the across-seed MEAN.
+
+    metric: "sarsa_advantage" (default) | "own_advantage" | "occupancy" (this one increases, so
+        pass direction="increasing"). normalized=True uses the IQR-normalised advantage (no
+        effect on occupancy, which is already a %).
+    curve/direction: passed to KneeLocator; must match the actual shape of the metric.
+    alpha_min: restrict the fit to alphas >= alpha_min (e.g. to skip an early noisy dip).
+    S: KneeLocator sensitivity; higher finds fewer, more conservative knees.
+    Returns the alpha at the knee, or None if Kneedle finds none.
     """
-    alphas = sorted(results.keys())
-    if alpha_min is not None:
-        alphas = [a for a in alphas if a >= alpha_min]
- 
-    suffix = "_normalized" if normalized else ""
-    if metric == "sarsa_advantage":
-        y = [results[a][f"sarsa_advantage_means{suffix}"].mean() for a in alphas]
-    elif metric == "own_advantage":
-        y = [results[a][f"own_advantage_mean{suffix}"] for a in alphas]
-    elif metric == "occupancy":
-        y = [results[a]["occupancy_support_frac"] * 100 for a in alphas]
-    else:
+    cols = {"sarsa_advantage": "sarsa_adv", "own_advantage": "own_adv", "occupancy": "occupancy_frac"}
+    if metric not in cols:
         raise ValueError(f"Unknown metric '{metric}'")
- 
-    kl = KneeLocator(alphas, y, curve=curve, direction=direction, S=S)
+    col = cols[metric] + ("_norm" if normalized and metric != "occupancy" else "")
+    mean = df.groupby("alpha")[col].mean()
+    if alpha_min is not None:
+        mean = mean[mean.index >= alpha_min]
+    kl = KneeLocator(list(mean.index), list(mean.values), curve=curve, direction=direction, S=S)
     return kl.elbow
- 
- 
-def plot_combined_alpha_sweep(results, title="", save_path=None, mark_knee=True, normalized=False,
-                                log_scale=False, alpha_range=None):
+
+
+def plot_combined_alpha_sweep(df, title="", save_path=None, mark_knee=True, normalized=False,
+                              log_scale=False, alpha_range=None):
     """
-    results: the dict returned by run_alpha_sweep_analysis, containing both
-        raw and IQR-normalized advantage keys.
-    normalized: if True, plots IQR-normalized advantage (comparable across
-        critics/reward types on different absolute Q scales) instead of
-        raw Q-unit advantage. Occupancy support is unaffected either way.
-    log_scale: if True, plots the x-axis (cql_alpha) on a log scale --
-        useful when the swept range spans multiple orders of magnitude.
-        NOTE: alpha=0 cannot be shown on a log axis (log(0) is undefined);
-        if alpha=0 is in `results`, it is silently dropped from the plot
-        when log_scale=True (a warning is printed), but the knee-finding
-        step below is unaffected unless you also restrict alpha_range.
-    alpha_range: optional (min, max) tuple to restrict which alphas are
-        plotted (inclusive). Useful for zooming into a sub-range of a wide
-        sweep, e.g. alpha_range=(0.001, 0.01) to see the original sweep's
-        resolution within a much wider combined sweep.
+    Both advantage curves (left axis) and occupancy support (right axis) on one plot.
+    Lines = mean across seeds, bands = min-max across seeds.
+
+    normalized : plot IQR-normalised advantage (comparable across critics/reward types).
+    log_scale  : log x-axis; alpha=0 cannot be shown and is dropped from the plot.
+    alpha_range: optional (min, max) to zoom into a sub-range of a wide sweep.
+    mark_knee  : Kneedle knee of the SARSA advantage, computed over the plotted alpha range only.
     """
-    alphas = sorted(results.keys())
- 
-    if alpha_range is not None:
-        lo, hi = alpha_range
-        alphas = [a for a in alphas if lo <= a <= hi]
- 
-    if log_scale and 0 in alphas:
-        print("Note: alpha=0 excluded from plot (log scale can't show it).")
-        alphas = [a for a in alphas if a != 0]
- 
-    if len(alphas) == 0:
-        raise ValueError("No alpha values remain after applying alpha_range/log_scale filtering.")
- 
-    suffix = "_normalized" if normalized else ""
- 
-    own_vals = np.array([results[a][f"own_advantage_mean{suffix}"] for a in alphas])
-    sarsa_mean_vals = np.array([results[a][f"sarsa_advantage_means{suffix}"].mean() for a in alphas])
-    sarsa_min_vals = np.array([results[a][f"sarsa_advantage_means{suffix}"].min() for a in alphas])
-    sarsa_max_vals = np.array([results[a][f"sarsa_advantage_means{suffix}"].max() for a in alphas])
-    occ_vals = np.array([results[a]["occupancy_support_frac"] * 100 for a in alphas])
- 
+    df = _alpha_filter(df, alpha_range, log_scale)
+    summ = summarize_by_alpha(df)
+    sfx = "_norm" if normalized else ""
+    n_seeds = int(summ["n_seeds"].min())
+
     fig, ax1 = plt.subplots(figsize=(8, 5.5))
- 
-    # left axis: both advantage curves, same units
-    l1, = ax1.plot(alphas, own_vals, marker="o", color=OWN_COLOR, label="Own-critic advantage")
-    l2, = ax1.plot(alphas, sarsa_mean_vals, marker="o", color=SARSA_COLOR, label="SARSA-critic advantage (mean)")
-    ax1.fill_between(alphas, sarsa_min_vals, sarsa_max_vals, color=SARSA_COLOR, alpha=0.15,
-                      label="SARSA min-max across 5 seeds")
+    l1 = _line_with_band(ax1, summ, f"own_adv{sfx}", 1, color=OWN_COLOR, label="Own-critic advantage")
+    l2 = _line_with_band(ax1, summ, f"sarsa_adv{sfx}", 1, color=SARSA_COLOR, label="SARSA-critic advantage")
     ax1.axhline(0, color="grey", linewidth=0.8, linestyle="--")
     ax1.set_xlabel(r"cql_$\alpha$" + (" (log scale)" if log_scale else ""))
-    ax1.set_ylabel("Advantage (% of critic's own Q IQR)" if normalized else "Advantage (raw Q units)")
+    ax1.set_ylabel("Advantage (fraction of critic's own Q IQR)" if normalized else "Advantage (raw Q units)")
     ax1.spines[["top"]].set_visible(False)
-    if log_scale:
-        ax1.set_xscale("log")
- 
-    # right axis: occupancy support, different units (%)
+
     ax2 = ax1.twinx()
-    l3, = ax2.plot(alphas, occ_vals, marker="s", color=OCC_COLOR, linestyle="--", label="Occupancy support (%)")
+    l3 = _line_with_band(ax2, summ, "occupancy_frac", 100, color=OCC_COLOR, marker="s", linestyle="--",
+                         label="Occupancy support (%)")
     ax2.set_ylabel("% of chosen actions well-supported", color=OCC_COLOR)
     ax2.tick_params(axis="y", colors=OCC_COLOR)
     ax2.spines["right"].set_color(OCC_COLOR)
     ax2.spines[["top"]].set_visible(False)
     if log_scale:
+        ax1.set_xscale("log")
         ax2.set_xscale("log")
- 
+
     lines = [l1, l2, l3]
-    labels = [l.get_label() for l in lines]
- 
     if mark_knee:
-        # knee is computed over the SAME filtered alpha range being plotted,
-        # so the marked knee always matches what's visible on this particular plot
-        filtered_results = {a: results[a] for a in alphas}
-        knee_alpha = find_knee_alpha(filtered_results, normalized=normalized)
+        knee_alpha = find_knee_alpha(df, normalized=normalized)
         if knee_alpha is not None:
-            l4 = ax1.axvline(knee_alpha, color=KNEE_COLOR, linewidth=1.5, linestyle=":",
-                              label=f"Knee (Kneedle): $\\alpha$={knee_alpha}")
-            lines.append(l4)
-            labels.append(l4.get_label())
+            lines.append(ax1.axvline(knee_alpha, color=KNEE_COLOR, linewidth=1.5, linestyle=":",
+                                     label=f"Knee (Kneedle): $\\alpha$={knee_alpha}"))
         else:
             print("Kneedle did not identify a knee for this curve.")
- 
-    ax1.legend(lines, labels, loc="upper right", frameon=False, fontsize=9)
+
+    ax1.legend(lines, [l.get_label() for l in lines], loc="upper right", frameon=False, fontsize=9)
     default_title = "CQL alpha sweep: advantage vs. occupancy support trade-off"
     ax1.set_title(title or (default_title + (" (normalized)" if normalized else "")), fontsize=12, fontweight="bold")
+    ax1.text(0.02, 0.02, f"mean and min-max across {n_seeds} seeds", transform=ax1.transAxes, fontsize=8, color="grey")
     fig.tight_layout()
- 
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
         print(f"Saved to {save_path}")
- 
     return fig

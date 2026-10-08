@@ -64,7 +64,7 @@ def parse_arguments():
 
     parser.add_argument('--reward_type', 
                         default='health_score', 
-                        choices=['terminal', 'health_score'], 
+                        choices=['terminal', 'health_score', 'terminal_bellman'], 
                         help='Type of reward to use (default: health_score)')
 
     parser.add_argument('--mode', type=str, default='single_split',

@@ -616,7 +616,8 @@ class ConfigManager:
                 if k in self.training_config and isinstance(self.training_config[k], str):
                     self.training_config[k] = int(float(self.training_config[k]))
 
-            if self.seed is not None:
+            # if seed is an attribute of self
+            if hasattr(self, 'seed') and self.seed is not None:
                 self.training_config['seed'] = self.seed
 
         else:   

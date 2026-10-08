@@ -1046,6 +1046,9 @@ def train_with_hyperparameters(
 
             # Check for improvement and copy model parameters if best, only if early stopping is enabled
             if early_stopping['flag']:
+                if loss_metric == 'auc_Q':
+                    current_val_loss = -current_val_loss  # invert for auc_Q since higher is better
+
                 improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)
 
                 if improvement > 0:

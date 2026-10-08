@@ -499,6 +499,10 @@ class Q_Learner(object):
             zero_action_sensitivity = self.zero_action_values(state, action, current_Q)
             q_stats = get_q_stats(current_Q1, current_Q2, mortality, random_action_sensitivity, zero_action_sensitivity)
 
+        if self.reward_type == 'terminal_bellman':
+            # add q_stats['auc_Q'] to losses for logging purposes
+            losses['auc_Q'] = q_stats['auc_Q']
+
         return losses, q_stats, grad_norm
         
 
@@ -544,6 +548,10 @@ class Q_Learner(object):
             random_action_sensitivity = self.random_action_values(state, action, current_Q)
             zero_action_sensitivity = self.zero_action_values(state, action, current_Q)
             q_stats = get_q_stats(current_Q1, current_Q2, mortality, random_action_sensitivity, zero_action_sensitivity)
+
+        if self.reward_type == 'terminal_bellman':
+            # add q_stats['auc_Q'] to losses for logging purposes
+            losses['auc_Q'] = q_stats['auc_Q']
         
         return losses, q_stats, neuron_stats
 	

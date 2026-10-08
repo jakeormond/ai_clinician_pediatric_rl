@@ -88,7 +88,8 @@ def create_buffer(
         hyperparams,
         shuffle=True, 
         scaler=None, 
-        action_names=None
+        action_names=None,
+        include_mc_returns=False,
     ):
     # should correct output to include processor as it gets modified by the call to .create_rl_dataset
 
@@ -113,7 +114,7 @@ def create_buffer(
         use_n_step = False
     else:
         use_n_step = True
-    dataset = RLDataset(processor) # model_outputs refer to dynamic_deephit transformer outputs; other options not currently implemented
+    dataset = RLDataset(processor, include_mc_returns=include_mc_returns) # model_outputs refer to dynamic_deephit transformer outputs; other options not currently implemented
     buffer = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     return buffer, scaler 
 
@@ -804,12 +805,16 @@ def train_with_hyperparameters(
     hyperparams['wandb_id'] = run.id if run is not None else f"{job_id}_no_wandb"
     print(f"W&B run initialized with ID: {hyperparams['wandb_id']}")
 
+    # SARSA on terminal_bellman needs the MC return for its early-stopping metric (not CQL / FQE)
+    include_mc_returns = (config_manager.reward_type == 'terminal_bellman' and config_manager.model_type == 'basic_q')
+
     # Create replay buffers
     training_buffer, scaler = create_buffer(
         train_processor, 
         batch_size, 
         hyperparams,
         action_names=config_manager.data_config['actions'],
+        include_mc_returns=include_mc_returns
     )
     # add ratio_of_fluid_to_vaso to config_manager for actor loss
     actions = train_processor.rl_dataset["actions"]
@@ -827,6 +832,7 @@ def train_with_hyperparameters(
         hyperparams,
         scaler=scaler, 
         action_names=config_manager.data_config['actions'],
+        include_mc_returns=include_mc_returns
     )
     
     # get total number of steps for scheduler if needed
@@ -1046,9 +1052,6 @@ def train_with_hyperparameters(
 
             # Check for improvement and copy model parameters if best, only if early stopping is enabled
             if early_stopping['flag']:
-                if loss_metric == 'auc_Q':
-                    current_val_loss = -current_val_loss  # invert for auc_Q since higher is better
-
                 improvement, best_val_loss = check_improvement(best_val_loss, current_val_loss, early_stopping)
 
                 if improvement > 0:

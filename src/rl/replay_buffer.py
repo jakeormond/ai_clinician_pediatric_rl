@@ -20,12 +20,17 @@ ai_clinician_dir = "/home/jake/Documents/AI_Clinician/"
 
 
 class RLDataset(Dataset):
-    def __init__(self, processor: Dict[str, np.ndarray], use_n_step: bool = False):
+    def __init__(self, processor: Dict[str, np.ndarray], use_n_step: bool = False, include_mc_returns: bool = False):
 
         self.states = processor.rl_dataset["states"]  # (num_samples, num_features)
         self.actions = processor.rl_dataset["actions"]  # (num_samples, num_actions)
         
         self.mortality = processor.rl_dataset["mortality"]
+
+        # terminal_bellman SARSA only: discounted MC return, appended as the LAST batch element (basic_q reads batch[7])
+        self.mc_returns = processor.rl_dataset["mc_returns"] if include_mc_returns else None
+        if self.mc_returns is not None:
+            assert len(self.mc_returns) == len(self.states), "mc_returns not aligned with states"
 
         if not use_n_step:        
             self.rewards = processor.rl_dataset["rewards"]  # (num_samples,)      
@@ -44,7 +49,7 @@ class RLDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         if hasattr(self, 'next_actions'):
-            return [
+            item = [
                 self.states[idx],
                 self.actions[idx],
                 self.rewards[idx],
@@ -53,6 +58,9 @@ class RLDataset(Dataset):
                 self.dones[idx],
                 self.mortality[idx]
             ]
+            if self.mc_returns is not None:
+                item.append(self.mc_returns[idx])
+            return item
         else:
             return [
                 self.states[idx],

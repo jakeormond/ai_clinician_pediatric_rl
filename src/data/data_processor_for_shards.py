@@ -498,7 +498,7 @@ class ShardProcessor:
             return median_reward
 
         elif self.reward_type == 'terminal_bellman':
-            # sparse terminal reward, propagated by Bellman backups (uses the algorithm's gamma, not terminal_discount)
+            # sparse terminal reward, propagated by Bellman backups (uses the algorithm's terminal_discount)
             scale = hyperparams.get('terminal_reward_scale', 1.0)
             survival_reward = hyperparams.get('terminal_reward_survival', scale)
             death_reward = hyperparams.get('terminal_reward_death', -scale)
@@ -506,13 +506,21 @@ class ShardProcessor:
 
             bellman_reward = self.compute_bellman_terminal_rewards(
                 index_ptr, mortality, survival_reward, death_reward, step_reward)
-            # stored here so the (optional) n-step block in create_rl_dataset works unchanged
+
             self.terminal_reward = bellman_reward.astype(np.float32)
+
+            # MC return for the early-stopping metric; terminal_discount is also the critic's bootstrap gamma for terminal_bellman
+            terminal_discount = hyperparams['terminal_discount']
+            assert step_reward == 0.0 and survival_reward == scale and death_reward == -scale, \
+                "compute_monte_carlo_terminal_rewards assumes symmetric +/-scale rewards and no step reward"
+            mc_reward = self.compute_monte_carlo_terminal_rewards(index_ptr, mortality, scale, terminal_discount)
+            self.mc_reward = mc_reward.astype(np.float32)
+            
             median_reward = 0.0
             return median_reward
 
         else: 
-            raise ValueError(f"Invalid reward type: {self.reward_type}. Supported reward types are: 'health_score' and 'time_to_event'.")
+            raise ValueError(f"Invalid reward type: {self.reward_type}. Supported reward types are: 'health_score' 'terminal', 'terminal_bellman', and 'time_to_event'.")
 
 
     def compute_monte_carlo_terminal_rewards(self, index_ptr, mortality, terminal_reward_scale, terminal_discount):
@@ -609,8 +617,21 @@ class ShardProcessor:
         reward[last_transition] = np.where(mortality[valid] == 1, death_reward, survival_reward)
 
         return reward
+    
 
-
+    @staticmethod
+    def compute_discounted_returns(reward, index_ptr, gamma):
+        """
+        Per-trajectory discounted return G[t] = r[t] + gamma * G[t+1], for a
+        state-aligned reward array. Final timestep has r = 0, so G[end-1] = 0.
+        Index with [state_ind], same as the reward.
+        """
+        from scipy.signal import lfilter
+        returns = np.zeros(len(reward), dtype=np.float64)
+        for start, end in zip(index_ptr[:-1], index_ptr[1:]):
+            returns[start:end] = lfilter([1.0], [1.0, -gamma], reward[start:end][::-1])[::-1]
+        return returns
+    
 
     def create_rl_dataset(
             self, states="model_outputs", 
@@ -689,6 +710,7 @@ class ShardProcessor:
             self.rl_dataset['rewards'] = torch.tensor(self.mc_reward[state_ind+1], dtype=torch.float32) # we use +1 because we want last state to be full reward
         elif self.reward_type == 'terminal_bellman':
             print("Using terminal_bellman reward type")
+            self.rl_dataset['mc_returns'] = torch.tensor(self.mc_reward[state_ind + 1], dtype=torch.float32)  # +1: MC convention, matches Bellman return
             self.rl_dataset['rewards'] = torch.tensor(self.terminal_reward[state_ind], dtype=torch.float32)  # state-aligned: no +1
         
         else:

@@ -425,8 +425,13 @@ class Q_Learner(object):
     def train(self, batch: TensorBatch):
         self.total_it += 1
 
+        mc_return = None
+        if self.reward_type == 'terminal_bellman':
+            batch, mc_return = self._split_mc_return(batch)
         # sample the replay buffer
         state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
+
+        
 
         # FQE: swap the clinician's real next_action for the fixed target
         # policy's action at next_state. No-op (returns next_action
@@ -436,12 +441,10 @@ class Q_Learner(object):
         reward = reward * self.reward_scaling
 
         if self.reward_type != 'terminal': # using monte carlo returns  
-            # compute the target Q value
-            treat_survival_as_truncated = True
+            # health_score: survival treated as truncated; terminal_bellman: discharge is a true terminal
+            treat_survival_as_truncated = (self.reward_type != 'terminal_bellman')
             if treat_survival_as_truncated:
-                # make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
                 done = done * mortality
-            
             not_done = 1 - done
         
         self.critic.train()          # Dropout ACTIVE for the network we are updating
@@ -500,15 +503,17 @@ class Q_Learner(object):
             q_stats = get_q_stats(current_Q1, current_Q2, mortality, random_action_sensitivity, zero_action_sensitivity)
 
         if self.reward_type == 'terminal_bellman':
-            # add q_stats['auc_Q'] to losses for logging purposes
-            losses['auc_Q'] = q_stats['auc_Q']
-
+            losses.update(self._mc_metrics(current_Q1.detach(), current_Q2.detach(), mc_return))
+        
         return losses, q_stats, grad_norm
         
 
     def evaluate(self, batch: TensorBatch) -> Dict[str, float]:
         self.critic.eval()  # Ensure critic is also in eval mode
-        
+
+        mc_return = None
+        if self.reward_type == 'terminal_bellman':
+            batch, mc_return = self._split_mc_return(batch)
         state, action, reward, next_state, next_action, done, mortality = TrainerUtils._unpack_batch(batch, self.device)
 
         # FQE: same swap as in train() -- see _get_next_action docstring.
@@ -516,12 +521,12 @@ class Q_Learner(object):
         
         reward = reward * self.reward_scaling
         
-        treat_survival_as_truncated = True
-        if treat_survival_as_truncated:
-                # make done 0 where mortality is 0, since we want to treat survival as truncated rather than terminal
-            done = done * mortality        
-        
-        not_done = 1 - done
+        if self.reward_type != 'terminal': # using monte carlo returns  
+            # health_score: survival treated as truncated; terminal_bellman: discharge is a true terminal
+            treat_survival_as_truncated = (self.reward_type != 'terminal_bellman')
+            if treat_survival_as_truncated:
+                done = done * mortality
+            not_done = 1 - done
 
         with torch.no_grad():
             # compute the target Q value
@@ -550,8 +555,7 @@ class Q_Learner(object):
             q_stats = get_q_stats(current_Q1, current_Q2, mortality, random_action_sensitivity, zero_action_sensitivity)
 
         if self.reward_type == 'terminal_bellman':
-            # add q_stats['auc_Q'] to losses for logging purposes
-            losses['auc_Q'] = q_stats['auc_Q']
+            losses.update(self._mc_metrics(current_Q1.detach(), current_Q2.detach(), mc_return))
         
         return losses, q_stats, neuron_stats
 	
@@ -584,6 +588,26 @@ class Q_Learner(object):
         q_stats_sarsa = get_q_stats_sarsa(q_clinician, q_rl, mortality)
 
         return q_stats_sarsa
+
+
+    def _split_mc_return(self, batch):
+        if len(batch) > 7:
+            return batch[:7], batch[7].to(self.device).view(-1, 1)
+        if self.target_policy_actor is None:  # SARSA needs it for early stopping
+            raise ValueError("terminal_bellman SARSA batch has no mc_returns element; append rl_dataset['mc_returns'] in the batch builder")
+        return batch, None
+
+    @torch.no_grad()
+    def _mc_metrics(self, current_Q1, current_Q2, mc_return):
+        """Distance of Q(s,a) from the logged discounted return. Valid for SARSA only:
+        under FQE the logged return belongs to the clinician policy, not the target policy."""
+        if mc_return is None or self.target_policy_actor is not None:
+            return {}
+        current_Q = (current_Q1 + current_Q2) / 2.0
+        mc_return = mc_return * self.reward_scaling
+        q, g = current_Q.view(-1), mc_return.view(-1)
+        corr = torch.corrcoef(torch.stack([q, g]))[0, 1].item() if q.numel() > 2 else float('nan')
+        return {"mc_mse": F.mse_loss(q, g).item(), "mc_corr": corr}
 
 
 
@@ -643,10 +667,17 @@ def get_trainer(config_manager, state_dim, action_dim, hyperparams, actor=None):
     # -- this function does no path resolution of its own. actor=None
     # (the default, and what happens for every non-"fqe" model_type) means
     # ordinary SARSA; a real actor object here means FQE. ---
+
+    if config_manager.reward_type == 'terminal_bellman':
+        discount = hyperparams['terminal_discount']  # longer horizon so the sparse terminal reward reaches early-stay states
+    else:
+        discount = hyperparams.get('discount', config_manager.training_config['discount'])
+
+
     trainer = Q_Learner(
         critic=critic,
         critic_optimizer=critic_optimizer,
-        discount=hyperparams.get('discount', config_manager.training_config['discount']),
+        discount=discount,
         device=device,
         tau=hyperparams.get('tau', config_manager.training_config['tau']),  
         grad_clip=hyperparams['grad_clip'], 

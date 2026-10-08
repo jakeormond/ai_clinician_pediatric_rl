@@ -239,7 +239,7 @@ class DynamicDeepHitTransformerDataset(Dataset):
             start_to_end_len = self.window_length
 
         # ---- Load trajectory slice ----
-        trajectories = self.trajectories[start_ptr:final_ind+1]  # (slice_len, num_features)
+        trajectories = self.trajectories[start_ptr:final_ind+1].clone()  # (slice_len, num_features)
         
         if self.task == "dynamic_deephit_transformer":
             # load time_to_event and event at final_ind

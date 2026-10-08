@@ -15,9 +15,12 @@ LoadedModel gives every family the same interface:
   .reward_scale      divisor converting Q-values back to health-score points
   .q(states, actions)          critic Q-values (mean of twin heads by default), numpy
   .actor_outputs(states)       family-specific actor outputs (CQL: gate probs, raw means, stds, actions)
+  .network           the single network of families without actor/critic (dynamic_deephit)
 
 Adding a family: write a loader fn(record, state_dim, device) -> LoadedModel and call
-register_loader("<family>", fn). Put the config manager the loader prepares in
+register_loader("<family>", fn). Families whose networks do not take RL states (e.g.
+dynamic_deephit, which produces them) register with uses_state_dim=False; load_model then
+skips inferring a state dimension. Put the config manager the loader prepares in
 loader_extras["config_manager"] so data.py can build processors from it. If its actor has a different output API, also pass
 actor_outputs=fn(model, states_tensor) -> dict of tensors.
 
@@ -63,6 +66,11 @@ class LoadedModel:
     @property
     def critic(self):
         return self.components.get("critic")
+
+    @property
+    def network(self):
+        """The single network of families without actor/critic components (e.g. dynamic_deephit)."""
+        return self.components.get("model")
 
     @property
     def config_manager(self):
@@ -154,15 +162,16 @@ def _as_np(x):
 
 @dataclass
 class LoaderSpec:
-    load: Callable[[RunRecord, int, Any], LoadedModel]
+    load: Callable[[RunRecord, Optional[int], Any], LoadedModel]
     actor_outputs: Optional[Callable[[LoadedModel, torch.Tensor], Dict[str, torch.Tensor]]] = None
+    uses_state_dim: bool = True          # False: the loader ignores state_dim (none is inferred)
 
 
 LOADERS: Dict[str, LoaderSpec] = {}
 
 
-def register_loader(family: str, load, actor_outputs=None):
-    LOADERS[family] = LoaderSpec(load=load, actor_outputs=actor_outputs)
+def register_loader(family: str, load, actor_outputs=None, uses_state_dim=True):
+    LOADERS[family] = LoaderSpec(load=load, actor_outputs=actor_outputs, uses_state_dim=uses_state_dim)
 
 
 # =============================================================================
@@ -222,7 +231,8 @@ def default_device():
 def load_model(record: RunRecord, state_dim: Optional[int] = None, device=None, use_cache=True,
                quiet=True) -> LoadedModel:
     """
-    Load one run. state_dim defaults to the run's Dynamic-DeepHit d_model.
+    Load one run. state_dim defaults to the run's Dynamic-DeepHit d_model (not used for
+    families registered with uses_state_dim=False).
     quiet=True suppresses what the family loader prints (config-manager setup etc.);
     warnings and errors still come through.
     """
@@ -231,7 +241,8 @@ def load_model(record: RunRecord, state_dim: Optional[int] = None, device=None, 
     if record.family not in LOADERS:
         raise ValueError(f"no loader registered for family {record.family!r} (register_loader)")
     spec = LOADERS[record.family]
-    state_dim = state_dim if state_dim is not None else infer_state_dim(record)
+    if spec.uses_state_dim and state_dim is None:
+        state_dim = infer_state_dim(record)
     device = device or default_device()
     if quiet:
         with contextlib.redirect_stdout(io.StringIO()):
@@ -328,3 +339,100 @@ def _load_sarsa(record: RunRecord, state_dim: int, device) -> LoadedModel:
 
 register_loader("cql", _load_cql, actor_outputs=_cql_actor_outputs)
 register_loader("sarsa", _load_sarsa)
+
+
+# ---- Dynamic-DeepHit -------------------------------------------------------------
+# LoadedModel.network is the TransformerDeepHitMulti; LoadedModel.config_manager is the run's
+# config with experiment_dir set to the run folder (what predict.py and the training Dataset use).
+
+# Prepare the config with load_configuration, as for the other families. Set False to use the
+# raw pickle if load_configuration cannot handle Dynamic-DeepHit configs.
+DDH_PREPARED_CONFIG = True
+
+
+def _as_bool(x) -> bool:
+    return str(x).strip().lower() == "true"
+
+
+def _ddh_config_manager(record: RunRecord):
+    """The run's config manager, pointed at its own run folder, checked against results.json."""
+    import copy as _copy
+    try:
+        cm = record.load_config_manager(remap=True, prepared=DDH_PREPARED_CONFIG)
+    except Exception as e:
+        if not DDH_PREPARED_CONFIG:
+            raise
+        warnings.warn(f"{record.label}: load_configuration failed ({type(e).__name__}: {e}); "
+                      f"using the raw config_manager.pkl")
+        cm = record.load_config_manager(remap=True, prepared=False)
+    if cm is None:
+        raise FileNotFoundError(f"{record.label}: no config_manager.pkl in {record.run_dir} or its parent")
+    # config_manager.pkl is shared by all seeds of a job folder (and models are cached),
+    # so every model gets its own copy before run-specific fields are set.
+    cm = _copy.copy(cm)
+    cm.experiment_dir = record.run_dir
+
+    # The training Dataset reads include_actions_in_state from the config manager, so it must
+    # agree with the run's own record, or the wrong columns would be dropped/kept at inference.
+    saved = record.hyperparams.get("include_actions_in_state")
+    in_cm = getattr(cm, "include_actions_in_state", None)
+    if in_cm is None:
+        raise AttributeError(f"{record.label}: config manager has no include_actions_in_state")
+    if saved is not None and _as_bool(saved) != _as_bool(in_cm):
+        raise ValueError(f"{record.label}: results.json has include_actions_in_state={saved!r} but "
+                         f"config_manager.pkl has {in_cm!r}")
+    return cm
+
+
+def _load_dynamic_deephit(record: RunRecord, state_dim, device) -> LoadedModel:
+    """
+    Rebuild TransformerDeepHitMulti from the run's checkpoint. Sizes come from the checkpoint's
+    weight shapes and the SAVED hyperparameters; state_dim is not used.
+    """
+    from src.supervised_learning.models.dynamic_deephit_transformer import TransformerDeepHitMulti
+    hp = record.hyperparams
+    cm = _ddh_config_manager(record)
+    ckpt = _read_checkpoint(record, device)
+    state_dict = ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt
+
+    required = ["input_projection.weight", "heads.0.4.weight", "causal_mask"]
+    missing = [k for k in required if k not in state_dict]
+    if missing:
+        raise KeyError(f"{record.label}: checkpoint is missing {missing}; "
+                       f"available keys include {list(state_dict)[:15]}")
+    feature_dim = state_dict["input_projection.weight"].shape[1]   # includes the +1 local-time feature
+    num_time_bins = state_dict["heads.0.4.weight"].shape[0]
+    num_targets = len({k.split(".")[1] for k in state_dict if k.startswith("heads.")})
+    max_seq_len = state_dict["causal_mask"].shape[0]
+    n_covariates = (state_dict["covariate_predictor.3.weight"].shape[0]
+                    if "covariate_predictor.3.weight" in state_dict else 0)
+
+    time_bins = getattr(cm, "time_bins", None)
+    if time_bins is not None and len(time_bins) - 1 != num_time_bins:
+        raise ValueError(f"{record.label}: config has {len(time_bins) - 1} time bins, "
+                         f"checkpoint has {num_time_bins}")
+    window_length = hp.get("window_length", max_seq_len)
+    if window_length != max_seq_len:
+        warnings.warn(f"{record.label}: window_length={window_length} but checkpoint max_seq_len={max_seq_len}")
+
+    net = TransformerDeepHitMulti(
+        feature_dim=feature_dim,
+        d_model=_require(record, "d_model"),
+        nhead=_require(record, "nhead"),
+        num_encoder_layers=_require(record, "num_encoder_layers"),
+        ff_factor=_require(record, "ff_factor"),
+        num_time_bins=num_time_bins,
+        num_targets=num_targets,
+        dropout=_require(record, "dropout"),
+        max_seq_len=max_seq_len,
+        # only the NUMBER of covariates shapes the network; the indices are used by the loss
+        predict_covariates=list(range(n_covariates)),
+        **{k: hp[k] for k in ("prediction_time_horizon", "cnn_kernel_size", "cnn_dilation") if k in hp},
+    ).to(device)
+    net.load_state_dict(state_dict, strict=True)        # any mismatch = model rebuilt wrongly
+    for p in net.parameters():
+        p.requires_grad_(False)
+    return LoadedModel(record=record, components={"model": net}, loader_extras={"config_manager": cm})
+
+
+register_loader("dynamic_deephit", _load_dynamic_deephit, uses_state_dim=False)

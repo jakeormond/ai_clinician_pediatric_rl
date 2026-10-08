@@ -23,6 +23,11 @@ severity bins) are the single place these are computed; analysis code should use
 Checks:
   check_rows_aligned       same rows/actions across processors; what differs (states, rewards)
   bellman_check            each critic should be most Bellman-consistent on its own data
+
+Dynamic-DeepHit prediction files (single place for their names and the ensemble format):
+  ddh_prediction_path(dir, split)          <dir>/<split>_predictions.h5 (a seed's run folder,
+                                            or the job folder for the seed-averaged file)
+  load_ensemble_health_score(dir, split)   the seed-averaged health score (shared RL reward)
 """
 
 from __future__ import annotations
@@ -392,3 +397,63 @@ def bellman_check(models: Dict[Any, Any], processors: Dict[Any, Any], gamma=None
         r["matches_own"] = (best == mk) if mk in processors else None
         rows[f"model {mk}"] = r
     return pd.DataFrame(rows).T
+
+
+# =============================================================================
+# Dynamic-DeepHit prediction files and the seed-averaged (ensemble) health score
+# =============================================================================
+# The ensemble file sits in the job folder holding the seeds' run folders and is written by
+# evaluate_dynamic_deephit_final_seeds.build_ensemble_health_score. Datasets:
+#   health_score (N,)          mean across seeds -> the shared reward source
+#   health_score_sd (N,)       across-seed SD
+#   health_score_seeds (N, S)  each seed's score, columns in the order of the 'seeds' attribute
+#   stay_ids, index_ptr, event, feature_names (bytes), carry_forward_ind, response_zero_ind
+# Attributes: seeds (averaged DDH seeds), include_actions_in_state (variant).
+# It has no predictions/entropy/model_outputs: states always come from each seed's own file.
+
+ENSEMBLE_REQUIRED_KEYS = ("health_score", "health_score_seeds", "stay_ids", "index_ptr")
+
+
+def ddh_prediction_path(directory, split) -> str:
+    import os
+    return os.path.join(directory, f"{split}_predictions.h5")
+
+
+def is_ensemble_file(path) -> bool:
+    """True if path is a complete seed-averaged health-score file."""
+    import os
+    import h5py
+    if not os.path.isfile(path):
+        return False
+    try:
+        with h5py.File(path, "r") as f:
+            return all(k in f for k in ENSEMBLE_REQUIRED_KEYS)
+    except OSError:
+        return False
+
+
+def load_ensemble_health_score(directory_or_path, split=None, keys=None) -> Dict[str, Any]:
+    """
+    Read the seed-averaged health score: load_ensemble_health_score(job_dir, "train") or
+    load_ensemble_health_score(path_to_file). keys: datasets to read (default all).
+    Returns the datasets plus 'seeds' (list of int), 'include_actions_in_state' (str) and
+    'path'; feature_names are decoded to str.
+    """
+    import h5py
+    path = directory_or_path if split is None else ddh_prediction_path(directory_or_path, split)
+    with h5py.File(path, "r") as f:
+        missing = [k for k in ENSEMBLE_REQUIRED_KEYS if k not in f]
+        if missing:
+            raise ValueError(f"{path} is not a complete ensemble file (missing {missing})")
+        wanted = list(f.keys()) if keys is None else list(keys)
+        absent = [k for k in wanted if k not in f]
+        if absent:
+            raise KeyError(f"{path} has no {absent}; available: {sorted(f.keys())}")
+        out = {k: f[k][()] for k in wanted}
+        out["seeds"] = [int(s) for s in f.attrs["seeds"]]
+        out["include_actions_in_state"] = str(f.attrs.get("include_actions_in_state", "unknown"))
+    if "feature_names" in out:
+        out["feature_names"] = [n.decode("utf-8") if isinstance(n, bytes) else str(n)
+                                for n in out["feature_names"]]
+    out["path"] = path
+    return out

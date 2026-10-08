@@ -5,15 +5,29 @@ Runs inference and analysis for the 5 final Dynamic-DeepHit seeds, for both
 variants (actions included in the input / actions omitted). Heavy lifting
 (health score, entropy, plotting) is reused from predict.py, and inference
 windows are built with the training DynamicDeepHitTransformerDataset;
-this module handles model loading, seed discovery, a corrected bootstrap,
-cross-seed reward agreement and the vaso-onset event study.
+this module handles inference, a corrected bootstrap, cross-seed reward
+agreement, the seed-averaged health score and the vaso-onset event study.
+
+Run discovery, configuration and model loading come from the shared analysis
+framework in src/rl/analysis, where dynamic_deephit is a built-in family
+(runs.py: discovery and data identity; models.py: loader; data.py: prediction
+file names and the ensemble reader):
+
+  study  = make_ddh_study({"with_actions": dir_a, "without_actions": dir_b})
+  models = load_ddh_models(study)          # {variant: {seed: LoadedModel}}
+  m = models["with_actions"][0]
+  m.network               the TransformerDeepHitMulti network (eval mode)
+  m.config_manager        the run's config, prepared for this machine, experiment_dir = run folder
+  m.record.hyperparams    saved hyperparameters (results.json); m.seed from the same place
+
+Every function below that takes `models` accepts one variant's {seed: LoadedModel}
+dict (or a list of LoadedModels).
 
 Place in src/supervised_learning/ (next to predict.py).
 """
 import os
 import gc
 import json
-import pickle
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -28,7 +42,11 @@ from ..data.data_processor_for_shards import ShardProcessor
 from .training import create_processor_from_shards
 from ..rl.replay_buffer import DynamicDeepHitTransformerDataset
 from . import predict as ddh_predict
-from .models.dynamic_deephit_transformer import TransformerDeepHitMulti
+from ..rl.analysis.runs import DDH_FAMILY, Study, make_study
+from ..rl.analysis.models import LoadedModel, load_study_models
+from ..rl.analysis.data import (  # noqa: F401  (re-exported for the notebook)
+    ddh_prediction_path as prediction_path, is_ensemble_file, load_ensemble_health_score,
+)
 from .dynamic_deephit_evaluation import (
     calculate_c_index, calculate_brier_score, calculate_roc_and_prc, calculate_all_bin_ece,
 )
@@ -36,182 +54,51 @@ from .dynamic_deephit_evaluation import (
 VARIANTS = {"with_actions": True, "without_actions": False}
 
 
-# ----------------------------------------------------------------------------
-# Seed discovery (seed read from each run's own files, never from folder order)
-# ----------------------------------------------------------------------------
-def _find_key(obj, keys):
-    """Depth-first search for the first matching key in nested dicts/lists."""
-    if isinstance(obj, dict):
-        for k in keys:
-            if k in obj and not isinstance(obj[k], (dict, list)):
-                return obj[k]
-        for v in obj.values():
-            found = _find_key(v, keys)
-            if found is not None:
-                return found
-    elif isinstance(obj, list):
-        for v in obj:
-            found = _find_key(v, keys)
-            if found is not None:
-                return found
-    return None
+def _as_bool(x):
+    return str(x).strip().lower() == "true"
 
 
-def load_results_json(run_dir):
-    with open(os.path.join(run_dir, "results.json"), "r") as f:
-        return json.load(f)
-
-
-def get_run_seed(model_dir, seed_keys=("seed", "random_seed")):
-    """Seed of one run, read from results.json, then the checkpoint, then config_manager.pkl."""
-    seed = _find_key(load_results_json(model_dir), seed_keys)
-    if seed is None:
-        ckpt = torch.load(os.path.join(model_dir, "final_model.pt"),
-                          map_location="cpu", weights_only=False)
-        seed = _find_key(ckpt, seed_keys) if isinstance(ckpt, dict) else None
-    if seed is None:
-        try:
-            seed = _find_key(vars(_load_config_manager(model_dir)), seed_keys)
-        except FileNotFoundError:
-            pass
-    if seed is None:
-        raise ValueError(f"Could not find a seed in results.json, the checkpoint or "
-                         f"config_manager.pkl for {model_dir}")
-    return int(seed)
-
-
-def discover_seed_runs(final_model_dir, expected_actions_in_state=None,
-                       seed_keys=("seed", "random_seed")):
-    """Map seed -> run directory for every run under final_model_dir.
-
-    A run directory is any folder containing final_model.pt. The seed is read
-    from results.json (falling back to the checkpoint). If results.json records
-    actions_in_state, it is checked against the expected variant.
+def make_ddh_study(variant_dirs, name="ddh", strict=True) -> Study:
     """
-    run_dirs = sorted(root for root, _, files in os.walk(final_model_dir)
-                      if "final_model.pt" in files)
-    if not run_dirs:
-        raise ValueError(f"No final_model.pt found under {final_model_dir}")
-
-    runs = {}
-    for run_dir in run_dirs:
-        results = load_results_json(run_dir)
-        seed = get_run_seed(run_dir, seed_keys)
-        if seed in runs:
-            raise ValueError(f"Seed {seed} found twice: {runs[seed]} and {run_dir}")
-
-        recorded = _find_key(results, ("actions_in_state", "include_actions_in_state"))
-        if recorded is not None and expected_actions_in_state is not None:
-            recorded_bool = str(recorded).lower() == "true"
-            if recorded_bool != expected_actions_in_state:
-                raise ValueError(f"{run_dir} records actions_in_state={recorded}, "
-                                 f"expected {expected_actions_in_state}")
-        runs[seed] = run_dir
-    return dict(sorted(runs.items()))
-
-
-def _load_config_manager(model_dir):
-    """config_manager.pkl from the run folder, or its parent (job) folder."""
-    path = os.path.join(model_dir, "config_manager.pkl")
-    if not os.path.isfile(path):
-        parent_path = os.path.join(os.path.dirname(model_dir), "config_manager.pkl")
-        if os.path.isfile(parent_path):
-            path = parent_path
-        else:
-            raise FileNotFoundError(
-                f"No config_manager.pkl found at {path} or in the parent directory ({parent_path})."
-            )
-    with open(path, "rb") as f:
-        return pickle.load(f)
-
-
-def load_dynamic_deephit_model(model_dir, expected_actions_in_state=None, device=None):
+    Study of DDH runs grouped by variant. variant_dirs: {"with_actions": dir, "without_actions": dir};
+    each dir is searched recursively for run folders. Checks (printed): seeds unique, same
+    seed set in both variants, hyperparameters identical within a variant, and only
+    include_actions_in_state differing between variants. Each group's label must agree
+    with its runs' include_actions_in_state.
     """
-    Loads one trained Dynamic-DeepHit transformer (+ its config_manager and
-    hyperparameters) from a specific, already-resolved run directory.
+    study = make_study(variant_dirs, family=DDH_FAMILY, name=name)
+    for (variant,), seed, rec in study.items():
+        if variant in VARIANTS and _as_bool(rec.hyperparams.get("include_actions_in_state")) != VARIANTS[variant]:
+            raise ValueError(f"{rec.label}: in group {variant!r} but include_actions_in_state="
+                             f"{rec.hyperparams.get('include_actions_in_state')!r}")
+    # actions_shift may also differ between variants: it only controls final-row masking of the
+    # action columns, which the training Dataset removes entirely when include_actions_in_state
+    # is 'False', so it has no effect on the action-free runs. It is still checked within each variant.
+    study.check(expected_between=("_group", "include_actions_in_state", "actions_shift"), strict=strict)
+    return study
 
-    Mirrors the BC load_actor(): config_manager.pkl is found in the run folder
-    (or its parent), hyperparameters come from results.json, and architecture
-    dimensions are read from the checkpoint's own weight shapes, so no data
-    processor is needed to rebuild the model.
 
-    expected_actions_in_state: used only as a SANITY CHECK against the loaded
-        config_manager's training_config['actions_in_state'] (warning, not error).
+def load_ddh_models(study: Study, device=None, verbose=True):
+    """{variant: {seed: LoadedModel}} for every run in a study from make_ddh_study."""
+    return {key[0]: seeds for key, seeds in load_study_models(study, device=device, verbose=verbose).items()}
 
-    The returned config_manager has experiment_dir set to model_dir, so it can
-    be passed straight to run_predictions and predict.py's plotting functions.
 
-    Returns: (model, config_manager, hyperparams)
-    """
-    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def _seed_models(models):
+    """[(seed, LoadedModel)] sorted by seed, from {seed: LoadedModel} or a list of LoadedModels."""
+    items = list(models.items()) if isinstance(models, dict) else [(m.seed, m) for m in models]
+    seeds = [s for s, _ in items]
+    if len(set(seeds)) != len(seeds):
+        raise ValueError(f"duplicate seeds: {seeds}")
+    for s, m in items:
+        if m.seed != s:
+            raise ValueError(f"model keyed as seed {s} records seed {m.seed} ({m.record.run_dir})")
+    return sorted(items, key=lambda kv: kv[0])
 
-    hyperparams = load_results_json(model_dir)["hyperparameters"]
 
-    config_manager = _load_config_manager(model_dir)
-    config_manager.experiment_dir = model_dir
-    recorded = hyperparams.get(
-        "include_actions_in_state",
-        getattr(config_manager, "training_config", {}).get("actions_in_state", None),
-    )
-    if expected_actions_in_state is not None and recorded is not None:
-        if isinstance(expected_actions_in_state, str):
-            raise TypeError("expected_actions_in_state must be True/False, e.g. eval_ddh.VARIANTS[variant]")
-        recorded_bool = str(recorded).strip().lower() == "true"
-        if recorded_bool != expected_actions_in_state:
-            print(f"Warning: expected actions_in_state={expected_actions_in_state} but "
-                  f"the run records {recorded!r} for {model_dir}")
-
-    final_model_path = os.path.join(model_dir, "final_model.pt")
-    checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
-    state_dict = (checkpoint["model_state_dict"]
-                  if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint else checkpoint)
-
-    # Architecture read directly from the saved weights (cannot disagree with them).
-    required = ["input_projection.weight", "heads.0.4.weight", "causal_mask"]
-    missing = [k for k in required if k not in state_dict]
-    if missing:
-        raise KeyError(f"Checkpoint at {final_model_path} is missing {missing}; "
-                       f"available keys include {list(state_dict)[:15]}")
-    feature_dim = state_dict["input_projection.weight"].shape[1]   # already includes the +1 local-time feature
-    num_time_bins = state_dict["heads.0.4.weight"].shape[0]
-    num_targets = len({k.split(".")[1] for k in state_dict if k.startswith("heads.")})
-    max_seq_len = state_dict["causal_mask"].shape[0]
-    n_covariates = (state_dict["covariate_predictor.3.weight"].shape[0]
-                    if "covariate_predictor.3.weight" in state_dict else 0)
-
-    time_bins = getattr(config_manager, "time_bins", None)
-    if time_bins is not None and len(time_bins) - 1 != num_time_bins:
-        raise ValueError(f"config_manager.time_bins has {len(time_bins) - 1} bins but the "
-                         f"checkpoint has {num_time_bins} for {model_dir}")
-    window_length = getattr(config_manager, "training_config", {}).get("window_length", max_seq_len)
-    if window_length != max_seq_len:
-        print(f"Warning: window_length={window_length} in config_manager but max_seq_len="
-              f"{max_seq_len} in checkpoint for {model_dir}")
-
-    model = TransformerDeepHitMulti(
-        feature_dim=feature_dim,
-        d_model=hyperparams["d_model"],
-        nhead=hyperparams["nhead"],
-        num_encoder_layers=hyperparams["num_encoder_layers"],
-        ff_factor=hyperparams["ff_factor"],
-        num_time_bins=num_time_bins,
-        num_targets=num_targets,
-        dropout=hyperparams["dropout"],
-        max_seq_len=max_seq_len,
-        # Only the NUMBER of covariates affects the architecture; the indices
-        # themselves are used by the training loss, not the forward pass.
-        predict_covariates=list(range(n_covariates)),
-        **{k: hyperparams[k] for k in ("prediction_time_horizon", "cnn_kernel_size", "cnn_dilation")
-           if k in hyperparams},
-    ).to(device)
-
-    # strict: any mismatch here means the model was rebuilt wrongly
-    model.load_state_dict(state_dict, strict=True)
-    model.eval()
-    for p in model.parameters():
-        p.requires_grad_(False)
-
-    return model, config_manager, hyperparams
+def _net(m: LoadedModel):
+    if m.network is None:
+        raise ValueError(f"{m.record.label} is not a Dynamic-DeepHit model")
+    return m.network
 
 
 # ----------------------------------------------------------------------------
@@ -269,10 +156,11 @@ def check_inputs(model, config_manager, dataset, action_names=None):
     return found
 
 
-def check_action_features(model, config_manager, data, split="test"):
-    """Standalone input check, printing what the model actually receives."""
+def check_action_features(m: LoadedModel, data, split="test"):
+    """Standalone input check for one LoadedModel, printing what the model actually receives."""
+    config_manager = m.config_manager
     dataset = build_inference_dataset(config_manager, data, split)
-    found = check_inputs(model, config_manager, dataset)
+    found = check_inputs(_net(m), config_manager, dataset)
     print(f"include_actions_in_state={config_manager.include_actions_in_state!r}, "
           f"actions_shift={dataset.actions_shift}, inputs={len(dataset.feature_names) + 1}, "
           f"action-derived features: {found}")
@@ -290,10 +178,6 @@ def _input_settings(config_manager):
 # ----------------------------------------------------------------------------
 # Predictions (using the already-loaded models and data)
 # ----------------------------------------------------------------------------
-def prediction_path(model_dir, split):
-    return os.path.join(model_dir, f"{split}_predictions.h5")
-
-
 def _row_starts(dataset, device):
     """For every row, the row index where its stay starts."""
     index_ptr = dataset.index_ptr
@@ -392,8 +276,8 @@ def run_predictions(models, data_by_split, splits=("train", "val", "test"),
                     batch_size=1024, overwrite=False, n_verify=256):
     """Predict every split for every loaded model, using data that is already in memory.
 
-    models: list of (model, config_manager, hyperparams, seed) for ONE variant.
-    data_by_split: {split: loaded data} (e.g. the `processors` dict from load_dataset).
+    models: ONE variant's {seed: LoadedModel}.
+    data_by_split: {split: loaded data} (e.g. from load_datasets).
 
     For each split, the training Dataset is built once (its constructor handles
     action removal and masking settings) and shared by all seeds, which must have
@@ -403,18 +287,19 @@ def run_predictions(models, data_by_split, splits=("train", "val", "test"),
     and freed. The loaded data is not modified. Existing files are skipped
     unless overwrite=True.
     """
-    settings = {_input_settings(cm) for _, cm, _, _ in models}
+    items = _seed_models(models)
+    settings = {_input_settings(m.config_manager) for _, m in items}
     if len(settings) != 1:
         raise ValueError(f"Seeds have different input settings, cannot share a Dataset: {settings}")
-    device = next(models[0][0].parameters()).device
+    device = next(_net(items[0][1]).parameters()).device
 
     for split in splits:
-        todo = [m for m in models
-                if overwrite or not os.path.exists(prediction_path(m[1].experiment_dir, split))]
+        todo = [(s, m) for s, m in items
+                if overwrite or not os.path.exists(prediction_path(m.config_manager.experiment_dir, split))]
         if not todo:
             print(f"{split}: all seeds already done, skipping")
             continue
-        dataset = build_inference_dataset(todo[0][1], data_by_split[split], split)
+        dataset = build_inference_dataset(todo[0][1].config_manager, data_by_split[split], split)
         trajectories = dataset.trajectories.to(device)
         row_starts = _row_starts(dataset, device)
         print(f"{split}: {dataset.n_windows} windows, {len(dataset.feature_names) + 1} inputs, "
@@ -422,9 +307,10 @@ def run_predictions(models, data_by_split, splits=("train", "val", "test"),
         if n_verify:
             verify_windows(dataset, trajectories, row_starts, n_check=n_verify)
 
-        for model, config_manager, _, seed in todo:
-            check_inputs(model, config_manager, dataset)
-            logits, latents = _predict_dataset(model, dataset, trajectories, row_starts, batch_size)
+        for seed, m in todo:
+            config_manager = m.config_manager
+            check_inputs(_net(m), config_manager, dataset)
+            logits, latents = _predict_dataset(_net(m), dataset, trajectories, row_starts, batch_size)
             path = prediction_path(config_manager.experiment_dir, split)
             _save_predictions(data_by_split[split], path, logits, latents)
             print(f"  seed {seed}: saved to {path}")
@@ -445,8 +331,8 @@ def load_test_predictions(models, keys_to_exclude=("compressed_latents", "model_
     to keep them (e.g. for latent probes).
     """
     out = {}
-    for _, config_manager, _, seed in models:
-        path = prediction_path(config_manager.experiment_dir, "test")
+    for seed, m in _seed_models(models):
+        path = prediction_path(m.config_manager.experiment_dir, "test")
         if not os.path.exists(path):
             raise FileNotFoundError(f"No test predictions for seed {seed}: {path} (run run_predictions first)")
         out[seed] = ShardProcessor.load_dynamic_deephit_predictions_from_h5(
@@ -467,8 +353,28 @@ def dataset_filepath(config_manager, split="test"):
                         f"split_{cm.split_num}", "training_set", name)
 
 
-def load_dataset(config_manager, split="test"):
-    return ShardProcessor.load_dynamic_deephit_dataset_from_h5(dataset_filepath(config_manager, split))
+def load_dataset(model_or_config, split="test"):
+    """Pre-normalised DDH dataset for one split (accepts a LoadedModel or a config manager)."""
+    cm = model_or_config.config_manager if isinstance(model_or_config, LoadedModel) else model_or_config
+    return ShardProcessor.load_dynamic_deephit_dataset_from_h5(dataset_filepath(cm, split))
+
+
+def load_datasets(models, splits=("train", "val", "test")):
+    """
+    {split: dataset} loaded once and shared by every model passed (e.g. both variants:
+    the action columns are dropped inside the training Dataset, not in these files).
+    Raises if the models would read different dataset files.
+    """
+    flat = []
+    for x in (models.values() if isinstance(models, dict) else models):
+        flat.extend(x.values() if isinstance(x, dict) else [x])
+    out = {}
+    for split in splits:
+        paths = {dataset_filepath(m.config_manager, split) for m in flat}
+        if len(paths) != 1:
+            raise ValueError(f"models read different {split} dataset files: {sorted(paths)}")
+        out[split] = ShardProcessor.load_dynamic_deephit_dataset_from_h5(paths.pop())
+    return out
 
 
 def check_alignment(predictions, dataset):
@@ -630,14 +536,14 @@ _HS_ONLY_EXCLUDE = ("compressed_latents", "model_outputs", "predictions", "entro
 def load_health_scores(models, split):
     """Health score of every seed for one split, loading nothing heavy.
 
-    models: list of (model, config_manager, hyperparams, seed) for ONE variant.
+    models: ONE variant's {seed: LoadedModel}.
     Returns (hs_by_seed {seed: (N,) array}, meta) where meta is the first seed's
     loaded dict minus the per-model keys (stay_ids, index_ptr, event, ...).
     Raises if stays or row counts differ between seeds.
     """
     hs_by_seed, meta = {}, None
-    for _, config_manager, _, seed in models:
-        path = prediction_path(config_manager.experiment_dir, split)
+    for seed, m in _seed_models(models):
+        path = prediction_path(m.config_manager.experiment_dir, split)
         preds = ShardProcessor.load_dynamic_deephit_predictions_from_h5(
             path, keys_to_exclude=list(_HS_ONLY_EXCLUDE))
         if meta is None:
@@ -709,7 +615,7 @@ def seed_agreement_summary(hs_by_seed, index_ptr):
 def plot_seed_trajectories(hs_by_seed, meta, dataset=None, ensemble=None, n_stays=6, rng_seed=0, save_path=None):
     """Health score of every seed, plus the seed mean, for a few random stays.
 
-    Outcomes come from `dataset` (e.g. processors["test"]), since prediction
+    Outcomes come from `dataset` (e.g. datasets["test"]), since prediction
     files don't store them; its stay_ids must match the predictions. Without a
     dataset, stays are sampled without regard to outcome.
 
@@ -733,7 +639,7 @@ def plot_seed_trajectories(hs_by_seed, meta, dataset=None, ensemble=None, n_stay
     if ensemble is not None:
         if not np.array_equal(np.asarray(ensemble["stay_ids"]), np.asarray(meta["stay_ids"])):
             raise ValueError("stay_ids of the ensemble file and the predictions differ")
-        ens_seeds = [int(x) for x in ensemble["attr_seeds"]]
+        ens_seeds = list(ensemble["seeds"])
         if sorted(ens_seeds) != sorted(hs_by_seed):
             raise ValueError(f"Ensemble averaged seeds {ens_seeds}, predictions have {list(hs_by_seed)}")
         recomputed = np.mean([hs_by_seed[s] for s in ens_seeds], axis=0)
@@ -783,7 +689,7 @@ def ensemble_dir(models):
 
     Raises if the seeds do not all sit in the same parent folder.
     """
-    parents = {os.path.dirname(os.path.normpath(cm.experiment_dir)) for _, cm, _, _ in models}
+    parents = {os.path.dirname(os.path.normpath(m.record.run_dir)) for _, m in _seed_models(models)}
     if len(parents) != 1:
         raise ValueError(f"Seeds are not in a single job folder: {sorted(parents)}")
     return parents.pop()
@@ -792,7 +698,7 @@ def ensemble_dir(models):
 def build_ensemble_health_score(models, split, data, out_dir=None, overwrite=False):
     """Average the seeds' health scores for one split and save for RL training.
 
-    data: the loaded dataset for this split (e.g. processors[split]); supplies
+    data: the loaded dataset for this split (e.g. datasets[split]); supplies
     feature_names and event, which prediction files do not return.
 
     Written with h5py to <out_dir>/<split>_predictions.h5 using the same dataset
@@ -803,8 +709,9 @@ def build_ensemble_health_score(models, split, data, out_dir=None, overwrite=Fal
       health_score_sd     across-seed SD
       health_score_seeds  (N, n_seeds) per-seed scores, columns in the order of the 'seeds' attribute
     No latents are included: RL states still come from each seed's own file.
-    The file is read back with the standard prediction loader to confirm health_score
-    survives the round trip. ensemble_info.json records which runs were averaged.
+    The format is documented in src/rl/analysis/data.py, whose load_ensemble_health_score
+    (used by analysis and RL training) reads the file back as a check.
+    ensemble_info.json records which runs were averaged.
 
     out_dir defaults to the job folder that holds the seeds' run folders and
     config_manager.pkl (see ensemble_dir).
@@ -814,16 +721,12 @@ def build_ensemble_health_score(models, split, data, out_dir=None, overwrite=Fal
     os.makedirs(out_dir, exist_ok=True)
     path = prediction_path(out_dir, split)
     if os.path.exists(path) and not overwrite:
-        try:
-            with h5py.File(path, "r") as f:
-                complete = "health_score" in f and "health_score_seeds" in f
-        except OSError:
-            complete = False
-        if complete:
+        if is_ensemble_file(path):
             print(f"{split}: ensemble exists, skipping ({path})")
             return path
-        print(f"{split}: existing file is incomplete (no health_score), rebuilding ({path})")
+        print(f"{split}: existing file is incomplete, rebuilding ({path})")
 
+    first = _seed_models(models)[0][1]
     hs_by_seed, meta = load_health_scores(models, split)
     ddd = _dataset_dict(data)
     for key in ("stay_ids", "index_ptr"):
@@ -847,23 +750,20 @@ def build_ensemble_health_score(models, split, data, out_dir=None, overwrite=Fal
         f.create_dataset("health_score_sd", data=stacked.std(axis=1, ddof=1).astype(np.float32))
         f.create_dataset("health_score_seeds", data=stacked.astype(np.float32))
         f.attrs["seeds"] = np.asarray(seeds, dtype=np.int32)
-        f.attrs["include_actions_in_state"] = str(models[0][1].include_actions_in_state)
+        f.attrs["include_actions_in_state"] = str(first.config_manager.include_actions_in_state)
 
-    # round-trip through the standard loader the RL code uses
-    try:
-        back = ShardProcessor.load_dynamic_deephit_predictions_from_h5(path, keys_to_exclude=[])
-        ok = "health_score" in back and np.allclose(np.asarray(back["health_score"]), mean_hs)
-        print(f"{split}: standard loader returns keys {sorted(back)}; health_score intact: {ok}")
-    except Exception as e:  # report rather than fail: the file itself is complete
-        print(f"{split}: standard loader could not read the ensemble file ({type(e).__name__}: {e}); "
-              f"use load_ensemble_health_score instead")
+    # round trip through the shared reader used by analysis and RL training
+    back = load_ensemble_health_score(path, keys=("health_score", "stay_ids", "index_ptr"))
+    if not (np.allclose(back["health_score"], mean_hs) and back["seeds"] == seeds
+            and np.array_equal(back["index_ptr"], np.asarray(meta["index_ptr"]))):
+        raise RuntimeError(f"{path}: file read back does not match what was written")
 
     info_path = os.path.join(out_dir, "ensemble_info.json")
     info = json.load(open(info_path)) if os.path.exists(info_path) else {}
     info.update({
         "seeds": seeds,
-        "run_dirs": {str(seed): cm.experiment_dir for _, cm, _, seed in models},
-        "include_actions_in_state": str(models[0][1].include_actions_in_state),
+        "run_dirs": {str(seed): m.record.run_dir for seed, m in _seed_models(models)},
+        "include_actions_in_state": str(first.config_manager.include_actions_in_state),
         "splits_written": sorted(set(info.get("splits_written", [])) | {split}),
         "created": datetime.now().isoformat(timespec="seconds"),
     })
@@ -871,17 +771,6 @@ def build_ensemble_health_score(models, split, data, out_dir=None, overwrite=Fal
         json.dump(info, f, indent=2)
     print(f"{split}: ensemble of seeds {seeds} saved to {path}")
     return path
-
-
-def load_ensemble_health_score(path):
-    """Read an ensemble file written by build_ensemble_health_score (all keys, plus attributes)."""
-    out = {}
-    with h5py.File(path, "r") as f:
-        for key in f.keys():
-            out[key] = f[key][()]
-        out.update({f"attr_{k}": v for k, v in f.attrs.items()})
-    out["feature_names"] = [n.decode("utf-8") for n in out["feature_names"]]
-    return out
 
 
 # ----------------------------------------------------------------------------

@@ -62,7 +62,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --hospital choc \
     --experiment_type reinforcement_learning \
     --model_type basic_q \
-    --reward_type health_score \
+    --reward_type terminal_bellman \
     --mode single_split \
     --split_num 0 \
     --search_variant best_hyperparameters \

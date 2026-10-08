@@ -18,6 +18,11 @@ class ConfigManager:
         for key, value in vars(args).items():
             setattr(self, key, value)
 
+        # if has attribute actions_shift, convert it to boolean
+        if hasattr(args, "actions_shift"):
+            self.actions_shift = True if args.actions_shift.lower() == "true" else False
+
+
         if not hasattr(args, "experiment_variant"):
             self.experiment_variant = None
 

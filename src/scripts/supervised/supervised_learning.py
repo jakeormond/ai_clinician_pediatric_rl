@@ -165,6 +165,10 @@ def parse_arguments():
                         choices=['True', 'False'],
                         help='Whether to include actions in the state (default: True)')
 
+    parser.add_argument('--actions_shift', type=str, default='False',
+                        choices=['True', 'False'],
+                        help='Whether to shift actions in the state (default: Fals)')
+
     args = parser.parse_args()
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")

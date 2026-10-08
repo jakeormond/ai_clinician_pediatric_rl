@@ -837,6 +837,7 @@ def train_with_hyperparameters(
     set_seed(seed)
 
     hyperparams['include_actions_in_state'] = config_manager.include_actions_in_state
+    hyperparams['actions_shift'] = config_manager.actions_shift
 
     # initialize wandb for this training run
     run = wandb_init(hyperparams, job_id)

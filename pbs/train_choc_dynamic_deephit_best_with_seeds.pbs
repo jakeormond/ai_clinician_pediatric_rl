@@ -73,7 +73,8 @@ python -u -m src.scripts.supervised.supervised_learning \
     --n_epochs 200 \
     --final_timestep_only True \
     --action_dir intake-vis \
-    --include_actions_in_state False \
+    --include_actions_in_state True \
+    --actions_shift False \
     --start_time $START_TIME 
 
 exit_code=$?

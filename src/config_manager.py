@@ -450,7 +450,8 @@ class ConfigManager:
                         split_name,
                         "with_actions"
                     )
-                    state_model_dir = final_model_dir
+                    state_model_dir = os.path.join(final_model_dir, "for_states")
+                    reward_model_dir = os.path.join(final_model_dir, "for_rewards")
                 else:
                     final_model_dir = os.path.join(
                         reward_path,
@@ -460,8 +461,9 @@ class ConfigManager:
                     state_model_dir = os.path.join(
                         reward_path,
                         split_name,
-                        "with_actions"
+                        "without_actions",
                     )
+                    reward_model_dir = state_model_dir
                                 
                 # final_model_dir = os.path.join(
                 #     reward_path,
@@ -472,7 +474,7 @@ class ConfigManager:
 
                 state_and_reward_model_dirs = {
                     "state_model_dir": state_model_dir,
-                    "reward_model_dir": final_model_dir
+                    "reward_model_dir": reward_model_dir
                 }
 
                 for key, path in state_and_reward_model_dirs.items():

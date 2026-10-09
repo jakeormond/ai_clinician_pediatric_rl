@@ -860,7 +860,7 @@
                 "--hospital", "choc", 
                 "--experiment_type", "reinforcement_learning",
                 "--model_type", "cql_with_logprobs", 
-                "--reward_type", "terminal_bellman",
+                "--reward_type", "health_score",
                 "--mode", "single_split", 
                 "--split_num", "0",
                 "--model_dir", "sepsis_models/intake_vis",

@@ -9,7 +9,7 @@
 #PBS -e /rds/general/user/jormond/home/projects/ai_clinician/code/ai_clinician_pediatric_rl/pbs/logs
 
 # Resources: nodes, CPUs, memory
-#PBS -l select=1:ncpus=4:mem=64gb:ngpus=1
+#PBS -l select=1:ncpus=1:mem=64gb:ngpus=1
 #PBS -l walltime=24:00:00
 
 
@@ -28,7 +28,7 @@ export START_TIME
 module load miniforge/3
 
 # Set environment variables
-export OMP_NUM_THREADS=4   # matches ncpus
+export OMP_NUM_THREADS=1   # matches ncpus
 export PYTHONUNBUFFERED=1  
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 

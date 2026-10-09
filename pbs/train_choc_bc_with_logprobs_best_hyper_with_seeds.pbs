@@ -27,7 +27,7 @@ export START_TIME
 module load miniforge/3
 
 # Set environment variables
-export OMP_NUM_THREADS=1   # matches ncpus
+export OMP_NUM_THREADS=4   # matches ncpus
 export PYTHONUNBUFFERED=1  
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
@@ -45,7 +45,9 @@ echo "Job ID: $PBS_JOBID"
 echo "Job Name: $PBS_JOBNAME"
 echo "Node(s): $PBS_NODEFILE"
 echo "CPUs allocated (NCPUS): ${NCPUS:-unknown}"
-echo "CPUs per node (PBS_NUM_PPN): ${PBS_NUM_PPN:-unknown}"echo "Memory: 64GB"
+echo "CPUs per node (PBS_NUM_PPN): ${PBS_NUM_PPN:-unknown}"
+echo "Memory: 64GB"
+echo "GPU: ${PBS_GPU:-unknown}"
 echo "OMP_NUM_THREADS: ${OMP_NUM_THREADS:-unknown}"
 echo "Start time: $(date)"
 echo "Working directory: $(pwd)"

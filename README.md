@@ -224,5 +224,3 @@ and are checked against `Dataset.__getitem__` before every prediction run.
 ## Citation and acknowledgements
 
 <!-- TODO: paper(s) in preparation; funder acknowledgement wording; collaborators; licence. -->
-
-Funded by the BMA Foundation.

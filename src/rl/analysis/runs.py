@@ -21,9 +21,6 @@ Design rules (from past problems):
 
 Adding a model family: call register_family(...) with a detector and, if needed, custom
 readers. Grouping, overrides and data identity work unchanged for every family.
-
-Built-in families: cql, sarsa, and dynamic_deephit (the supervised model whose outputs
-are the RL states and whose health score is the reward; see models.py for its loader).
 """
 
 from __future__ import annotations
@@ -421,11 +418,10 @@ def default_data_identity(record: "RunRecord", cm) -> DataIdentity:
         if p is not None and not os.path.isdir(p):
             warnings.warn(f"{record.run_dir}: {name} {p} does not exist on this machine "
                           f"(missing path mapping? see set_path_mappings)")
-    seed_mode = getattr(cm, "seed_mode", None)
-    multi = seed_mode is not None and seed_mode != "single_seed"
-    state_seed = record.seed if multi else None
-    reward_seed = None if (_has_direct_predictions(reward_src) or not multi) else record.seed
-    return DataIdentity(state_src, state_seed, reward_src, reward_seed, seed_mode)
+    # RL seed k always uses Dynamic-DeepHit seed k (states are per seed); the config's seed_mode is ignored.
+    state_seed = record.seed
+    reward_seed = None if _has_direct_predictions(reward_src) else record.seed      # averaged reward is shared
+    return DataIdentity(state_src, state_seed, reward_src, reward_seed, "matched_seeds")
 
 
 # =============================================================================
@@ -689,23 +685,3 @@ def make_study(roots, family=None, group_by=(), name="", verify_checkpoint=False
 
 register_family(FamilySpec(name="cql", detect=_path_contains("cql_with_logprobs", "cql")))
 register_family(FamilySpec(name="sarsa", detect=_path_contains("basic_q")))
-
-
-# ---- Dynamic-DeepHit -------------------------------------------------------------
-DDH_FAMILY = "dynamic_deephit"
-
-
-def _ddh_data_identity(record: "RunRecord", cm) -> DataIdentity:
-    """
-    Dynamic-DeepHit runs are not trained on RL inputs. Their identity is the job folder
-    the seeds share (config_manager.pkl, seed-averaged health score) plus the input
-    variant, so every seed of a variant has the same identity and the variants differ.
-    """
-    job = os.path.dirname(os.path.normpath(record.run_dir))
-    variant = f"ddh include_actions_in_state={record.hyperparams.get('include_actions_in_state')}"
-    return DataIdentity(state_source=job, state_seed=None, reward_source=job,
-                        reward_seed=None, seed_mode=variant)
-
-
-register_family(FamilySpec(name=DDH_FAMILY, detect=_path_contains("dynamic_deephit_results"),
-                           data_identity=_ddh_data_identity))

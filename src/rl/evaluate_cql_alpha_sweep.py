@@ -26,6 +26,8 @@ critic of seed k, on seed k's val states (checked against the run records, raise
 The spread across seeds at each alpha is the spread across these 5 matched (CQL, SARSA) pairs.
 
 Results are a tidy DataFrame, one row per (alpha, seed); summarize_by_alpha() aggregates it.
+sarsa_stability() / stability_sensitivity() / plot_sarsa_stability() implement the SARSA-advantage
+stability gate used in alpha selection.
 
 Typical use (notebook):
     store = D.DataStore(keep=("train", "val"))
@@ -416,6 +418,86 @@ def plot_combined_alpha_sweep(df, title="", save_path=None, mark_knee=True, norm
     default_title = "CQL alpha sweep: advantage vs. occupancy support trade-off"
     ax1.set_title(title or (default_title + (" (normalized)" if normalized else "")), fontsize=12, fontweight="bold")
     ax1.text(0.02, 0.02, f"mean and min-max across {n_seeds} seeds", transform=ax1.transAxes, fontsize=8, color="grey")
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Saved to {save_path}")
+    return fig
+
+
+# =============================================================================
+# SARSA-advantage stability (selection step 2: reliability gate)
+# =============================================================================
+
+def _window_ratio(values) -> float:
+    """max/min of a window of advantages; inf if the window is not strictly positive (advantage not reliably > 0)."""
+    lo, hi = float(np.min(values)), float(np.max(values))
+    return np.inf if lo <= 0 else hi / lo
+
+
+def sarsa_stability(df, window=3, max_ratio=2.0, normalized=True):
+    """
+    Sliding-window ratio test on the across-seed MEAN SARSA advantage vs alpha.
+
+    Alphas are sorted; for every `window` consecutive alphas the ratio max/min of the mean
+    advantage is computed (inf if any value in the window is <= 0). The first window whose ratio
+    exceeds `max_ratio` marks the onset of instability, taken as that window's LOWEST alpha (the
+    conservative choice); every alpha >= onset is flagged unstable.
+
+    Returns (table, onset_alpha). The table has one row per alpha:
+      mean, std (across seeds), n_seeds, n_seeds_positive, cv (std/|mean|),
+      worst_window_ratio (largest ratio among windows containing that alpha), unstable.
+    onset_alpha is None if no window fails.
+    """
+    col = "sarsa_adv_norm" if normalized else "sarsa_adv"
+    g = df.groupby("alpha")[col]
+    tab = pd.DataFrame({"mean": g.mean(), "std": g.std(), "n_seeds": g.size(),
+                        "n_seeds_positive": g.agg(lambda x: int((x > 0).sum()))})
+    tab["cv"] = tab["std"] / tab["mean"].abs()
+    v, n = tab["mean"].values, len(tab)
+    if n < window:
+        raise ValueError(f"only {n} alphas; need at least window={window}")
+    ratios = np.array([_window_ratio(v[i:i + window]) for i in range(n - window + 1)])
+    worst = np.ones(n)
+    for i, r in enumerate(ratios):
+        worst[i:i + window] = np.maximum(worst[i:i + window], r)
+    tab["worst_window_ratio"] = worst
+    bad = np.flatnonzero(ratios > max_ratio)
+    onset = tab.index[bad[0]] if len(bad) else None
+    tab["unstable"] = False if onset is None else (tab.index >= onset)
+    return tab, onset
+
+
+def stability_sensitivity(df, windows=(3, 4, 5), ratios=(1.25, 1.5, 2, 3, 5), normalized=True) -> pd.DataFrame:
+    """Onset alpha (NaN = none) for a grid of window sizes and ratio thresholds: shows how much the gate depends on them."""
+    out = pd.DataFrame(index=pd.Index(windows, name="window"), columns=pd.Index(ratios, name="max_ratio"), dtype=float)
+    for w in windows:
+        for r in ratios:
+            onset = sarsa_stability(df, window=w, max_ratio=r, normalized=normalized)[1]
+            out.loc[w, r] = np.nan if onset is None else onset
+    return out
+
+
+def plot_sarsa_stability(df, onset=None, normalized=True, log_scale=True, alpha_range=None, save_path=None):
+    """SARSA advantage vs alpha: every seed (thin grey), mean and min-max band, and the instability onset."""
+    df = _alpha_filter(df, alpha_range, log_scale)
+    col = "sarsa_adv_norm" if normalized else "sarsa_adv"
+    summ = summarize_by_alpha(df)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for i, (seed, d) in enumerate(df.groupby("seed")):
+        ax.plot(d["alpha"], d[col], color="grey", alpha=0.5, linewidth=0.8, label="individual seeds" if i == 0 else None)
+    _line_with_band(ax, summ, col, 1, color=SARSA_COLOR, label="mean across seeds (band: min-max)")
+    if onset is not None and onset >= df["alpha"].min():
+        ax.axvline(onset, color=KNEE_COLOR, linewidth=1.5, linestyle=":", label=f"instability onset: alpha={onset:g}")
+        ax.axvspan(onset, df["alpha"].max(), color=OWN_COLOR, alpha=0.08, linewidth=0)
+    ax.axhline(0, color="grey", linewidth=0.8, linestyle="--")
+    if log_scale:
+        ax.set_xscale("log")
+    ax.set_xlabel(r"cql_$\alpha$" + (" (log scale)" if log_scale else ""))
+    ax.set_ylabel("SARSA-critic advantage (fraction of critic's own Q IQR)" if normalized else "SARSA-critic advantage (raw Q units)")
+    ax.set_title("SARSA-advantage stability across the alpha sweep", fontsize=12, fontweight="bold")
+    ax.legend(frameon=False, fontsize=9)
+    ax.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")

@@ -863,7 +863,7 @@ class ShardProcessor:
     def filter_by_stay_ids(self, stay_ids_to_keep, dataset_types=None):
         
         if dataset_types is None:
-            dataset_types = ['dynamic_deephit_dataset', 'dynamic_deephit_predictions', 'bc_latents']
+            dataset_types = ['dynamic_deephit_dataset', 'dynamic_deephit_predictions'] # , 'bc_latents'
         
         for dataset_type in dataset_types:
             # check if dataset_type is an attribute of the class

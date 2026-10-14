@@ -27,7 +27,7 @@ The spread across seeds at each alpha is the spread across these 5 matched (CQL,
 
 Results are a tidy DataFrame, one row per (alpha, seed); summarize_by_alpha() aggregates it.
 sarsa_stability() / stability_sensitivity() / plot_sarsa_stability() implement the SARSA-advantage
-stability gate used in alpha selection.
+stability gate used in alpha selection; select_final_alpha() runs the full selection cascade.
 
 Typical use (notebook):
     store = D.DataStore(keep=("train", "val"))
@@ -503,3 +503,57 @@ def plot_sarsa_stability(df, onset=None, normalized=True, log_scale=True, alpha_
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
         print(f"Saved to {save_path}")
     return fig
+
+
+# =============================================================================
+# Final alpha selection (the full cascade, on the results of run_alpha_sweep_analysis)
+# =============================================================================
+
+def select_final_alpha(df, stability_window=3, stability_max_ratio=2.0, own_rule="any_seed",
+                       occupancy_margin=0.005, normalized=True, verbose=True):
+    """
+    Pre-specified selection cascade. Use a df computed on the VAL split.
+
+      1. Own-critic validity gate: drop alphas whose own-critic advantage is <= 0
+         (own_rule="any_seed": any seed <= 0 drops the alpha; "mean": the across-seed mean <= 0).
+      2. SARSA stability gate: drop alphas at or above the onset found by sarsa_stability
+         (window=stability_window, max_ratio=stability_max_ratio).
+      3. Occupancy, safety-first but only "reasonable": among the survivors, every alpha whose mean
+         occupancy support is within occupancy_margin (a fraction: 0.005 = 0.5 percentage points)
+         of the best survivor counts as tied.
+      4. Among the tied alphas, pick the highest mean SARSA advantage.
+
+    Returns (final_alpha, info): info has one row per alpha with the quantities and pass/fail flag
+    of every stage and which alpha was selected.
+    """
+    if own_rule not in ("any_seed", "mean"):
+        raise ValueError("own_rule must be 'any_seed' or 'mean'")
+    sarsa_col = "sarsa_adv_norm" if normalized else "sarsa_adv"
+    own = df.groupby("alpha")["own_adv_norm"]
+    info = pd.DataFrame({"own_adv_mean": own.mean(), "own_adv_min": own.min()})
+    info["pass_own"] = (info["own_adv_min"] > 0) if own_rule == "any_seed" else (info["own_adv_mean"] > 0)
+
+    stab, onset = sarsa_stability(df, window=stability_window, max_ratio=stability_max_ratio, normalized=normalized)
+    info["pass_stability"] = ~stab["unstable"]
+    info["sarsa_adv"] = df.groupby("alpha")[sarsa_col].mean()
+    info["occupancy"] = df.groupby("alpha")["occupancy_frac"].mean()
+
+    info["survivor"] = info["pass_own"] & info["pass_stability"]
+    if not info["survivor"].any():
+        raise ValueError("no alpha survives the own-critic and stability gates")
+    best_occ = info.loc[info["survivor"], "occupancy"].max()
+    info["tied_occupancy"] = info["survivor"] & (info["occupancy"] >= best_occ - occupancy_margin - 1e-12)
+    final = info.loc[info["tied_occupancy"], "sarsa_adv"].idxmax()
+    info["selected"] = info.index == final
+
+    if verbose:
+        print(f"alphas: {len(info)}")
+        print(f"1. own-critic gate ({own_rule}): {int(info['pass_own'].sum())} pass; "
+              f"dropped {list(info.index[~info['pass_own']])}")
+        print(f"2. SARSA stability gate (window={stability_window}, max_ratio={stability_max_ratio}): "
+              f"onset={onset}; {int((info['pass_stability'] & info['pass_own']).sum())} survive both gates")
+        print(f"3. occupancy: best survivor {best_occ * 100:.2f}%, margin {occupancy_margin * 100:.2f} points -> "
+              f"{int(info['tied_occupancy'].sum())} tied: {list(info.index[info['tied_occupancy']])}")
+        print(f"4. highest SARSA advantage among the tied: alpha={final:g} "
+              f"(SARSA adv {info.loc[final, 'sarsa_adv']:.4f}, occupancy {info.loc[final, 'occupancy'] * 100:.2f}%)")
+    return final, info

@@ -67,11 +67,13 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --split_num 0 \
     --search_variant best_hyperparameters \
     --seeds 0 1 2 3 4 \
+    --cql_alpha 0.029 \
     --n_epochs 400 \
     --cohort sepsis \
     --unit PICU \
     --filter_old True \
     --reward_cohort picu \
+    --include_actions_in_state True \
     --action_mode continuous_only \
     --start_time $START_TIME
 

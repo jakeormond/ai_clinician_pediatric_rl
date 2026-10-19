@@ -14,6 +14,8 @@ import pandas as pd
 import pickle
 import math
 
+from src import config_manager
+
 from .shared_components import TrainerUtils # Actor, MixedActionActor, 
 
 import logging
@@ -1548,8 +1550,15 @@ def load_trained_actor(state_dim, action_dim, config_manager):
 	else:
 		raise ValueError(f"Unknown unit: {unit}. Must be 'picu'.")
 
+	
+	if config_manager.include_actions_in_state:
+		base_path = os.path.join(base_path, "with_actions")	
+	
 	health_score_change_only_path = os.path.join(base_path, "health_score_change_only")
-	fixed_alpha_path = os.path.join(health_score_change_only_path, "fixed_alpha")
+	alpha_sweep_path = os.path.join(health_score_change_only_path, "alpha_sweep")
+
+	# fixed_alpha_path = os.path.join(health_score_change_only_path, "fixed_alpha")
+
 
 	def _load_actor_from_checkpoint(checkpoint):
 		hidden_dim = checkpoint['hyperparameters']['actor_hidden_dim']
@@ -1612,11 +1621,11 @@ def load_trained_actor(state_dim, action_dim, config_manager):
 	elif config_manager.search_variant == "best_hyperparameters":
 		target_seed = config_manager.training_config['seed']
 	
-		if not os.path.isdir(fixed_alpha_path):
-			raise FileNotFoundError(f"fixed_alpha directory not found: {fixed_alpha_path}")
+		if not os.path.isdir(alpha_sweep_path):
+			raise FileNotFoundError(f"alpha_sweep directory not found: {alpha_sweep_path}")
 
-		for run_folder in sorted(os.listdir(fixed_alpha_path)):
-			run_path = os.path.join(fixed_alpha_path, run_folder)
+		for run_folder in sorted(os.listdir(alpha_sweep_path)):
+			run_path = os.path.join(alpha_sweep_path, run_folder)
 			for inner_run_folder in sorted(os.listdir(run_path)):
 				inner_run_path = os.path.join(run_path, inner_run_folder)
 				# load results.json to check the seed
@@ -1627,12 +1636,15 @@ def load_trained_actor(state_dim, action_dim, config_manager):
 					results = json.load(f)
 				run_seed = results.get("hyperparameters", {}).get("seed")
 				if run_seed == target_seed:
-					final_model_path = os.path.join(inner_run_path, "final_model.pt")
-					checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
-					return _load_actor_from_checkpoint(checkpoint)
+					cql_alpha = results.get("hyperparameters", {}).get("cql_alpha")
+					if cql_alpha == config_manager.cql_alpha:
+						print(f"[load_trained_actor] Found matching run with seed={target_seed} and cql_alpha={cql_alpha} at {inner_run_path}")
+						final_model_path = os.path.join(inner_run_path, "final_model.pt")
+						checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
+						return _load_actor_from_checkpoint(checkpoint)
 
 		raise FileNotFoundError(
-			f"No run with training_config['seed']=={target_seed} found under {fixed_alpha_path}."
+			f"No run with training_config['seed']=={target_seed} found under {alpha_sweep_path}."
 		)
 
 	else:

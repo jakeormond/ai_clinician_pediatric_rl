@@ -1102,6 +1102,7 @@
                 "--filter_old", "True",
                 "--reward_cohort", "picu",
                 "--n_epochs", "500",
+                "--include_actions_in_state", "True",
                 "--action_mode", "continuous_only",
             ],
             "console": "integratedTerminal",

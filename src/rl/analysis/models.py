@@ -328,17 +328,24 @@ def _cql_actor_outputs(model: LoadedModel, s: torch.Tensor) -> Dict[str, torch.T
             "f_std": f_std.squeeze(-1), "v_std": v_std.squeeze(-1)}
 
 
-def _load_sarsa(record: RunRecord, state_dim: int, device) -> LoadedModel:
-    from src.rl.models.basic_q import Critic as SARSACritic
+def _load_basic_q(record: RunRecord, state_dim: int, device) -> LoadedModel:
+    """
+    The critic trained by basic_q.Q_Learner. SARSA and FQE are the same network and checkpoint
+    layout; they differ only in the Bellman target's next action (logged clinician action vs a
+    frozen target policy), which is a property of how the run was trained, not of the loaded
+    network. Both families therefore share this loader.
+    """
+    from src.rl.models.basic_q import Critic as BasicQCritic
     ckpt = _read_checkpoint(record, device)
-    critic = SARSACritic(state_dim, 2, hidden_dim=_require(record, "hidden_dim")).to(device)
+    critic = BasicQCritic(state_dim, 2, hidden_dim=_require(record, "hidden_dim")).to(device)
     critic.load_state_dict(ckpt["critic_state_dict"])
     return LoadedModel(record=record, components={"critic": critic},
                        loader_extras={"config_manager": record.load_config_manager()})
 
 
 register_loader("cql", _load_cql, actor_outputs=_cql_actor_outputs)
-register_loader("sarsa", _load_sarsa)
+register_loader("sarsa", _load_basic_q)
+register_loader("fqe", _load_basic_q)        # an FQE critic is only valid for the ONE target policy it was fit to
 
 
 # ---- Dynamic-DeepHit -------------------------------------------------------------

@@ -67,7 +67,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --split_num 0 \
     --search_variant best_hyperparameters \
     --seeds 0 1 2 3 4 \
-    --n_epochs 400 \
+    --n_epochs 100 \
     --cohort sepsis \
     --unit PICU \
     --filter_old True \

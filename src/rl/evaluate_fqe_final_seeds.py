@@ -29,6 +29,13 @@ Two different quantities are reported (they are NOT the same thing):
           biases partly cancel, but it is still an estimate with model error: report it with
           the support (occupancy) of pi's actions next to it.
 
+Monte Carlo check of the clinician baseline (mc_calibration / run_mc_calibration)
+  V_mu above comes from a fitted SARSA critic. The same quantity can be estimated without any
+  model: G0 = the observed discounted return of each logged stay from its first row (the clinician
+  policy's own value, by definition). run_mc_calibration compares V_mu with G0 (bias with a
+  stay-level bootstrap CI), checks calibration across all rows, and, if the CQL and FQE models
+  are passed, reports dV_mc = V_pi - G0, the policy-value difference with a model-free baseline.
+
 Units: health-score points (Q / total_health_score_scale of each critic's own run).
 
 Uncertainty
@@ -294,6 +301,139 @@ def plot_fqe_ope(df: pd.DataFrame, title: str = "", save_path: Optional[str] = N
     ax.errorbar(x + 0.1, df.adv1, yerr=[df.adv1 - df.adv1_lo, df.adv1_hi - df.adv1], fmt="s", capsize=3, label="adv1 (one-step, FQE only)")
     ax.set_xticks(x, df.seed.astype(str)); ax.set_xlabel("seed"); ax.set_ylabel("health-score points")
     ax.legend(frameon=False); ax.set_title("difference from clinician")
+    if title:
+        fig.suptitle(title)
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+# =============================================================================
+# Monte Carlo check of the clinician baseline
+# =============================================================================
+
+def discounted_return_to_go(rewards: np.ndarray, traj: np.ndarray, gamma: float) -> np.ndarray:
+    """G_t = sum_{k>=0} gamma^k r_{t+k}, restarting at each stay (rows must be contiguous by stay)."""
+    r = np.asarray(rewards, dtype=np.float64)
+    G = np.zeros_like(r)
+    edges = np.flatnonzero(np.concatenate(([True], traj[1:] != traj[:-1], [True])))
+    for s, e in zip(edges[:-1], edges[1:]):
+        acc = 0.0
+        for i in range(e - 1, s - 1, -1):
+            acc = r[i] + gamma * acc
+            G[i] = acc
+    return G
+
+
+def mc_calibration_one_seed(sarsa, processor, cql=None, fqe=None, n_boot=1000, boot_seed=0,
+                            n_calib_bins=10, batch_size=4096) -> Dict[str, Any]:
+    """
+    Compare the SARSA clinician value with observed discounted returns, on `processor`.
+      V_mu     mean over initial rows of Q_SARSA(s0, a0)
+      G0       mean over stays of the observed discounted return from the first row
+      bias     V_mu - G0 (paired over stays, stay-level bootstrap CI). Near 0 => SARSA is calibrated
+               at the start of a stay; sign shows over / under-estimation.
+    Over ALL rows: mean Q vs mean return-to-go, correlation, and a decile calibration table.
+    If cql and fqe are given: dV_mc = V_pi - G0 (paired CI), the model-free-baseline version of dV.
+    Rewards are the processor's own (those the critics were fit to), divided by the SARSA run's
+    reward_scale so they are in the same units as Q(scaled=True). The discount is the SARSA run's.
+    Both critics and the returns treat the end of a stay the same way (no bootstrapping past the last row).
+    """
+    gamma = sarsa.record.get("discount")
+    if gamma is None:
+        raise KeyError(f"{sarsa.record.label}: no 'discount' in the run's hyperparameters")
+    gamma = float(gamma)
+
+    s, a = D.states(processor), D.actions(processor)
+    traj = D.trajectory_ids(processor)
+    first = first_row_mask(traj)
+    inv = np.unique(traj, return_inverse=True)[1]
+    J = int(inv.max()) + 1
+    if int(first.sum()) != J:
+        raise ValueError(f"{sarsa.record.label}: {first.sum()} initial rows but {J} trajectories; rows are not contiguous by stay")
+
+    G = discounted_return_to_go(D.rewards(processor), traj, gamma) / sarsa.reward_scale
+    q_mu = sarsa.q(s, a, batch_size=batch_size, scaled=True)
+    v_mu0, g0 = q_mu[first], G[first]
+    bias0 = v_mu0 - g0
+
+    rng = np.random.default_rng(boot_seed)
+    idx = rng.integers(0, J, size=(n_boot, J), dtype=np.int32)
+
+    row: Dict[str, Any] = {"seed": sarsa.seed, "n_stays": J, "n_rows": len(s), "gamma": gamma,
+                           "V_mu": float(v_mu0.mean()), "G0": float(g0.mean()),
+                           "G0_lo": _pct_ci(g0[idx].mean(1))[0], "G0_hi": _pct_ci(g0[idx].mean(1))[1],
+                           "bias": float(bias0.mean())}
+    row["bias_lo"], row["bias_hi"] = _pct_ci(bias0[idx].mean(1))
+    row["bias_rel"] = row["bias"] / max(abs(row["G0"]), 1e-9)
+    row["corr_stay"] = float(np.corrcoef(v_mu0, g0)[0, 1]) if J > 2 else np.nan
+    row["Q_all_mean"], row["G_all_mean"] = float(q_mu.mean()), float(G.mean())
+    row["corr_all"] = float(np.corrcoef(q_mu, G)[0, 1])
+
+    if cql is not None and fqe is not None:
+        v_pi0 = fqe.q(s, actor_actions(cql, s, batch_size=batch_size), batch_size=batch_size, scaled=True)[first]
+        d = v_pi0 - g0
+        row["V_pi"] = float(v_pi0.mean())
+        row["dV_mc"] = float(d.mean())
+        row["dV_mc_lo"], row["dV_mc_hi"] = _pct_ci(d[idx].mean(1))
+
+    edges = np.quantile(q_mu, np.linspace(0, 1, n_calib_bins + 1))
+    b = np.clip(np.searchsorted(edges[1:-1], q_mu, side="right"), 0, n_calib_bins - 1)
+    calib = pd.DataFrame({"bin": np.arange(n_calib_bins),
+                          "n": np.bincount(b, minlength=n_calib_bins),
+                          "Q_pred": np.bincount(b, weights=q_mu, minlength=n_calib_bins),
+                          "G_obs": np.bincount(b, weights=G, minlength=n_calib_bins)})
+    calib[["Q_pred", "G_obs"]] = calib[["Q_pred", "G_obs"]].div(calib["n"].clip(lower=1), axis=0)
+    calib.insert(0, "seed", sarsa.seed)
+    return {"row": row, "calib": calib}
+
+
+def run_mc_calibration(sarsa_models, store, split="test", cql_models=None, fqe_models=None, n_boot=1000,
+                       boot_seed=0, verbose=True):
+    """
+    SARSA-vs-observed-return check for every seed. Pass cql_models and fqe_models as well to get
+    dV_mc (policy value minus the observed clinician return). Returns (per-seed DataFrame, calibration DataFrame).
+    """
+    sarsa = _by_seed(sarsa_models)
+    cql = _by_seed(cql_models) if cql_models is not None else {}
+    fqe = _by_seed(fqe_models) if fqe_models is not None else {}
+    rows, calibs = [], []
+    for seed in sorted(sarsa, key=str):
+        m = cql.get(seed)
+        if m is not None:
+            check_judge_matches(m, sarsa[seed])
+            p = store.processor(m, split)
+        else:
+            p = store.processor(sarsa[seed], split)
+        out = mc_calibration_one_seed(sarsa[seed], p, cql=m, fqe=fqe.get(seed) if m is not None else None,
+                                      n_boot=n_boot, boot_seed=boot_seed)
+        rows.append(out["row"]); calibs.append(out["calib"])
+        if verbose:
+            r = out["row"]
+            msg = (f"  seed {seed}: V_mu {r['V_mu']:.3f}  observed G0 {r['G0']:.3f}  "
+                   f"bias {r['bias']:+.3f} [{r['bias_lo']:+.3f}, {r['bias_hi']:+.3f}]  corr(all rows) {r['corr_all']:.2f}")
+            if "dV_mc" in r:
+                msg += f"  dV_mc {r['dV_mc']:.3f} [{r['dV_mc_lo']:.3f}, {r['dV_mc_hi']:.3f}]"
+            print(msg)
+    return pd.DataFrame(rows), pd.concat(calibs, ignore_index=True)
+
+
+def plot_mc_calibration(df: pd.DataFrame, calib: pd.DataFrame, title: str = "", save_path: Optional[str] = None):
+    """Left: SARSA V_mu vs observed return G0 per seed (CI on G0). Right: predicted Q vs observed return by decile of predicted Q."""
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
+    x = np.arange(len(df))
+    ax = axes[0]
+    ax.errorbar(x + 0.1, df.G0, yerr=[df.G0 - df.G0_lo, df.G0_hi - df.G0], fmt="s", capsize=3, label="observed return (Monte Carlo)")
+    ax.plot(x - 0.1, df.V_mu, "o", label="SARSA V_mu")
+    ax.set_xticks(x, df.seed.astype(str)); ax.set_xlabel("seed"); ax.set_ylabel("value at initial states (health-score points)")
+    ax.legend(frameon=False); ax.set_title("clinician value: SARSA vs observed")
+    ax = axes[1]
+    lim = [calib[["Q_pred", "G_obs"]].min().min(), calib[["Q_pred", "G_obs"]].max().max()]
+    ax.plot(lim, lim, color="grey", lw=1)
+    for seed, g in calib.groupby("seed"):
+        ax.plot(g.Q_pred, g.G_obs, "o-", ms=3, lw=1, label=f"seed {seed}")
+    ax.set_xlabel("SARSA predicted Q (decile mean)"); ax.set_ylabel("observed discounted return (decile mean)")
+    ax.legend(frameon=False, fontsize=8); ax.set_title("calibration, all rows")
     if title:
         fig.suptitle(title)
     if save_path:

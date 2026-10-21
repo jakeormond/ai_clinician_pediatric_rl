@@ -209,9 +209,20 @@ def fqe_ope_one_seed(cql, fqe, processor, sarsa=None, occupancy_table=None, min_
     row["adv_all_norm"] = row["adv_all"] / iqr
     row["frac_adv_pos"] = float((adv_all > 0).mean())
     row["fqe_q_iqr"] = iqr
+    row["adv_all_norm_lo"], row["adv_all_norm_hi"] = row["adv_all_lo"] / iqr, row["adv_all_hi"] / iqr
 
     if sarsa is not None:
-        v_mu0 = sarsa.q(s, a_clin, batch_size=batch_size, scaled=True)[first]
+        q_mu_all = sarsa.q(s, a_clin, batch_size=batch_size, scaled=True)
+        v_mu0 = q_mu_all[first]
+        # the same per-row advantage judged by the SARSA critic (act differently once, then behave like the clinicians)
+        sadv = sarsa.q(s, a_pi, batch_size=batch_size, scaled=True) - q_mu_all
+        siqr = max(float(np.quantile(q_mu_all, 0.75) - np.quantile(q_mu_all, 0.25)), 1e-6)
+        Ss = np.bincount(inv, weights=sadv, minlength=J)
+        row["sarsa_adv_all"] = float(sadv.mean())
+        row["sarsa_adv_all_lo"], row["sarsa_adv_all_hi"] = _pct_ci(Ss[idx].sum(1) / n[idx].sum(1))
+        row["sarsa_adv_all_norm"] = row["sarsa_adv_all"] / siqr
+        row["sarsa_adv_all_norm_lo"], row["sarsa_adv_all_norm_hi"] = row["sarsa_adv_all_lo"] / siqr, row["sarsa_adv_all_hi"] / siqr
+        row["sarsa_frac_adv_pos"] = float((sadv > 0).mean())
         d0 = v_pi0 - v_mu0
         row["V_mu"] = float(v_mu0.mean())
         row["V_mu_lo"], row["V_mu_hi"] = _pct_ci(v_mu0[idx].mean(1))
@@ -274,9 +285,10 @@ def run_fqe_ope(cql_models, fqe_models, store, sarsa_models=None, split="val", n
 
 def summarize_fqe(df: pd.DataFrame) -> pd.DataFrame:
     """Across-seed summary (mean / min / max / sd) of the main quantities, plus how many seeds have CI > 0."""
-    cols = [c for c in ("V_pi", "V_mu", "dV", "adv1", "adv_all_norm", "frac_adv_pos", "occupancy") if c in df]
+    cols = [c for c in ("adv_all_norm", "frac_adv_pos", "sarsa_adv_all_norm", "sarsa_frac_adv_pos", "adv1", "occupancy",
+                        "V_pi", "V_mu", "dV") if c in df]
     out = df[cols].agg(["mean", "min", "max", "std"]).T
-    pos = {c: int((df[f"{c}_lo"] > 0).sum()) for c in ("dV", "adv1") if f"{c}_lo" in df}
+    pos = {c: int((df[f"{c}_lo"] > 0).sum()) for c in ("adv_all_norm", "sarsa_adv_all_norm", "adv1", "dV") if f"{c}_lo" in df}
     out["seeds_with_CI_above_0"] = pd.Series(pos)
     return out
 
@@ -325,8 +337,30 @@ def discounted_return_to_go(rewards: np.ndarray, traj: np.ndarray, gamma: float)
     return G
 
 
+def interior_horizon(gamma: float, tail_weight: float = 0.05) -> int:
+    """
+    Number of steps H after which the discount weight is at most `tail_weight`: gamma**H <= tail_weight,
+    i.e. H = ceil(log(tail_weight) / log(gamma)). A row with at least H rows after it in its stay has
+    all but a `tail_weight` fraction of its discounted return observed (gamma=0.975, 0.05 -> H=119).
+    """
+    if not 0.0 < gamma < 1.0:
+        raise ValueError(f"interior horizon needs 0 < gamma < 1, got {gamma}")
+    if not 0.0 < tail_weight < 1.0:
+        raise ValueError(f"tail_weight must be in (0, 1), got {tail_weight}")
+    return int(np.ceil(np.log(tail_weight) / np.log(gamma)))
+
+
+def rows_after_in_stay(traj: np.ndarray) -> np.ndarray:
+    """For every RL row, the number of later rows in the same stay (0 on the last row)."""
+    edges = np.flatnonzero(np.concatenate(([True], traj[1:] != traj[:-1], [True])))
+    out = np.empty(len(traj), dtype=np.int64)
+    for s, e in zip(edges[:-1], edges[1:]):
+        out[s:e] = np.arange(e - s - 1, -1, -1)
+    return out
+
+
 def mc_calibration_one_seed(sarsa, processor, cql=None, fqe=None, n_boot=1000, boot_seed=0,
-                            n_calib_bins=10, batch_size=4096) -> Dict[str, Any]:
+                            n_calib_bins=10, batch_size=4096, tail_weight=0.05) -> Dict[str, Any]:
     """
     Compare the SARSA clinician value with observed discounted returns, on `processor`.
       V_mu     mean over initial rows of Q_SARSA(s0, a0)
@@ -337,7 +371,12 @@ def mc_calibration_one_seed(sarsa, processor, cql=None, fqe=None, n_boot=1000, b
     If cql and fqe are given: dV_mc = V_pi - G0 (paired CI), the model-free-baseline version of dV.
     Rewards are the processor's own (those the critics were fit to), divided by the SARSA run's
     reward_scale so they are in the same units as Q(scaled=True). The discount is the SARSA run's.
-    Both critics and the returns treat the end of a stay the same way (no bootstrapping past the last row).
+    End-of-stay effect: returns stop at a stay's last row, but for survivors the critic keeps bootstrapping
+    (the trainer treats only death as terminal). So near the end of a stay a converged critic predicts a bit
+    more than the observed return. The *_interior quantities and the calibration table therefore use only rows
+    with at least H = interior_horizon(gamma, tail_weight) later rows in their stay, where at most a
+    `tail_weight` fraction of the discounted return is unobserved. gap_interior = Q_interior_mean - G_interior_mean
+    (stay-level bootstrap CI) is the level check to use; the all-rows means are kept for reference.
     """
     gamma = sarsa.record.get("discount")
     if gamma is None:
@@ -354,6 +393,10 @@ def mc_calibration_one_seed(sarsa, processor, cql=None, fqe=None, n_boot=1000, b
 
     G = discounted_return_to_go(D.rewards(processor), traj, gamma) / sarsa.reward_scale
     q_mu = sarsa.q(s, a, batch_size=batch_size, scaled=True)
+    H = interior_horizon(gamma, tail_weight)
+    interior = rows_after_in_stay(traj) >= H
+    if not interior.any():
+        raise ValueError(f"{sarsa.record.label}: no row has {H} later rows in its stay (tail_weight={tail_weight}); increase tail_weight or check the stay lengths")
     v_mu0, g0 = q_mu[first], G[first]
     bias0 = v_mu0 - g0
 
@@ -370,6 +413,16 @@ def mc_calibration_one_seed(sarsa, processor, cql=None, fqe=None, n_boot=1000, b
     row["Q_all_mean"], row["G_all_mean"] = float(q_mu.mean()), float(G.mean())
     row["corr_all"] = float(np.corrcoef(q_mu, G)[0, 1])
 
+    w = interior.astype(np.float64)
+    n_int = np.bincount(inv, weights=w, minlength=J)
+    gap_row = (q_mu - G) * w
+    S_int = np.bincount(inv, weights=gap_row, minlength=J)
+    row.update({"tail_weight": tail_weight, "H_interior": H, "interior_frac": float(interior.mean()),
+                "Q_interior_mean": float(q_mu[interior].mean()), "G_interior_mean": float(G[interior].mean()),
+                "gap_interior": float(gap_row.sum() / w.sum()),
+                "corr_interior": float(np.corrcoef(q_mu[interior], G[interior])[0, 1])})
+    row["gap_interior_lo"], row["gap_interior_hi"] = _pct_ci(S_int[idx].sum(1) / np.maximum(n_int[idx].sum(1), 1.0))
+
     if cql is not None and fqe is not None:
         v_pi0 = fqe.q(s, actor_actions(cql, s, batch_size=batch_size), batch_size=batch_size, scaled=True)[first]
         d = v_pi0 - g0
@@ -377,19 +430,20 @@ def mc_calibration_one_seed(sarsa, processor, cql=None, fqe=None, n_boot=1000, b
         row["dV_mc"] = float(d.mean())
         row["dV_mc_lo"], row["dV_mc_hi"] = _pct_ci(d[idx].mean(1))
 
-    edges = np.quantile(q_mu, np.linspace(0, 1, n_calib_bins + 1))
-    b = np.clip(np.searchsorted(edges[1:-1], q_mu, side="right"), 0, n_calib_bins - 1)
+    qi, Gi = q_mu[interior], G[interior]                 # calibration on interior rows only
+    edges = np.quantile(qi, np.linspace(0, 1, n_calib_bins + 1))
+    b = np.clip(np.searchsorted(edges[1:-1], qi, side="right"), 0, n_calib_bins - 1)
     calib = pd.DataFrame({"bin": np.arange(n_calib_bins),
                           "n": np.bincount(b, minlength=n_calib_bins),
-                          "Q_pred": np.bincount(b, weights=q_mu, minlength=n_calib_bins),
-                          "G_obs": np.bincount(b, weights=G, minlength=n_calib_bins)})
+                          "Q_pred": np.bincount(b, weights=qi, minlength=n_calib_bins),
+                          "G_obs": np.bincount(b, weights=Gi, minlength=n_calib_bins)})
     calib[["Q_pred", "G_obs"]] = calib[["Q_pred", "G_obs"]].div(calib["n"].clip(lower=1), axis=0)
     calib.insert(0, "seed", sarsa.seed)
     return {"row": row, "calib": calib}
 
 
 def run_mc_calibration(sarsa_models, store, split="test", cql_models=None, fqe_models=None, n_boot=1000,
-                       boot_seed=0, verbose=True):
+                       boot_seed=0, tail_weight=0.05, verbose=True):
     """
     SARSA-vs-observed-return check for every seed. Pass cql_models and fqe_models as well to get
     dV_mc (policy value minus the observed clinician return). Returns (per-seed DataFrame, calibration DataFrame).
@@ -406,12 +460,14 @@ def run_mc_calibration(sarsa_models, store, split="test", cql_models=None, fqe_m
         else:
             p = store.processor(sarsa[seed], split)
         out = mc_calibration_one_seed(sarsa[seed], p, cql=m, fqe=fqe.get(seed) if m is not None else None,
-                                      n_boot=n_boot, boot_seed=boot_seed)
+                                      n_boot=n_boot, boot_seed=boot_seed, tail_weight=tail_weight)
         rows.append(out["row"]); calibs.append(out["calib"])
         if verbose:
             r = out["row"]
             msg = (f"  seed {seed}: V_mu {r['V_mu']:.3f}  observed G0 {r['G0']:.3f}  "
-                   f"bias {r['bias']:+.3f} [{r['bias_lo']:+.3f}, {r['bias_hi']:+.3f}]  corr(all rows) {r['corr_all']:.2f}")
+                   f"bias {r['bias']:+.3f} [{r['bias_lo']:+.3f}, {r['bias_hi']:+.3f}]  "
+                   f"interior (H={r['H_interior']}) gap {r['gap_interior']:+.3f} [{r['gap_interior_lo']:+.3f}, {r['gap_interior_hi']:+.3f}]  "
+                   f"corr(interior) {r['corr_interior']:.2f}")
             if "dV_mc" in r:
                 msg += f"  dV_mc {r['dV_mc']:.3f} [{r['dV_mc_lo']:.3f}, {r['dV_mc_hi']:.3f}]"
             print(msg)
@@ -433,7 +489,231 @@ def plot_mc_calibration(df: pd.DataFrame, calib: pd.DataFrame, title: str = "", 
     for seed, g in calib.groupby("seed"):
         ax.plot(g.Q_pred, g.G_obs, "o-", ms=3, lw=1, label=f"seed {seed}")
     ax.set_xlabel("SARSA predicted Q (decile mean)"); ax.set_ylabel("observed discounted return (decile mean)")
-    ax.legend(frameon=False, fontsize=8); ax.set_title("calibration, all rows")
+    ax.legend(frameon=False, fontsize=8); ax.set_title("calibration, interior rows")
+    if title:
+        fig.suptitle(title)
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+# =============================================================================
+# Stability of the reported advantage across training checkpoints
+# =============================================================================
+
+def fqe_advantage_by_checkpoint(cql_models, fqe_by_epoch, store, split="val", n_boot=500, boot_seed=0,
+                                batch_size=4096, tol=None, verbose=True):
+    """
+    Does the FQE advantage settle even if the Q level does not?
+
+    cql_models   : the final CQL models, {seed: LoadedModel} or one group
+    fqe_by_epoch : {epoch: FQE models for that epoch}, each {seed: LoadedModel} or one group (a checkpoint of
+                   the same FQE run, loaded however your loaders load a checkpoint)
+    Returns (per_checkpoint, drift):
+      per_checkpoint : one row per (epoch, seed): adv_all, adv_all_norm, frac_adv_pos (+95% stay-bootstrap CIs),
+                       q_level = mean FQE Q at the clinician's actions, q_iqr
+      drift          : change between consecutive checkpoints per seed (paired over the same stay resamples):
+                       d_adv_all_norm and d_frac_adv_pos with CIs; if `tol` is given, `stable_adv` is True when
+                       the CI of d_adv_all_norm lies inside [-tol, tol] (state tol BEFORE looking).
+    The policy's actions and the stay resamples are fixed per seed, so differences between epochs reflect only the
+    critic. Normalisation: advantage / IQR of Q(s, a_clin) at that checkpoint, as in fqe_ope_one_seed.
+    """
+    cql = _by_seed(cql_models)
+    epochs = sorted(fqe_by_epoch)
+    fqe = {e: _by_seed(fqe_by_epoch[e]) for e in epochs}
+    rows, drift = [], []
+    for seed in sorted(cql, key=str):
+        m = cql[seed]
+        p = store.processor(m, split)
+        s, a_clin = D.states(p), D.actions(p)
+        a_pi = actor_actions(m, s, batch_size=batch_size)
+        traj = D.trajectory_ids(p)
+        inv = np.unique(traj, return_inverse=True)[1]
+        J = int(inv.max()) + 1
+        n = np.bincount(inv, minlength=J).astype(np.float64)
+        idx = np.random.default_rng(boot_seed).integers(0, J, size=(n_boot, J), dtype=np.int32)
+        prev = None
+        for e in epochs:
+            f = fqe[e][seed]
+            check_judge_matches(m, f)
+            q_pi = f.q(s, a_pi, batch_size=batch_size, scaled=True)
+            q_cl = f.q(s, a_clin, batch_size=batch_size, scaled=True)
+            adv = q_pi - q_cl
+            iqr = max(float(np.quantile(q_cl, 0.75) - np.quantile(q_cl, 0.25)), 1e-6)
+            S = np.bincount(inv, weights=adv, minlength=J)
+            P = np.bincount(inv, weights=(adv > 0).astype(np.float64), minlength=J)
+            den = n[idx].sum(1)
+            a_boot, p_boot = S[idx].sum(1) / den, P[idx].sum(1) / den
+            row = {"epoch": e, "seed": seed, "adv_all": float(adv.mean()), "adv_all_norm": float(adv.mean() / iqr),
+                   "frac_adv_pos": float((adv > 0).mean()), "q_level": float(q_cl.mean()), "q_iqr": iqr}
+            row["adv_all_norm_lo"], row["adv_all_norm_hi"] = (x / iqr for x in _pct_ci(a_boot))
+            row["frac_adv_pos_lo"], row["frac_adv_pos_hi"] = _pct_ci(p_boot)
+            rows.append(row)
+            if prev is not None:
+                da = (S[idx].sum(1) / den) / iqr - (prev["S"][idx].sum(1) / den) / prev["iqr"]
+                dp = (P[idx].sum(1) / den) - (prev["P"][idx].sum(1) / den)
+                d = {"seed": seed, "epoch_from": prev["epoch"], "epoch_to": e,
+                     "d_adv_all_norm": row["adv_all_norm"] - prev["row"]["adv_all_norm"],
+                     "d_frac_adv_pos": row["frac_adv_pos"] - prev["row"]["frac_adv_pos"]}
+                d["d_adv_all_norm_lo"], d["d_adv_all_norm_hi"] = _pct_ci(da)
+                d["d_frac_adv_pos_lo"], d["d_frac_adv_pos_hi"] = _pct_ci(dp)
+                if tol is not None:
+                    d["stable_adv"] = bool(d["d_adv_all_norm_lo"] >= -tol and d["d_adv_all_norm_hi"] <= tol)
+                drift.append(d)
+            prev = {"epoch": e, "S": S, "P": P, "iqr": iqr, "row": row}
+        if verbose:
+            r = [x for x in rows if x["seed"] == seed]
+            print(f"  seed {seed}: " + "  ".join(f"ep{x['epoch']}: adv_norm {x['adv_all_norm']:.3f} Q {x['q_level']:+.2f}" for x in r))
+    return pd.DataFrame(rows), pd.DataFrame(drift)
+
+
+def plot_advantage_stability(df: pd.DataFrame, title: str = "", save_path: Optional[str] = None):
+    """Normalised FQE advantage (with CI), share of rows with positive advantage, and mean Q level, against checkpoint epoch, one line per seed."""
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4), constrained_layout=True, sharex=True)
+    panels = [("adv_all_norm", "advantage / IQR(Q at clinician actions)", True),
+              ("frac_adv_pos", "share of rows with advantage > 0", True),
+              ("q_level", "mean Q at clinician actions", False)]
+    for ax, (col, ylab, band) in zip(axes, panels):
+        for seed, g in df.groupby("seed"):
+            g = g.sort_values("epoch")
+            ax.plot(g.epoch, g[col], "o-", ms=3, lw=1.2, label=f"seed {seed}")
+            if band:
+                ax.fill_between(g.epoch, g[f"{col}_lo"], g[f"{col}_hi"], alpha=0.12, lw=0)
+        if col == "adv_all_norm":
+            ax.axhline(0, color="grey", lw=1)
+        ax.set_xlabel("checkpoint epoch"); ax.set_ylabel(ylab)
+    axes[0].set_title("advantage"); axes[1].set_title("direction"); axes[2].set_title("Q level (need not settle)")
+    axes[0].legend(frameon=False, fontsize=8)
+    if title:
+        fig.suptitle(title)
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+def plot_fqe_advantage(df: pd.DataFrame, title: str = "", save_path: Optional[str] = None):
+    """
+    Advantage-centred summary per seed: normalised advantage judged by the FQE critic (act differently once, then
+    follow the CQL policy) and by the SARSA critic (then behave like the clinicians), with stay-bootstrap CIs;
+    the share of rows where the policy's action has the higher estimated value; and occupancy of the policy's actions.
+    """
+    panels = 3 if "occupancy" in df else 2
+    fig, axes = plt.subplots(1, panels, figsize=(4.6 * panels, 4), constrained_layout=True)
+    x = np.arange(len(df))
+
+    ax = axes[0]
+    ax.axhline(0, color="grey", lw=1)
+    ax.errorbar(x - 0.1, df.adv_all_norm, yerr=[df.adv_all_norm - df.adv_all_norm_lo, df.adv_all_norm_hi - df.adv_all_norm],
+                fmt="o", capsize=3, label="FQE critic")
+    if "sarsa_adv_all_norm" in df:
+        ax.errorbar(x + 0.1, df.sarsa_adv_all_norm,
+                    yerr=[df.sarsa_adv_all_norm - df.sarsa_adv_all_norm_lo, df.sarsa_adv_all_norm_hi - df.sarsa_adv_all_norm],
+                    fmt="s", capsize=3, label="SARSA critic")
+    ax.set_xticks(x, df.seed.astype(str)); ax.set_xlabel("seed"); ax.set_ylabel("advantage / IQR(Q at clinician actions)")
+    ax.legend(frameon=False); ax.set_title("advantage over the clinician")
+
+    ax = axes[1]
+    ax.axhline(0.5, color="grey", lw=1)
+    ax.plot(x - 0.1, df.frac_adv_pos, "o", label="FQE critic")
+    if "sarsa_frac_adv_pos" in df:
+        ax.plot(x + 0.1, df.sarsa_frac_adv_pos, "s", label="SARSA critic")
+    ax.set_xticks(x, df.seed.astype(str)); ax.set_xlabel("seed"); ax.set_ylabel("share of rows, advantage > 0")
+    ax.set_ylim(0, 1); ax.legend(frameon=False); ax.set_title("direction")
+
+    if "occupancy" in df:
+        ax = axes[2]
+        ax.plot(x, df.occupancy, "o")
+        ax.set_xticks(x, df.seed.astype(str)); ax.set_xlabel("seed"); ax.set_ylabel("share of policy actions in supported bins")
+        ax.set_ylim(0, 1.02); ax.set_title("support")
+    if title:
+        fig.suptitle(title)
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+# =============================================================================
+# Control: does the advantage depend on WHO gets which action?
+# =============================================================================
+
+def _permute_within(groups: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Index permutation that shuffles rows only within each group id (identity-shaped for a single group)."""
+    perm = np.arange(len(groups))
+    for g in np.unique(groups):
+        ix = np.flatnonzero(groups == g)
+        perm[ix] = rng.permutation(ix)
+    return perm
+
+
+def shuffled_policy_advantage(cql_models, fqe_models, store, sarsa_models=None, split="test", n_perm=100,
+                              perm_seed=0, n_severity_bins=10, batch_size=4096, verbose=True) -> pd.DataFrame:
+    """
+    Control for the advantage reported by run_fqe_ope. The critics' dependence on an action can be mostly a
+    one-dimensional dose effect (e.g. lower fluid = higher Q). If so, a policy that gives the same doses to the
+    wrong patients would score about as well. We re-score the policy after permuting its actions across rows:
+      shuffle_global           : across all patient-hours (same overall dose distribution, patient ignored)
+      shuffle_within_severity  : only within health-score bins of the split (keeps the dose-severity relationship,
+                                 breaks who-within-a-severity-level)
+    advantage = Q(s, a) - Q(s, a_clinician), averaged over rows and divided by the IQR of Q at the clinician's
+    actions (same normalisation as run_fqe_ope), judged by the FQE critic and, if given, the SARSA critic.
+    Returns tidy rows: seed, critic, control ('policy' | shuffle names), adv_norm (the mean over permutations for the
+    shuffles), lo/hi (2.5/97.5 percentiles over permutations), p_ge_policy (share of permutations scoring at least as
+    high as the policy). Cost: n_perm critic evaluations over the split per control and critic.
+    """
+    cql, fqe = _by_seed(cql_models), _by_seed(fqe_models)
+    sarsa = _by_seed(sarsa_models) if sarsa_models is not None else None
+    out = []
+    for seed in sorted(cql, key=str):
+        m = cql[seed]
+        critics = [("fqe", fqe[seed])] + ([("sarsa", sarsa[seed])] if sarsa else [])
+        for _, c in critics:
+            check_judge_matches(m, c)
+        p = store.processor(m, split)
+        s, a_clin = D.states(p), D.actions(p)
+        a_pi = actor_actions(m, s, batch_size=batch_size)
+        hs, _ = D.health_score(p)
+        sev = D.severity_bin(hs, D.severity_edges(hs, n_severity_bins))
+        rng = np.random.default_rng([perm_seed, seed if isinstance(seed, int) else 0])
+        controls = {"shuffle_global": lambda: rng.permutation(len(s)),
+                    "shuffle_within_severity": lambda: _permute_within(sev, rng)}
+        for cname, c in critics:
+            q_cl = c.q(s, a_clin, batch_size=batch_size, scaled=True)
+            iqr = max(float(np.quantile(q_cl, 0.75) - np.quantile(q_cl, 0.25)), 1e-6)
+            true = float((c.q(s, a_pi, batch_size=batch_size, scaled=True) - q_cl).mean() / iqr)
+            out.append({"seed": seed, "critic": cname, "control": "policy", "adv_norm": true,
+                        "lo": np.nan, "hi": np.nan, "p_ge_policy": np.nan})
+            for kname, make_perm in controls.items():
+                vals = np.empty(n_perm)
+                for i in range(n_perm):
+                    perm = make_perm()
+                    vals[i] = (c.q(s, a_pi[perm], batch_size=batch_size, scaled=True) - q_cl).mean() / iqr
+                lo, hi = _pct_ci(vals)
+                out.append({"seed": seed, "critic": cname, "control": kname, "adv_norm": float(vals.mean()),
+                            "lo": lo, "hi": hi, "p_ge_policy": float((vals >= true).mean())})
+            if verbose:
+                r = [x for x in out if x["seed"] == seed and x["critic"] == cname]
+                print(f"  seed {seed} {cname}: " + "  ".join(f"{x['control']} {x['adv_norm']:.3f}" for x in r))
+    return pd.DataFrame(out)
+
+
+def plot_shuffle_control(df: pd.DataFrame, title: str = "", save_path: Optional[str] = None):
+    """Per seed, the policy's normalised advantage against its permutation controls (mean and 95% range), one panel per critic."""
+    critics = list(df.critic.unique())
+    fig, axes = plt.subplots(1, len(critics), figsize=(5.2 * len(critics), 4), constrained_layout=True, squeeze=False)
+    names = {"shuffle_global": "shuffled across patients", "shuffle_within_severity": "shuffled within severity"}
+    for ax, critic in zip(axes[0], critics):
+        d = df[df.critic == critic]
+        seeds = list(dict.fromkeys(d.seed))
+        x = np.arange(len(seeds))
+        ax.axhline(0, color="grey", lw=1)
+        ax.plot(x - 0.2, [d[(d.seed == k) & (d.control == "policy")].adv_norm.iloc[0] for k in seeds], "o", color="C0", label="policy")
+        for off, (cname, col) in zip((0.0, 0.2), (("shuffle_global", "C1"), ("shuffle_within_severity", "C2"))):
+            r = [d[(d.seed == k) & (d.control == cname)].iloc[0] for k in seeds]
+            y = np.array([v.adv_norm for v in r])
+            ax.errorbar(x + off, y, yerr=[y - np.array([v.lo for v in r]), np.array([v.hi for v in r]) - y],
+                        fmt="s", color=col, capsize=3, label=names[cname])
+        ax.set_xticks(x, [str(k) for k in seeds]); ax.set_xlabel("seed")
+        ax.set_ylabel("advantage / IQR(Q at clinician actions)"); ax.set_title(f"{critic.upper()} critic"); ax.legend(frameon=False, fontsize=8)
     if title:
         fig.suptitle(title)
     if save_path:

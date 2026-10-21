@@ -80,8 +80,20 @@ def _same_or_under(path, ref) -> bool:
     return a == b or a.startswith(b + os.sep) or b.startswith(a + os.sep)
 
 
+# Settings that define the reward / return a critic estimates. Compared explicitly (not by name
+# pattern), so settings that only some families have (e.g. CQL's vaso_reward_coefficient) cannot
+# cause a false mismatch.
+REWARD_DEFINING_KEYS = ("discount", "terminal_discount", "reward_type", "health_score_scale",
+                        "health_score_hourly_change_scale", "total_health_score_scale",
+                        "terminal_reward_scale", "health_score_hourly_change_clip", "actions_shift")
+
+
 def _reward_description(model) -> Dict[str, Any]:
-    return {"discount": model.record.get("discount"), "reward": dict(D.reward_signature(model.record))}
+    return {k: model.record.get(k) for k in REWARD_DEFINING_KEYS}
+
+
+def _reward_diff(a, b) -> Dict[str, Any]:
+    return {k: (a[k], b[k]) for k in a if a[k] != b[k]}
 
 
 def check_fqe_matches(cql, fqe, sarsa=None, target_policy_check="warn", reward_check="raise"):
@@ -90,18 +102,28 @@ def check_fqe_matches(cql, fqe, sarsa=None, target_policy_check="warn", reward_c
     the CQL model. Also looks for the FQE run's recorded target policy and compares it with the
     CQL run folder: target_policy_check = 'warn' (default) | 'raise' | 'off'.
 
-    With SARSA, dV subtracts a SARSA value from an FQE value, which only means something if both
-    critics were fit with the same discount and reward settings: reward_check = 'raise' (default)
-    | 'warn' | 'off' compares them.
+    Reward settings (REWARD_DEFINING_KEYS) are compared for CQL vs FQE and, with SARSA, FQE vs
+    SARSA. dV subtracts a SARSA value from an FQE value, which only means something if both were
+    fit with the same discount and reward; and an FQE fit to a different reward than the policy
+    was trained for answers a different question. reward_check = 'raise' (default) | 'warn' | 'off'.
     Returns a dict describing the pairing, for the printed pairing table.
     """
     check_judge_matches(cql, fqe)
     if sarsa is not None:
         check_judge_matches(cql, sarsa)
-        a, b = _reward_description(fqe), _reward_description(sarsa)
-        if a != b and reward_check != "off":
-            msg = (f"seed {cql.seed}: FQE and SARSA were fit with different discount/reward settings, so V_pi - V_mu "
-                   f"mixes units.\n  FQE  : {a}\n  SARSA: {b}")
+
+    reward_diffs: Dict[str, Any] = {}
+    if reward_check != "off":
+        d_cql, d_fqe = _reward_description(cql), _reward_description(fqe)
+        if _reward_diff(d_cql, d_fqe):
+            reward_diffs["CQL vs FQE"] = _reward_diff(d_cql, d_fqe)
+        if sarsa is not None and _reward_diff(d_fqe, _reward_description(sarsa)):
+            reward_diffs["FQE vs SARSA"] = _reward_diff(d_fqe, _reward_description(sarsa))
+        if reward_diffs:
+            msg = (f"seed {cql.seed}: discount/reward settings differ (setting: (first, second)):\n  "
+                   + "\n  ".join(f"{k}: {v}" for k, v in reward_diffs.items())
+                   + "\nFQE vs SARSA differences make V_pi - V_mu mix units; CQL vs FQE differences mean the FQE "
+                     "values the policy under a different reward than it was trained for.")
             if reward_check == "raise":
                 raise ValueError(msg + "\n(pass reward_check='warn' to continue anyway)")
             warnings.warn(msg)
@@ -121,7 +143,7 @@ def check_fqe_matches(cql, fqe, sarsa=None, target_policy_check="warn", reward_c
         warnings.warn(f"{fqe.record.label}: cannot verify which CQL model this FQE was trained against "
                       f"(no target-policy path in its hyperparameters). Confirm from the training log.")
     return {"seed": cql.seed, "cql_run": cql.record.run_dir, "fqe_run": fqe.record.run_dir,
-            "fqe_target_hint": hints or None, "check": status}
+            "fqe_target_hint": hints or None, "check": status, "reward_diffs": reward_diffs or None}
 
 
 # =============================================================================

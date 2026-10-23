@@ -1368,9 +1368,170 @@ def bootstrap_wis_ci(trajectories, gamma, estimator="both", n_bootstrap=1000,
 # Orchestration across the 5 matched (CQL, BC) seed pairs
 # ---------------------------------------------------------------------------
 
+def _null_trajectories(trajectories):
+    """The same stays with every log importance ratio set to zero: the target policy IS the behaviour policy."""
+    return [dict(t, log_ratio=np.zeros_like(t["log_ratio"])) for t in trajectories]
+
+
+def _summarize_samples(vals, ci):
+    vals = np.asarray(vals, dtype=float)
+    return {"samples": vals, "mean": vals.mean(), "std": vals.std(),
+            "ci_lower": np.percentile(vals, ci[0]), "ci_upper": np.percentile(vals, ci[1])}
+
+
+def fast_bootstrap_wis(trajectories, gamma, weight_cap_percentile=None, n_bootstrap=1000, ci=(2.5, 97.5),
+                       random_state=None):
+    """
+    Vectorised bootstrap over stays for the trajectory-level and stepwise estimators, and for their NULL (same
+    estimator with every log-ratio zero, i.e. policy = clinician), all on the same resampled stays.
+
+    Gives the same numbers as bootstrap_wis_ci for the same random_state (same resampling draws, same estimator
+    arithmetic) but builds the (stay x hour) matrices once and handles every hour at once per draw, instead of
+    rebuilding lists and looping over hours.
+
+    Returns {"trajectory": summary, "stepwise": summary,           # same format as bootstrap_wis_ci
+             "minus_null": {"trajectory": {...}, "stepwise": {...}}}  # policy - null: diff, null, ci_lower, ci_upper, samples
+    """
+    rng = np.random.default_rng(random_state)
+    n = len(trajectories)
+    T = max(t["length"] for t in trajectories)
+    cum = np.full((n, T), np.nan)
+    rew = np.zeros((n, T))
+    for i, t in enumerate(trajectories):
+        L = t["length"]
+        cum[i, :L] = np.cumsum(t["log_ratio"])
+        rew[i, :L] = t["rewards"]
+    act_all = np.isfinite(cum)
+    log_w = np.array([np.sum(t["log_ratio"]) for t in trajectories])
+    G = discounted_returns(trajectories, gamma)
+    disc = gamma ** np.arange(T)
+    cols = np.arange(T)
+
+    def one(idx):
+        # trajectory level
+        lw = log_w[idx]
+        Gi = G[idx]
+        if weight_cap_percentile is not None:
+            lw = np.minimum(lw, np.percentile(lw, weight_cap_percentile))
+        w = np.exp(lw - lw.max())
+        traj = np.sum(w * Gi) / np.sum(w) if np.sum(w) > 0 else Gi.mean()
+        traj_null = Gi.mean()
+        # stepwise, every hour at once
+        act = act_all[idx]
+        C = cum[idx]
+        R = rew[idx]
+        k = act.sum(0)
+        has = k > 0
+        if weight_cap_percentile is not None:
+            S = np.sort(np.where(act, C, np.inf), axis=0)                   # inactive stays last
+            S = np.where(np.isfinite(S), S, 0.0)                            # only read at active positions
+            pos = np.maximum(k - 1, 0) * (weight_cap_percentile / 100.0)
+            lo = np.floor(pos).astype(int)
+            hi = np.minimum(lo + 1, np.maximum(k - 1, 0))
+            frac = pos - lo
+            cap = S[lo, cols] * (1 - frac) + S[hi, cols] * frac
+            cap = np.where(has, cap, 0.0)
+            C = np.minimum(C, cap[None, :])
+        mx = np.where(has, np.nanmax(np.where(act, C, -np.inf), axis=0), 0.0)
+        W = np.exp(np.where(act, C - mx[None, :], -np.inf))                  # inactive stays: weight exactly 0
+        den = W.sum(0)
+        val_t = np.where(den > 0, (W * R).sum(0) / np.where(den > 0, den, 1.0), 0.0)
+        step = float(np.sum(disc * val_t))
+        null_t = np.where(has, (R * act).sum(0) / np.where(has, k, 1), 0.0)
+        step_null = float(np.sum(disc * null_t))
+        return traj, step, traj_null, step_null
+
+    point = np.array(one(np.arange(n)))
+    draws = np.array([one(rng.integers(0, n, size=n)) for _ in range(n_bootstrap)])
+    out = {"trajectory": _summarize_samples(draws[:, 0], ci), "stepwise": _summarize_samples(draws[:, 1], ci)}
+    mn = {}
+    for k, name in ((0, "trajectory"), (1, "stepwise")):
+        d = draws[:, k] - draws[:, k + 2]
+        mn[name] = {"diff": float(point[k] - point[k + 2]), "null": float(point[k + 2]),
+                    "ci_lower": float(np.percentile(d, ci[0])), "ci_upper": float(np.percentile(d, ci[1])), "samples": d}
+    out["minus_null"] = mn
+    return out
+
+
+def bootstrap_wis_minus_null(trajectories, gamma, weight_cap_percentile=None, n_bootstrap=1000, ci=(2.5, 97.5),
+                             random_state=None):
+    """WIS(policy) - WIS(null) with a paired bootstrap over stays; see fast_bootstrap_wis."""
+    return fast_bootstrap_wis(trajectories, gamma, weight_cap_percentile, n_bootstrap, ci, random_state)["minus_null"]
+
+
+def models_signature(cql_models, bc_models):
+    """Run folders of the models, used to check that cached results belong to the models being analysed."""
+    from src.rl.evaluate_fqe_final_seeds import _by_seed
+    return {"cql": {str(k): m.record.run_dir for k, m in sorted(_by_seed(cql_models).items(), key=lambda kv: str(kv[0]))},
+            "bc": {str(k): m.record.run_dir for k, m in sorted(_by_seed(bc_models).items(), key=lambda kv: str(kv[0]))}}
+
+
+def get_wis_log_probs(cql_model, bc_model, processor, split, cache_dir=None, batch_size=1024,
+                      device="cuda" if torch.cuda.is_available() else "cpu", logit_clip=8.0, z_clip=10.0, std_source="bc"):
+    """
+    Per-hour behaviour and target log-probabilities for one seed: the expensive forward pass of WIS. With cache_dir
+    they are saved once per (split, seed) and reused by every later call (any cap, any bootstrap setting), as long as
+    the models, the clipping settings and the number of rows are unchanged; otherwise they are recomputed.
+    """
+    path = None
+    if cache_dir:
+        meta = {"cql": cql_model.record.run_dir, "bc": bc_model.record.run_dir, "split": split, "seed": str(cql_model.seed),
+                "n_rows": int(len(processor.rl_dataset["rewards"])), "logit_clip": logit_clip, "z_clip": z_clip,
+                "std_source": std_source}
+        os.makedirs(cache_dir, exist_ok=True)
+        path = os.path.join(cache_dir, f"wis_logprobs_{split}_seed{cql_model.seed}.npz")
+        if os.path.isfile(path):
+            d = np.load(path, allow_pickle=False)
+            if json.loads(str(d["meta"])) == meta:
+                print(f"  log-probs loaded from {path}")
+                return d["behavior_lp"], d["target_lp"]
+            warnings.warn(f"{path} was made with different models or settings; recomputing")
+    behavior_lp, target_lp = compute_behavior_and_target_log_probs(
+        cql_model.actor, bc_model.actor, processor.rl_dataset["states"], processor.rl_dataset["actions"],
+        batch_size=batch_size, device=device, logit_clip=logit_clip, z_clip=z_clip, std_source=std_source)
+    if path:
+        np.savez(path, behavior_lp=behavior_lp, target_lp=target_lp, meta=json.dumps(meta))
+    return behavior_lp, target_lp
+
+
+def save_wis_results(results, path, meta=None):
+    """Pickle per-seed WIS results without the torch actors (so the file is small and loads without the models)."""
+    import pickle
+    slim = [{k: v for k, v in r.items() if k not in ("bc_actor", "cql_actor")} for r in results]
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "wb") as f:
+        pickle.dump({"meta": meta, "results": slim}, f)
+
+
+def load_wis_results(path):
+    import pickle
+    with open(path, "rb") as f:
+        d = pickle.load(f)
+    return d["results"], d.get("meta")
+
+
+def cached_results(path, compute, meta=None):
+    """
+    Load the results at `path` if they exist and were made with the same `meta` (a JSON-able dict describing the
+    models and settings); otherwise call compute(), save, and return. Loaded results have no actor objects, so the
+    diagnostics that need them (e.g. print_dominant_trajectory_report) need a fresh run.
+    """
+    import json as _json
+    if os.path.isfile(path):
+        results, saved = load_wis_results(path)
+        if _json.dumps(saved, sort_keys=True, default=str) == _json.dumps(meta, sort_keys=True, default=str):
+            print(f"loaded cached results: {path}")
+            return results
+        warnings.warn(f"{path} was made with different models or settings; recomputing")
+    results = compute()
+    save_wis_results(results, path, meta)
+    return results
+
+
 def wis_one_seed(cql_model_entry, bc_model_entry, processor, seed, gamma=0.975, cap_percentile=None, batch_size=1024,
                  device="cuda" if torch.cuda.is_available() else "cpu", n_bootstrap=1000, random_state=0,
-                 logit_clip=8.0, z_clip=10.0, include_myopic=True, weight_cap_percentile=None, std_source="bc"):
+                 logit_clip=8.0, z_clip=10.0, include_myopic=True, weight_cap_percentile=None, std_source="bc",
+                 with_null_difference=True, logprobs=None):
     """
     One seed of the WIS pipeline on ITS OWN processor (its seed's states). run_wis_across_seeds and
     run_wis_for_models both call this, so the numbers are identical whichever way the models were loaded.
@@ -1380,10 +1541,13 @@ def wis_one_seed(cql_model_entry, bc_model_entry, processor, seed, gamma=0.975, 
     cql_actor = get_cql_actor(cql_model_entry)
     bc_actor = get_bc_actor(bc_model_entry)
 
-    behavior_lp, target_lp = compute_behavior_and_target_log_probs(
-        cql_actor, bc_actor, states, actions, batch_size=batch_size, device=device,
-        logit_clip=logit_clip, z_clip=z_clip, std_source=std_source,
-    )
+    if logprobs is not None:                     # precomputed (and possibly cached) by get_wis_log_probs
+        behavior_lp, target_lp = logprobs
+    else:
+        behavior_lp, target_lp = compute_behavior_and_target_log_probs(
+            cql_actor, bc_actor, states, actions, batch_size=batch_size, device=device,
+            logit_clip=logit_clip, z_clip=z_clip, std_source=std_source,
+        )
     trajectories, cap_bounds = build_trajectory_data(
         processor, behavior_lp, target_lp, cap_percentile=cap_percentile,
     )
@@ -1392,12 +1556,14 @@ def wis_one_seed(cql_model_entry, bc_model_entry, processor, seed, gamma=0.975, 
     step_wis = compute_stepwise_wis(trajectories, gamma, weight_cap_percentile=weight_cap_percentile)
     myopic_wis = compute_myopic_stepwise_wis(trajectories, gamma) if include_myopic else None
     baseline_mean, baseline_sem = compute_clinician_baseline_return(trajectories, gamma)
-    ci = bootstrap_wis_ci(
-        trajectories, gamma, estimator=("all" if include_myopic else "both"),
-        n_bootstrap=n_bootstrap, random_state=random_state,
-        weight_cap_percentile=weight_cap_percentile,
-    )
+    fast = fast_bootstrap_wis(trajectories, gamma, weight_cap_percentile=weight_cap_percentile,
+                              n_bootstrap=n_bootstrap, random_state=random_state)
+    ci = {"trajectory": fast["trajectory"], "stepwise": fast["stepwise"]}
+    if include_myopic:      # the myopic estimator is not vectorised; use the slow bootstrap for it only
+        ci["myopic"] = bootstrap_wis_ci(trajectories, gamma, estimator="myopic", n_bootstrap=n_bootstrap,
+                                        random_state=random_state)["myopic"]
     diag = summarize_weight_diagnostics(traj_wis["weights"])
+    minus_null = fast["minus_null"] if with_null_difference else None
 
     print(f"  [std_source={std_source}]")
     print(f"  Clinician baseline (logged) return: {baseline_mean:.4f} +/- {baseline_sem:.4f} (SEM)")
@@ -1411,6 +1577,12 @@ def wis_one_seed(cql_model_entry, bc_model_entry, processor, seed, gamma=0.975, 
         print(f"  Myopic per-decision WIS (non-cumulative, sanity-check only): "
               f"{myopic_wis['value']:.4f}  "
               f"[{ci['myopic']['ci_lower']:.4f}, {ci['myopic']['ci_upper']:.4f}]")
+    if minus_null is not None:
+        print(f"  Minus null (policy = clinician): trajectory {minus_null['trajectory']['diff']:+.3f} "
+              f"[{minus_null['trajectory']['ci_lower']:+.3f}, {minus_null['trajectory']['ci_upper']:+.3f}]   "
+              f"stepwise {minus_null['stepwise']['diff']:+.3f} "
+              f"[{minus_null['stepwise']['ci_lower']:+.3f}, {minus_null['stepwise']['ci_upper']:+.3f}]  "
+              f"(nulls {minus_null['trajectory']['null']:.3f} / {minus_null['stepwise']['null']:.3f})")
     print(f"  Top-1% of trajectories hold {100 * diag['top_1pct_weight_frac']:.1f}% of total weight "
           f"(max single trajectory: {100 * diag['max_weight_frac']:.1f}%)")
 
@@ -1425,6 +1597,7 @@ def wis_one_seed(cql_model_entry, bc_model_entry, processor, seed, gamma=0.975, 
         "baseline_sem": baseline_sem,
         "bootstrap_ci": ci,
         "weight_diagnostics": diag,
+        "minus_null": minus_null,
         "n_trajectories": len(trajectories),
         # kept for post-hoc diagnostics (e.g. print_dominant_trajectory_report,
         # compare_dominant_trajectory_across_seeds) without needing to re-derive
@@ -1518,11 +1691,13 @@ def run_wis_across_seeds(
     return results
 
 
-def run_wis_for_models(cql_models, bc_models, store, split="test", gamma=0.975, **kwargs):
+def run_wis_for_models(cql_models, bc_models, store, split="test", gamma=0.975, cache_dir=None, **kwargs):
     """
     The same pipeline for models loaded with the analysis API ({seed: LoadedModel}, see models.load_study_models).
     Each seed is scored on ITS OWN states (the seed's Dynamic-DeepHit embedding) and on its own matched BC seed.
     kwargs go to wis_one_seed (cap_percentile, weight_cap_percentile, n_bootstrap, include_myopic, ...).
+    cache_dir: if given, the per-hour log-probabilities (the slow forward pass) are saved there once per seed and
+    reused by every later call, whatever the cap.
     Returns the same list of per-seed result dicts as run_wis_across_seeds, so the plotting functions work unchanged.
     """
     from src.rl.evaluate_cql_alpha_sweep import check_judge_matches
@@ -1535,7 +1710,9 @@ def run_wis_for_models(cql_models, bc_models, store, split="test", gamma=0.975, 
         check_judge_matches(cql[seed], bc[seed])          # same seed and same state embedding
         processor = store.processor(cql[seed], split)
         print(f"\n=== Seed {seed} ===")
-        results.append(wis_one_seed(cql[seed].actor, bc[seed].actor, processor, seed, gamma=gamma, **kwargs))
+        lp = get_wis_log_probs(cql[seed], bc[seed], processor, split, cache_dir=cache_dir,
+                               **{k: kwargs[k] for k in ("batch_size", "device", "logit_clip", "z_clip", "std_source") if k in kwargs})
+        results.append(wis_one_seed(cql[seed].actor, bc[seed].actor, processor, seed, gamma=gamma, logprobs=lp, **kwargs))
     return results
 
 
@@ -1709,9 +1886,11 @@ def run_weight_truncation_sweep(
         gamma=0.975, n_bootstrap=300, random_state=0,
         logit_clip=8.0, z_clip=10.0, batch_size=1024,
         device="cuda" if torch.cuda.is_available() else "cpu",
-        std_source="bc",
+        std_source="bc", precomputed_lp=None,
     ):
     """
+    precomputed_lp: optional {seed: (behavior_lp, target_lp)}; seeds found there skip the forward pass.
+
     For every seed-matched (CQL, BC) pair, computes log-probs and builds
     trajectories ONCE (no per-step cap_percentile -- this sweep is about
     weight_cap_percentile only), then re-evaluates compute_trajectory_wis /
@@ -1744,20 +1923,21 @@ def run_weight_truncation_sweep(
         cql_actor = get_cql_actor(cql_model_entry)
         bc_actor = get_bc_actor(bc_model_entry)
 
-        behavior_lp, target_lp = compute_behavior_and_target_log_probs(
-            cql_actor, bc_actor, states, actions, batch_size=batch_size, device=device,
-            logit_clip=logit_clip, z_clip=z_clip, std_source=std_source,
-        )
+        if precomputed_lp is not None and seed in precomputed_lp:
+            behavior_lp, target_lp = precomputed_lp[seed]
+        else:
+            behavior_lp, target_lp = compute_behavior_and_target_log_probs(
+                cql_actor, bc_actor, states, actions, batch_size=batch_size, device=device,
+                logit_clip=logit_clip, z_clip=z_clip, std_source=std_source,
+            )
         trajectories, _ = build_trajectory_data(processor, behavior_lp, target_lp, cap_percentile=None)
         baseline_mean, baseline_sem = compute_clinician_baseline_return(trajectories, gamma)
 
         for wcap in wcap_values:
             traj_wis = compute_trajectory_wis(trajectories, gamma, weight_cap_percentile=wcap)
             step_wis = compute_stepwise_wis(trajectories, gamma, weight_cap_percentile=wcap)
-            ci = bootstrap_wis_ci(
-                trajectories, gamma, estimator="both", n_bootstrap=n_bootstrap,
-                random_state=random_state, weight_cap_percentile=wcap,
-            )
+            ci = fast_bootstrap_wis(trajectories, gamma, weight_cap_percentile=wcap, n_bootstrap=n_bootstrap,
+                                    random_state=random_state)
 
             # Genuine stepwise ESS summary: compute_stepwise_wis's own
             # per-timestep ESS, NOT trajectory-level ESS. Earlier versions of
@@ -1799,7 +1979,8 @@ def run_weight_truncation_sweep(
     return sweep_rows
 
 
-def run_weight_truncation_sweep_for_models(cql_models, bc_models, store, wcap_values, split="test", gamma=0.975, **kwargs):
+def run_weight_truncation_sweep_for_models(cql_models, bc_models, store, wcap_values, split="test", gamma=0.975,
+                                           cache_dir=None, **kwargs):
     """
     run_weight_truncation_sweep for models loaded with the analysis API ({seed: LoadedModel}): each seed is swept on
     ITS OWN states and its matched BC seed. kwargs go to run_weight_truncation_sweep (n_bootstrap, std_source, ...).
@@ -1814,9 +1995,11 @@ def run_weight_truncation_sweep_for_models(cql_models, bc_models, store, wcap_va
     for seed in sorted(cql, key=str):
         check_judge_matches(cql[seed], bc[seed])
         processor = store.processor(cql[seed], split)
+        lp = get_wis_log_probs(cql[seed], bc[seed], processor, split, cache_dir=cache_dir,
+                               **{k: kwargs[k] for k in ("batch_size", "device", "logit_clip", "z_clip", "std_source") if k in kwargs})
         rows.extend(run_weight_truncation_sweep(
             [(cql[seed].actor, None, None, {"seed": seed})], [(bc[seed].actor, None, {"seed": seed})],
-            processor, wcap_values, gamma=gamma, **kwargs))
+            processor, wcap_values, gamma=gamma, precomputed_lp={seed: lp}, **kwargs))
     return rows
 
 

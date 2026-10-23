@@ -22,6 +22,13 @@ from .training import create_buffer
 from .models.shared_components import TrainerUtils
 from ..setup_environment import load_paths
 
+# --- comparison of SARSA critics (new-style analysis; uses the runs / models / data infrastructure) ---
+import warnings
+from typing import Any, Dict
+from src.rl.analysis import data as D
+from src.rl.evaluate_cql_alpha_sweep import actor_actions, check_judge_matches
+from src.rl.evaluate_fqe_final_seeds import _by_seed, _pct_ci, mc_calibration_one_seed
+
 
 
 RL_MODELS_PATH = "/home/jake/Documents/AI_Clinician/models/rl_models/choc" 
@@ -1195,6 +1202,187 @@ def plot_figures(action_analysis, save_dir=None):
 
 
     return
+
+
+# =============================================================================
+# Comparing SARSA critics seed for seed (e.g. early-stopped vs long-trained)
+# =============================================================================
+#
+# Question: do better-trained judges change what we conclude? Three things are compared per seed on one split:
+#   1. critic quality  - Bellman residual and level against observed discounted returns (interior rows only)
+#   2. the advantage   - Q(s, pi(s)) - Q(s, a_clinician) of the final CQL policy under each critic
+#   3. agreement       - row-wise correlation of Q and of the advantage between the two critics
+# The pass criteria for (1) are arguments, so they are fixed before looking: |gap_interior| < gap_tol and
+# |mean_td| < td_tol (a mean TD of 0.0025 is about 0.1 of level error at gamma = 0.975).
+
+
+def _reward_scaling(critic) -> float:
+    rs = critic.record.get("reward_scaling")
+    return 1.0 if rs is None else float(rs)
+
+
+def critic_td_summary(critic, processor, next_actions=None, huber_beta: float = 1.0) -> Dict[str, float]:
+    """
+    Bellman residual of a critic on `processor`, with the TRAINER's conventions (basic_q.Q_Learner):
+      target = r * reward_scaling + discount * (1 - done * mortality) * Q(s', a')
+    i.e. only death is terminal; a discharge is truncated and bootstraps from the next state. Q is raw (unscaled).
+    next_actions: the a' used in the target (default: the logged next action, i.e. SARSA's own target; pass the
+    target policy's actions at s' to test an FQE critic against its policy).
+    Returns mean / median / rmse of the TD error (target - Q; ~0 on average for a critic at its fixed point)
+    and the mean Huber (smooth-L1) loss of it, comparable in size to the logged training / validation critic loss.
+    """
+    gamma = critic.record.get("discount")
+    if gamma is None:
+        raise KeyError(f"{critic.record.label}: no 'discount' in the run's hyperparameters")
+    mort = D.mortality(processor)
+    if mort is None:
+        raise ValueError("processor has no mortality; needed for the trainer's done rule")
+    s, a, s2 = D.states(processor), D.actions(processor), D.next_states(processor)
+    a2 = D.next_actions(processor) if next_actions is None else next_actions
+    r, done = D.rewards(processor) * _reward_scaling(critic), D.dones(processor)
+    not_done = 1.0 - (done & mort)
+    td = r + float(gamma) * not_done * critic.q(s2, a2) - critic.q(s, a)
+    ad = np.abs(td)
+    huber = np.where(ad < huber_beta, 0.5 * td ** 2 / huber_beta, ad - 0.5 * huber_beta)
+    return {"mean_td": float(td.mean()), "median_td": float(np.median(td)), "rmse_td": float(np.sqrt((td ** 2).mean())),
+            "huber_td": float(huber.mean())}
+
+
+def compare_sarsa_critics(old_models, new_models, store, split="val", cql_models=None, n_boot=500, boot_seed=0,
+                          tail_weight=0.05, batch_size=4096, verbose=True):
+    """
+    old_models, new_models : SARSA critics, {seed: LoadedModel} or one group (e.g. load_study_models(study)[()])
+    store                  : data.DataStore; each seed's data comes from its own critic's data identity
+    cql_models             : OPTIONAL final CQL models, {seed: LoadedModel}. Without them only critic quality is
+                             compared; with them the advantage of the CQL policy under each critic is added.
+    Returns (per_critic, per_seed):
+      per_critic : one row per (seed, critic in {old, new}): mean / median / rmse / Huber of the TD error; interior level gap
+                   (Q - observed return on rows with enough later rows, see mc_calibration_one_seed) with CI; corr_interior;
+                   [with cql_models: normalised advantage with a stay-bootstrap CI and the share of rows with advantage > 0]
+      per_seed   : agreement between the critics: corr of Q;
+                   [with cql_models: corr and sign agreement of the per-row advantage, and the change in normalised
+                   advantage (new - old) with a paired stay-bootstrap CI]
+    """
+    old, new = _by_seed(old_models), _by_seed(new_models)
+    cql = _by_seed(cql_models) if cql_models is not None else None
+    seeds = sorted(set(old) & set(new) & (set(cql) if cql is not None else set(old)), key=str)
+    dropped = (set(old) | set(new) | (set(cql) if cql is not None else set())) - set(seeds)
+    if not seeds:
+        raise KeyError(f"no seed present in all model sets: old {sorted(old, key=str)}, new {sorted(new, key=str)}")
+    if dropped:
+        warnings.warn(f"seeds {sorted(dropped, key=str)} are not in all model sets and were skipped")
+
+    per_critic, per_seed = [], []
+    for seed in seeds:
+        crit = {"old": old[seed], "new": new[seed]}
+        ref = cql[seed] if cql is not None else crit["old"]          # defines the data for this seed
+        for c in crit.values():
+            check_judge_matches(ref, c)
+            if _reward_scaling(c) != 1.0:
+                warnings.warn(f"{c.record.label}: reward_scaling = {_reward_scaling(c)}; observed returns are not rescaled, "
+                              f"so the level gap is not comparable")
+        p = store.processor(ref, split)
+        s, a_clin = D.states(p), D.actions(p)
+        traj = D.trajectory_ids(p)
+        inv = np.unique(traj, return_inverse=True)[1]
+        J = int(inv.max()) + 1
+        n = np.bincount(inv, minlength=J).astype(np.float64)
+        idx = np.random.default_rng(boot_seed).integers(0, J, size=(n_boot, J), dtype=np.int32)
+        den = n[idx].sum(1)
+        a_pi = actor_actions(cql[seed], s, batch_size=batch_size) if cql is not None else None
+
+        keep = {}
+        for name, c in crit.items():
+            td = critic_td_summary(c, p)
+            mc = mc_calibration_one_seed(c, p, n_boot=n_boot, boot_seed=boot_seed, tail_weight=tail_weight,
+                                         batch_size=batch_size)["row"]
+            q_cl = c.q(s, a_clin, batch_size=batch_size, scaled=True)
+            keep[name] = {"q": q_cl}
+            row = {"seed": seed, "critic": name, **td,
+                   "gap_interior": mc["gap_interior"], "gap_interior_lo": mc["gap_interior_lo"], "gap_interior_hi": mc["gap_interior_hi"],
+                   "corr_interior": mc["corr_interior"], "Q_interior_mean": mc["Q_interior_mean"], "G_interior_mean": mc["G_interior_mean"],
+                   "H_interior": mc["H_interior"]}
+            if a_pi is not None:
+                adv = c.q(s, a_pi, batch_size=batch_size, scaled=True) - q_cl
+                iqr = max(float(np.quantile(q_cl, 0.75) - np.quantile(q_cl, 0.25)), 1e-6)
+                boot = (np.bincount(inv, weights=adv, minlength=J)[idx].sum(1) / den) / iqr
+                keep[name].update({"adv": adv, "boot": boot, "norm": float(adv.mean() / iqr)})
+                row.update({"adv_all_norm": keep[name]["norm"], "frac_adv_pos": float((adv > 0).mean())})
+                row["adv_all_norm_lo"], row["adv_all_norm_hi"] = _pct_ci(boot)
+            per_critic.append(row)
+
+        o, nw = keep["old"], keep["new"]
+        pair = {"seed": seed, "corr_q": float(np.corrcoef(o["q"], nw["q"])[0, 1])}
+        if a_pi is not None:
+            pair.update({"corr_adv": float(np.corrcoef(o["adv"], nw["adv"])[0, 1]),
+                         "sign_agree": float((np.sign(o["adv"]) == np.sign(nw["adv"])).mean()),
+                         "adv_norm_old": o["norm"], "adv_norm_new": nw["norm"], "d_adv_norm": nw["norm"] - o["norm"]})
+            pair["d_adv_norm_lo"], pair["d_adv_norm_hi"] = _pct_ci(nw["boot"] - o["boot"])
+        per_seed.append(pair)
+        if verbose:
+            r = {x["critic"]: x for x in per_critic if x["seed"] == seed}
+            msg = (f"  seed {seed}: gap old {r['old']['gap_interior']:+.3f} -> new {r['new']['gap_interior']:+.3f}   "
+                   f"mean TD {r['old']['mean_td']:+.4f} -> {r['new']['mean_td']:+.4f}   corr(Q) {pair['corr_q']:.2f}")
+            if a_pi is not None:
+                msg += f"   adv_norm {pair['adv_norm_old']:.3f} -> {pair['adv_norm_new']:.3f}   corr(adv) {pair['corr_adv']:.2f}"
+            print(msg)
+    return pd.DataFrame(per_critic), pd.DataFrame(per_seed)
+
+
+def plot_sarsa_comparison(per_critic: pd.DataFrame, per_seed: pd.DataFrame, gap_tol: float = 0.1, td_tol: float = 0.003,
+                          title: str = "", save_path=None):
+    """
+    Old vs new critic per seed: level gap (with its pass band), mean TD (with its band), agreement, and, when the
+    comparison was run with cql_models, the normalised advantage.
+    """
+    has_adv = "adv_all_norm" in per_critic
+    n_panels = 4 if has_adv else 3
+    fig, axes = plt.subplots(1, n_panels, figsize=(4.5 * n_panels, 4), constrained_layout=True)
+    seeds = list(dict.fromkeys(per_critic.seed))
+    x = np.arange(len(seeds))
+    style = {"old": ("o", "C1", -0.12), "new": ("s", "C0", 0.12)}
+
+    def col(name, c):
+        d = per_critic[per_critic.critic == name].set_index("seed")
+        return d.loc[seeds, c].to_numpy()
+
+    ax = axes[0]
+    ax.axhspan(-gap_tol, gap_tol, color="green", alpha=0.08); ax.axhline(0, color="grey", lw=1)
+    for name, (mk, cl, off) in style.items():
+        y = col(name, "gap_interior")
+        ax.errorbar(x + off, y, yerr=[y - col(name, "gap_interior_lo"), col(name, "gap_interior_hi") - y], fmt=mk, color=cl, capsize=3, label=name)
+    ax.set_title("level: Q - observed return (interior rows)"); ax.set_ylabel("health-score points"); ax.legend(frameon=False)
+
+    ax = axes[1]
+    ax.axhspan(-td_tol, td_tol, color="green", alpha=0.08); ax.axhline(0, color="grey", lw=1)
+    for name, (mk, cl, off) in style.items():
+        ax.plot(x + off, col(name, "mean_td"), mk, color=cl, label=name)
+    ax.set_title("mean Bellman (TD) error"); ax.set_ylabel("reward units per step")
+
+    k = 2
+    if has_adv:
+        ax = axes[k]; k += 1
+        ax.axhline(0, color="grey", lw=1)
+        for name, (mk, cl, off) in style.items():
+            y = col(name, "adv_all_norm")
+            ax.errorbar(x + off, y, yerr=[y - col(name, "adv_all_norm_lo"), col(name, "adv_all_norm_hi") - y], fmt=mk, color=cl, capsize=3, label=name)
+        ax.set_title("advantage of the CQL policy"); ax.set_ylabel("advantage / IQR(Q at clinician actions)")
+
+    ax = axes[k]
+    ps = per_seed.set_index("seed").loc[seeds]
+    ax.plot(x, ps.corr_q, "^", color="grey", label="corr of Q")
+    if has_adv:
+        ax.plot(x - 0.06, ps.corr_adv, "o", label="corr of per-row advantage")
+        ax.plot(x + 0.06, ps.sign_agree, "s", label="sign agreement")
+    ax.set_ylim(0, 1.02); ax.set_title("agreement old vs new"); ax.legend(frameon=False, fontsize=8)
+
+    for ax in axes:
+        ax.set_xticks(x, [str(kk) for kk in seeds]); ax.set_xlabel("seed")
+    if title:
+        fig.suptitle(title)
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
 
 
 def main():

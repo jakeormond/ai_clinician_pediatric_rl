@@ -348,6 +348,23 @@ register_loader("sarsa", _load_basic_q)
 register_loader("fqe", _load_basic_q)        # an FQE critic is only valid for the ONE target policy it was fit to
 
 
+def _load_bc(record: RunRecord, state_dim: int, device) -> LoadedModel:
+    """
+    The behaviour-cloning hurdle actor (bc_with_logprobs.Actor). Its log_prob_of_action is the behaviour density
+    used as pi_b in WIS. Architecture comes from the SAVED hyperparameters.
+    """
+    from src.rl.models.bc_with_logprobs import Actor as BCActor
+    ckpt = _read_checkpoint(record, device)
+    actor = BCActor(state_dim=state_dim, hidden_dim=_require(record, "hidden_dim"), dropout=_require(record, "dropout"),
+                    fluid_gate_hidden=record.hyperparams.get("fluid_gate_hidden", 0)).to(device)
+    actor.load_state_dict(ckpt["actor_state_dict"])
+    return LoadedModel(record=record, components={"actor": actor},
+                       loader_extras={"config_manager": record.load_config_manager()})
+
+
+register_loader("bc", _load_bc)
+
+
 # ---- Dynamic-DeepHit -------------------------------------------------------------
 # LoadedModel.network is the TransformerDeepHitMulti; LoadedModel.config_manager is the run's
 # config with experiment_dir set to the run folder (what predict.py and the training Dataset use).

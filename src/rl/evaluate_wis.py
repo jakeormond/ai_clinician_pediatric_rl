@@ -1368,6 +1368,72 @@ def bootstrap_wis_ci(trajectories, gamma, estimator="both", n_bootstrap=1000,
 # Orchestration across the 5 matched (CQL, BC) seed pairs
 # ---------------------------------------------------------------------------
 
+def wis_one_seed(cql_model_entry, bc_model_entry, processor, seed, gamma=0.975, cap_percentile=None, batch_size=1024,
+                 device="cuda" if torch.cuda.is_available() else "cpu", n_bootstrap=1000, random_state=0,
+                 logit_clip=8.0, z_clip=10.0, include_myopic=True, weight_cap_percentile=None, std_source="bc"):
+    """
+    One seed of the WIS pipeline on ITS OWN processor (its seed's states). run_wis_across_seeds and
+    run_wis_for_models both call this, so the numbers are identical whichever way the models were loaded.
+    """
+    states = processor.rl_dataset["states"]
+    actions = processor.rl_dataset["actions"]
+    cql_actor = get_cql_actor(cql_model_entry)
+    bc_actor = get_bc_actor(bc_model_entry)
+
+    behavior_lp, target_lp = compute_behavior_and_target_log_probs(
+        cql_actor, bc_actor, states, actions, batch_size=batch_size, device=device,
+        logit_clip=logit_clip, z_clip=z_clip, std_source=std_source,
+    )
+    trajectories, cap_bounds = build_trajectory_data(
+        processor, behavior_lp, target_lp, cap_percentile=cap_percentile,
+    )
+
+    traj_wis = compute_trajectory_wis(trajectories, gamma, weight_cap_percentile=weight_cap_percentile)
+    step_wis = compute_stepwise_wis(trajectories, gamma, weight_cap_percentile=weight_cap_percentile)
+    myopic_wis = compute_myopic_stepwise_wis(trajectories, gamma) if include_myopic else None
+    baseline_mean, baseline_sem = compute_clinician_baseline_return(trajectories, gamma)
+    ci = bootstrap_wis_ci(
+        trajectories, gamma, estimator=("all" if include_myopic else "both"),
+        n_bootstrap=n_bootstrap, random_state=random_state,
+        weight_cap_percentile=weight_cap_percentile,
+    )
+    diag = summarize_weight_diagnostics(traj_wis["weights"])
+
+    print(f"  [std_source={std_source}]")
+    print(f"  Clinician baseline (logged) return: {baseline_mean:.4f} +/- {baseline_sem:.4f} (SEM)")
+    print(f"  Trajectory-level WIS: {traj_wis['value']:.4f}  "
+          f"[{ci['trajectory']['ci_lower']:.4f}, {ci['trajectory']['ci_upper']:.4f}]  "
+          f"ESS={traj_wis['ess']:.1f}/{traj_wis['n_trajectories']} "
+          f"({100 * diag['ess_frac']:.1f}%)")
+    print(f"  Stepwise WIS:         {step_wis['value']:.4f}  "
+          f"[{ci['stepwise']['ci_lower']:.4f}, {ci['stepwise']['ci_upper']:.4f}]")
+    if include_myopic:
+        print(f"  Myopic per-decision WIS (non-cumulative, sanity-check only): "
+              f"{myopic_wis['value']:.4f}  "
+              f"[{ci['myopic']['ci_lower']:.4f}, {ci['myopic']['ci_upper']:.4f}]")
+    print(f"  Top-1% of trajectories hold {100 * diag['top_1pct_weight_frac']:.1f}% of total weight "
+          f"(max single trajectory: {100 * diag['max_weight_frac']:.1f}%)")
+
+    return {
+        "seed": seed,
+        "trajectories": trajectories,
+        "cap_bounds": cap_bounds,
+        "trajectory_wis": traj_wis,
+        "stepwise_wis": step_wis,
+        "myopic_stepwise_wis": myopic_wis,
+        "baseline_mean": baseline_mean,
+        "baseline_sem": baseline_sem,
+        "bootstrap_ci": ci,
+        "weight_diagnostics": diag,
+        "n_trajectories": len(trajectories),
+        # kept for post-hoc diagnostics (e.g. print_dominant_trajectory_report,
+        # compare_dominant_trajectory_across_seeds) without needing to re-derive
+        # which BC/CQL actor belongs to this seed afterward
+        "bc_actor": bc_actor,
+        "cql_actor": cql_actor,
+    }
+
+
 def run_wis_across_seeds(
         cql_models_with_seeds, bc_models_with_seeds, processor,
         gamma=0.975, cap_percentile=None, batch_size=1024,
@@ -1443,62 +1509,33 @@ def run_wis_across_seeds(
     results = []
     for cql_model_entry, bc_model_entry, seed in pairs:
         print(f"\n=== Seed {seed} ===")
-        cql_actor = get_cql_actor(cql_model_entry)
-        bc_actor = get_bc_actor(bc_model_entry)
+        results.append(wis_one_seed(
+            cql_model_entry, bc_model_entry, processor, seed, gamma=gamma, cap_percentile=cap_percentile,
+            batch_size=batch_size, device=device, n_bootstrap=n_bootstrap, random_state=random_state,
+            logit_clip=logit_clip, z_clip=z_clip, include_myopic=include_myopic,
+            weight_cap_percentile=weight_cap_percentile, std_source=std_source))
 
-        behavior_lp, target_lp = compute_behavior_and_target_log_probs(
-            cql_actor, bc_actor, states, actions, batch_size=batch_size, device=device,
-            logit_clip=logit_clip, z_clip=z_clip, std_source=std_source,
-        )
-        trajectories, cap_bounds = build_trajectory_data(
-            processor, behavior_lp, target_lp, cap_percentile=cap_percentile,
-        )
+    return results
 
-        traj_wis = compute_trajectory_wis(trajectories, gamma, weight_cap_percentile=weight_cap_percentile)
-        step_wis = compute_stepwise_wis(trajectories, gamma, weight_cap_percentile=weight_cap_percentile)
-        myopic_wis = compute_myopic_stepwise_wis(trajectories, gamma) if include_myopic else None
-        baseline_mean, baseline_sem = compute_clinician_baseline_return(trajectories, gamma)
-        ci = bootstrap_wis_ci(
-            trajectories, gamma, estimator=("all" if include_myopic else "both"),
-            n_bootstrap=n_bootstrap, random_state=random_state,
-            weight_cap_percentile=weight_cap_percentile,
-        )
-        diag = summarize_weight_diagnostics(traj_wis["weights"])
 
-        print(f"  [std_source={std_source}]")
-        print(f"  Clinician baseline (logged) return: {baseline_mean:.4f} +/- {baseline_sem:.4f} (SEM)")
-        print(f"  Trajectory-level WIS: {traj_wis['value']:.4f}  "
-              f"[{ci['trajectory']['ci_lower']:.4f}, {ci['trajectory']['ci_upper']:.4f}]  "
-              f"ESS={traj_wis['ess']:.1f}/{traj_wis['n_trajectories']} "
-              f"({100 * diag['ess_frac']:.1f}%)")
-        print(f"  Stepwise WIS:         {step_wis['value']:.4f}  "
-              f"[{ci['stepwise']['ci_lower']:.4f}, {ci['stepwise']['ci_upper']:.4f}]")
-        if include_myopic:
-            print(f"  Myopic per-decision WIS (non-cumulative, sanity-check only): "
-                  f"{myopic_wis['value']:.4f}  "
-                  f"[{ci['myopic']['ci_lower']:.4f}, {ci['myopic']['ci_upper']:.4f}]")
-        print(f"  Top-1% of trajectories hold {100 * diag['top_1pct_weight_frac']:.1f}% of total weight "
-              f"(max single trajectory: {100 * diag['max_weight_frac']:.1f}%)")
-
-        results.append({
-            "seed": seed,
-            "trajectories": trajectories,
-            "cap_bounds": cap_bounds,
-            "trajectory_wis": traj_wis,
-            "stepwise_wis": step_wis,
-            "myopic_stepwise_wis": myopic_wis,
-            "baseline_mean": baseline_mean,
-            "baseline_sem": baseline_sem,
-            "bootstrap_ci": ci,
-            "weight_diagnostics": diag,
-            "n_trajectories": len(trajectories),
-            # kept for post-hoc diagnostics (e.g. print_dominant_trajectory_report,
-            # compare_dominant_trajectory_across_seeds) without needing to re-derive
-            # which BC/CQL actor belongs to this seed afterward
-            "bc_actor": bc_actor,
-            "cql_actor": cql_actor,
-        })
-
+def run_wis_for_models(cql_models, bc_models, store, split="test", gamma=0.975, **kwargs):
+    """
+    The same pipeline for models loaded with the analysis API ({seed: LoadedModel}, see models.load_study_models).
+    Each seed is scored on ITS OWN states (the seed's Dynamic-DeepHit embedding) and on its own matched BC seed.
+    kwargs go to wis_one_seed (cap_percentile, weight_cap_percentile, n_bootstrap, include_myopic, ...).
+    Returns the same list of per-seed result dicts as run_wis_across_seeds, so the plotting functions work unchanged.
+    """
+    from src.rl.evaluate_cql_alpha_sweep import check_judge_matches
+    from src.rl.evaluate_fqe_final_seeds import _by_seed
+    cql, bc = _by_seed(cql_models), _by_seed(bc_models)
+    if set(cql) != set(bc):
+        raise KeyError(f"CQL seeds {sorted(cql, key=str)} and BC seeds {sorted(bc, key=str)} differ")
+    results = []
+    for seed in sorted(cql, key=str):
+        check_judge_matches(cql[seed], bc[seed])          # same seed and same state embedding
+        processor = store.processor(cql[seed], split)
+        print(f"\n=== Seed {seed} ===")
+        results.append(wis_one_seed(cql[seed].actor, bc[seed].actor, processor, seed, gamma=gamma, **kwargs))
     return results
 
 
@@ -1760,6 +1797,27 @@ def run_weight_truncation_sweep(
                   f"step={row['step_value']:.3f} (step ESS {100 * step_ess_frac:.1f}%)")
 
     return sweep_rows
+
+
+def run_weight_truncation_sweep_for_models(cql_models, bc_models, store, wcap_values, split="test", gamma=0.975, **kwargs):
+    """
+    run_weight_truncation_sweep for models loaded with the analysis API ({seed: LoadedModel}): each seed is swept on
+    ITS OWN states and its matched BC seed. kwargs go to run_weight_truncation_sweep (n_bootstrap, std_source, ...).
+    Returns the same flat list of per-(seed, cap) rows, ready for plot_weight_truncation_sweep.
+    """
+    from src.rl.evaluate_cql_alpha_sweep import check_judge_matches
+    from src.rl.evaluate_fqe_final_seeds import _by_seed
+    cql, bc = _by_seed(cql_models), _by_seed(bc_models)
+    if set(cql) != set(bc):
+        raise KeyError(f"CQL seeds {sorted(cql, key=str)} and BC seeds {sorted(bc, key=str)} differ")
+    rows = []
+    for seed in sorted(cql, key=str):
+        check_judge_matches(cql[seed], bc[seed])
+        processor = store.processor(cql[seed], split)
+        rows.extend(run_weight_truncation_sweep(
+            [(cql[seed].actor, None, None, {"seed": seed})], [(bc[seed].actor, None, {"seed": seed})],
+            processor, wcap_values, gamma=gamma, **kwargs))
+    return rows
 
 
 def plot_weight_truncation_sweep(sweep_rows, estimator="trajectory", save_path=None):

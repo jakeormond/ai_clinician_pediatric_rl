@@ -686,3 +686,4 @@ def make_study(roots, family=None, group_by=(), name="", verify_checkpoint=False
 register_family(FamilySpec(name="cql", detect=_path_contains("cql_with_logprobs", "cql")))
 register_family(FamilySpec(name="sarsa", detect=lambda d: _path_contains("basic_q")(d) and not _path_contains("fqe")(d)))
 register_family(FamilySpec(name="fqe", detect=_path_contains("fqe")))
+register_family(FamilySpec(name="bc", detect=_path_contains("bc_with_logprobs")))

@@ -1459,6 +1459,34 @@ def bootstrap_wis_minus_null(trajectories, gamma, weight_cap_percentile=None, n_
     return fast_bootstrap_wis(trajectories, gamma, weight_cap_percentile, n_bootstrap, ci, random_state)["minus_null"]
 
 
+def discount_from_models(models):
+    """
+    The discount the models were trained with, read from their saved hyperparameters ('discount'). Raises if the
+    seeds disagree or the key is missing, so gamma is never silently assumed.
+    """
+    from src.rl.evaluate_fqe_final_seeds import _by_seed
+    vals = {}
+    for seed, m in _by_seed(models).items():
+        hp = m.record.hyperparams
+        if "discount" not in hp:
+            raise KeyError(f"{m.record.label}: saved hyperparameters have no 'discount'")
+        vals[seed] = float(hp["discount"])
+    if len(set(vals.values())) != 1:
+        raise ValueError(f"models were trained with different discounts: {vals}")
+    return next(iter(vals.values()))
+
+
+def _resolve_gamma(gamma, cql_models):
+    """gamma=None -> the CQL models' own discount; an explicit value that disagrees with it is an error."""
+    trained = discount_from_models(cql_models)
+    if gamma is None:
+        print(f"gamma = {trained} (CQL models' saved discount)")
+        return trained
+    if abs(float(gamma) - trained) > 1e-12:
+        raise ValueError(f"gamma={gamma} but the CQL models were trained with discount {trained}")
+    return float(gamma)
+
+
 def models_signature(cql_models, bc_models):
     """Run folders of the models, used to check that cached results belong to the models being analysed."""
     from src.rl.evaluate_fqe_final_seeds import _by_seed
@@ -1691,9 +1719,10 @@ def run_wis_across_seeds(
     return results
 
 
-def run_wis_for_models(cql_models, bc_models, store, split="test", gamma=0.975, cache_dir=None, **kwargs):
+def run_wis_for_models(cql_models, bc_models, store, split="test", gamma=None, cache_dir=None, **kwargs):
     """
     The same pipeline for models loaded with the analysis API ({seed: LoadedModel}, see models.load_study_models).
+    gamma=None (default) uses the CQL models' saved discount.
     Each seed is scored on ITS OWN states (the seed's Dynamic-DeepHit embedding) and on its own matched BC seed.
     kwargs go to wis_one_seed (cap_percentile, weight_cap_percentile, n_bootstrap, include_myopic, ...).
     cache_dir: if given, the per-hour log-probabilities (the slow forward pass) are saved there once per seed and
@@ -1705,6 +1734,7 @@ def run_wis_for_models(cql_models, bc_models, store, split="test", gamma=0.975, 
     cql, bc = _by_seed(cql_models), _by_seed(bc_models)
     if set(cql) != set(bc):
         raise KeyError(f"CQL seeds {sorted(cql, key=str)} and BC seeds {sorted(bc, key=str)} differ")
+    gamma = _resolve_gamma(gamma, cql_models)
     results = []
     for seed in sorted(cql, key=str):
         check_judge_matches(cql[seed], bc[seed])          # same seed and same state embedding
@@ -1979,7 +2009,7 @@ def run_weight_truncation_sweep(
     return sweep_rows
 
 
-def run_weight_truncation_sweep_for_models(cql_models, bc_models, store, wcap_values, split="test", gamma=0.975,
+def run_weight_truncation_sweep_for_models(cql_models, bc_models, store, wcap_values, split="test", gamma=None,
                                            cache_dir=None, **kwargs):
     """
     run_weight_truncation_sweep for models loaded with the analysis API ({seed: LoadedModel}): each seed is swept on
@@ -1991,6 +2021,7 @@ def run_weight_truncation_sweep_for_models(cql_models, bc_models, store, wcap_va
     cql, bc = _by_seed(cql_models), _by_seed(bc_models)
     if set(cql) != set(bc):
         raise KeyError(f"CQL seeds {sorted(cql, key=str)} and BC seeds {sorted(bc, key=str)} differ")
+    gamma = _resolve_gamma(gamma, cql_models)
     rows = []
     for seed in sorted(cql, key=str):
         check_judge_matches(cql[seed], bc[seed])
@@ -2092,4 +2123,51 @@ def plot_weight_truncation_sweep(sweep_rows, estimator="trajectory", save_path=N
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
         print(f"Saved to {save_path}")
+    return fig
+
+def plot_wis_summary(res_by_cap, title="", uncapped=None, save_path=None):
+    """
+    Summary of WIS against the clinician: for each estimator, policy minus null (policy = clinician) per seed with
+    its paired bootstrap 95% CI, at each weight-truncation level. Zero = no difference from the clinician.
+
+    res_by_cap : {cap: results of run_wis_for_models for that cap}, e.g. {25: ..., 50: ...}
+    uncapped   : optional results of the uncapped run; not drawn (ESS is about one stay) but its ESS is noted.
+    """
+    caps = list(res_by_cap)
+    panels = (("trajectory", "Trajectory-level WIS"), ("stepwise", "Stepwise WIS"))
+    ink, mute, hue = "#222222", "#6b6b6b", "#2f6db5"
+    fig, axes = plt.subplots(1, 2, figsize=(9.5, 4.2), sharey=True, constrained_layout=True)
+    for ax, (est, label) in zip(axes, panels):
+        for k, cap in enumerate(caps):
+            res = res_by_cap[cap]
+            n = len(res)
+            xs = k + np.linspace(-0.22, 0.22, n)
+            for x, r in zip(xs, res):
+                m = r["minus_null"][est]
+                ax.plot([x, x], [m["ci_lower"], m["ci_upper"]], color=hue, lw=1.4, alpha=0.9, solid_capstyle="round")
+                ax.plot(x, m["diff"], "o", color=hue, ms=6, mec="white", mew=1.0, zorder=3)
+        ax.axhline(0, color=mute, lw=1)
+        ax.set_xticks(range(len(caps)))
+        ax.set_xticklabels([f"cap {c}\nESS {100 * np.mean([r['weight_diagnostics']['ess_frac'] for r in res_by_cap[c]]):.0f}%"
+                            for c in caps], color=ink)
+        ax.set_xlim(-0.6, len(caps) - 0.4)
+        ax.set_title(label, color=ink, fontsize=11, loc="left")
+        ax.grid(axis="y", color="#e6e6e6", lw=0.8)
+        ax.set_axisbelow(True)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+        for sp in ("left", "bottom"):
+            ax.spines[sp].set_color("#bdbdbd")
+        ax.tick_params(colors=ink)
+    axes[0].set_ylabel("policy - clinician (discounted return of hourly health-score change)", color=ink)
+    axes[0].text(0.01, 0.02, "clinician = 0", transform=axes[0].get_yaxis_transform(), color=mute, fontsize=8, va="bottom")
+    note = "One dot per seed with 95% CI (bootstrap over stays)."
+    if uncapped is not None:
+        ess = np.mean([r["weight_diagnostics"]["ess_frac"] for r in uncapped])
+        note += f" Uncapped WIS not shown: ESS {100 * ess:.1f}% of stays."
+    fig.text(0.01, -0.02, note, color=mute, fontsize=8, ha="left", va="top")
+    if title:
+        fig.suptitle(title, color=ink, x=0.01, ha="left", fontsize=12)
+    if save_path:
+        fig.savefig(save_path, dpi=200, bbox_inches="tight")
     return fig

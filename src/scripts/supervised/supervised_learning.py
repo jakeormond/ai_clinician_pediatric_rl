@@ -124,7 +124,7 @@ def parse_arguments():
 
 
     parser.add_argument('--unit', type=str, default=None,
-                        choices=['PICU', 'NICU', 'ICU'],
+                        choices=['PICU', 'NICU', 'ICU', 'all'],
                         help='Unit to use for this experiment (overrides config file)')
 
     parser.add_argument('--filter_old', type=str, default='False',

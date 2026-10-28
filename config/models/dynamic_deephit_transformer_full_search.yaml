@@ -18,40 +18,46 @@ use_layernorm: True
 batch_size: 64  # Batch size for all networks
 
 # transformer specific parameters
-d_model: [128, 256, 512] # [32, 64, 128]  # Dimension of the model
-num_encoder_layers: [2, 3, 4, 6]
+d_model: [128, 256] # [32, 64, 128, 512]  # Dimension of the model
+num_encoder_layers: [3, 4, 6] # 3
 ff_factor: [2, 4]  # dim_feedforward is ff_factor * d_model
 nhead: [4, 8] # [2, 4, 8]  # Number of attention heads - d_model must be divisible by nhead
 
-hidden_dim: [32, 64, 128]  # Hidden dimension for all networks
-attn_hidden_dim: [32, 64, 128, 256]
-n_layers: [1, 2, 3, 4] # [1, 2, 3, 4]
 
 loss_metric: "weighted_multi_C" # "combined_loss"  # Which metric to use for early stopping
 max_val_samples: 5000  # Max samples to use for validation during training
 
 l1_lambda: "loguniform(1e-6, 1e-4)"  # L1 regularization weight for classification head
 
-alpha_class: [0.1, 0.25, 0.5]  # Weight for classification loss
+logit_scale: 15.0  # Scale for logits in the ranking loss
+
+alpha_class: [0.1, 0.25]  # 0.5 Weight for classification loss
 alpha_rank: [1.0, 2.0]   # Weight for ranking loss
-alpha_pred: [1.0, 2.0, 5.0]  # Weight for prediction loss
-sigma: [0.1, 0.2, 0.5, 1.0] # for ranking loss
+alpha_pred: [1.0, 2.0]  # 5.0 Weight for prediction loss
+sigma: [1.0, 2.0] # 0.1, 0.2, 0.5, 1.0 for ranking loss
 
 # gaussian sigma scheduling parameters
 start_sigma: 2.
-end_sigma: [0.3, 0.5, 0.7]
+end_sigma: 1.5 # [0.3, 0.5, 0.7]
 
 # learning rate scheduling parameters
-pct_start: [0.1, 0.3, 0.5]
-div_factor: [10, 25, 50]
+pct_start: 0.1 # [0.1, 0.3] # 0.5
+div_factor: 25 # [10, 25, 50]
 
 # Early stopping parameters (fixed for all combinations)
+early_stopping_flag: True
 patience: 15       # Stop if no improvement for 15 evaluations
 eval_freq: 1       # Evaluate every 20 epochs  
 min_delta: 0.0001   # Minimum improvement threshold
 
-grad_clip: [0.1, 0.5, 1.0, 5.0] # [0.5, 1]  # Gradient clipping value
+grad_clip: 5.0 # [0.1, 0.5, 1.0, 5.0] # [0.5, 1]  # Gradient clipping value
+log_grad_norms_freq: 50  # Frequency of logging gradient norms
 
 # for controls
 shuffle_inputs: False  # Whether to shuffle feature columns to confirm transformer not looking ahead
 zero_inputs: False  # Whether to zero out feature columns to confirm transformer not looking ahead
+
+# actions to leave out of last time step for RL setting
+# actions: ['fio2', 'peep_set', 'tidal_volume_set'] # for mimic_iv ventilation
+# actions: ['intake', 'vis'] # for choc sepsis
+actions: ['combined_hourly_iv', 'vasoactive_inotropic_score'] # for mimic sepsis

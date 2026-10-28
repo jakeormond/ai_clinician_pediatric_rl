@@ -71,7 +71,7 @@ python -u -m src.scripts.supervised.supervised_learning \
     --cohort all \
     --unit all \
     --n_search_iterations 12 \
-    --n_epochs 200 \
+    --n_epochs 500 \
     --action_dir intake-vis \
     --include_actions_in_state False \
     --actions_shift True \

@@ -144,7 +144,7 @@
                 "--n_search_iterations", "2",
                 "--n_epochs", "2",
                 "--action_dir", "intake-vis",
-                "--include_actions_in_state", "True",
+                "--include_actions_in_state", "False",
                 "--actions_shift", "True",
             ],
             "console": "integratedTerminal",

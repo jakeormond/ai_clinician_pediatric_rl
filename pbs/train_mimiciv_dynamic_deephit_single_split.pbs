@@ -48,7 +48,8 @@ echo "Job ID: $PBS_JOBID"
 echo "Job Name: $PBS_JOBNAME"
 echo "Node(s): $PBS_NODEFILE"
 echo "CPUs allocated (NCPUS): ${NCPUS:-unknown}"
-echo "CPUs per node (PBS_NUM_PPN): ${PBS_NUM_PPN:-unknown}"echo "Memory: 64GB"
+echo "CPUs per node (PBS_NUM_PPN): ${PBS_NUM_PPN:-unknown}"
+echo "Memory: 128GB"
 echo "OMP_NUM_THREADS: ${OMP_NUM_THREADS:-unknown}"
 echo "Start time: $(date)"
 echo "Working directory: $(pwd)"
@@ -69,9 +70,14 @@ python -u -m src.scripts.supervised.supervised_learning \
     --mode single_split \
     --split_num 0 \
     --search_variant random_search \
-    --n_epochs 200 \
+    --seeds 0 \
+    --cohort all \
+    --unit all \
     --n_search_iterations 12 \
-    --final_timestep_only True \
+    --n_epochs 200 \
+    --action_dir "intake_vis" \
+    --include_actions_in_state True \
+    --actions_shift False \
     --start_time $START_TIME 
 
 exit_code=$?

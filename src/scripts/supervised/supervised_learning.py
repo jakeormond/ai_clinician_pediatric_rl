@@ -158,7 +158,7 @@ def parse_arguments():
                     help='Number of epochs to train for - should be 1000, but for testing we set to 10')  
 
     parser.add_argument('--action_dir', type=str, default=None,
-                        choices=['intake-vis'],
+                        choices=['intake-vis', 'combined_hourly_iv-vasoactive_inotropic_score'],
                         help='Directory of the actions to use for this experiment (overrides config file)')
 
     parser.add_argument('--include_actions_in_state', type=str, default='True',

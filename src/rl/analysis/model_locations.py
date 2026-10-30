@@ -6,7 +6,7 @@ Where each model type's runs live, as a function of the choices a notebook makes
 below); a notebook only states its choices:
 
     import src.rl.analysis.model_locations as loc
-    sweep_dir = loc.sweep_dir(models_root, model_type="dynamic_deephit", hospital="mimiciv",
+    sweep_dir = loc.sweep_dir(models_root, model_type="dynamic_deephit", hospital="mimic_iv",
                               action_inclusion="with_actions", purpose="for_rewards")
 
 Invalid combinations raise with the valid options, so a typo is caught here, not as a
@@ -25,7 +25,7 @@ HOSPITALS: Dict[str, dict] = {
         cohorts={"picu": "picu_patients_health_score_from_picu_dataset",
                  "sepsis_picu": "picu_patients_health_score_from_restricted_dataset"},
     ),
-    "mimiciv": dict(
+    "mimic_iv": dict(
         actions="combined_hourly_iv-vasoactive_inotropic_score",
         cohorts={"icu": "icu_patients_health_score_from_icu_dataset",
                  "sepsis_icu": "icu_patients_health_score_from_restricted_dataset"},
@@ -58,7 +58,9 @@ def _dynamic_deephit(models_root, hospital, cohort, action_inclusion, purpose) -
     if action_inclusion == "with_actions":
         parts.append(_choose("purpose (needed with actions)", purpose, DDH_PURPOSES))
     elif purpose is not None:
-        raise ValueError("purpose only applies to dynamic_deephit trained with_actions")
+        # raise ValueError("purpose only applies to dynamic_deephit trained with_actions")
+        # purpose is ignored for dynamic_deephit trained without actions, but we don't want to raise an error
+        print(f"Warning: purpose is ignored for dynamic_deephit trained without actions, got {purpose!r}")
     return os.path.join(*parts)
 
 
@@ -78,7 +80,7 @@ def sweep_dir(models_root, model_type: str, hospital: str, cohort: Optional[str]
     """
     Folder holding the runs of one sweep, checked to exist.
       model_type       : "dynamic_deephit", "basic_q", "cql_with_logprobs", "fqe" or "bc_with_logprobs"
-      hospital         : "choc" or "mimiciv"
+      hospital         : "choc" or "mimic_iv"
       cohort           : RL models only (see HOSPITALS[hospital]["cohorts"])
       action_inclusion : Dynamic-DeepHit only: "with_actions" or "without_actions"
       purpose          : Dynamic-DeepHit with_actions only: "for_rewards" or "for_states"

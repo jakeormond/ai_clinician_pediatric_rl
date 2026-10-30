@@ -153,6 +153,32 @@
         },
 
         {
+            "name": "mimic_iv_transformer_best_with_seeds",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.supervised.supervised_learning",
+            "args": [
+                "--hospital", "mimic_iv", 
+                "--experiment_type", "supervised_learning",
+                "--model_type", "dynamic_deephit_transformer", 
+                "--prediction_type", "discharge_mortality_tte",
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--search_variant", "best_hyperparameters",
+                "--seeds", "0", "1", "2", "3", "4",
+                "--cohort", "all",
+                "--unit", "all",
+                "--n_epochs", "2",
+                "--action_dir", "combined_hourly_iv-vasoactive_inotropic_score",
+                "--include_actions_in_state", "True",
+                "--actions_shift", "False",
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+        {
             "name": "choc_transformer_best_with_seeds",
             "type": "debugpy",
             "request": "launch",
@@ -178,7 +204,6 @@
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env"
         },
-
         
 
         {

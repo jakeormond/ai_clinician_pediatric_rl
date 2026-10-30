@@ -165,12 +165,31 @@ class ConfigManager:
                             "best_results.json"
                         )
                     elif self.model_type == "dynamic_deephit_transformer":
-                        self.best_results_path = os.path.join(
-                            self.paths["supervised_final_model_dir"], 'five_splits',
-                            f"split_{self.split_num}", 'sepsis', self.action_dir,
-                            f"{self.unit.lower()}",
-                            "best_results.json"
-                        )
+                        if self.hospital == "choc":
+                            self.best_results_path = os.path.join(
+                                self.paths["supervised_final_model_dir"],
+                                f"split_{self.split_num}", 'sepsis', self.action_dir,
+                                f"{self.unit.lower()}",
+                                "best_results.json"
+                            )
+                        elif self.hospital == "mimic_iv":
+                            if self.include_actions_in_state == 'True':
+                                action_inclusion_folder = "with_actions"
+                                if self.actions_shift:
+                                    prediction_type_dir = "for_states"
+                                else:
+                                    prediction_type_dir = "for_rewards"
+                            else:
+                                action_inclusion_folder = "without_actions"
+                                prediction_type_dir = None
+
+                            self.best_results_path = os.path.join(
+                                self.paths["supervised_final_model_dir"],
+                                f"split_{self.split_num}", 'sepsis', self.action_dir,
+                                action_inclusion_folder,
+                                prediction_type_dir,
+                                "best_results.json"
+                            )
                     else:
                         if self.reward_cohort == 'all':
                             self.best_results_path = os.path.join(

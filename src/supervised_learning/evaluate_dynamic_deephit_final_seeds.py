@@ -46,6 +46,7 @@ from ..rl.analysis.runs import DDH_FAMILY, Study, make_study
 from ..rl.analysis.models import LoadedModel, load_study_models
 from ..rl.analysis.data import (  # noqa: F401  (re-exported for the notebook)
     ddh_prediction_path as prediction_path, is_ensemble_file, load_ensemble_health_score,
+    ddh_dataset_path as dataset_filepath, load_ddh_dataset as load_dataset, load_ddh_datasets as load_datasets,
 )
 from .dynamic_deephit_evaluation import (
     calculate_c_index, calculate_brier_score, calculate_roc_and_prc, calculate_all_bin_ece,
@@ -337,43 +338,6 @@ def load_test_predictions(models, keys_to_exclude=("compressed_latents", "model_
             raise FileNotFoundError(f"No test predictions for seed {seed}: {path} (run run_predictions first)")
         out[seed] = ShardProcessor.load_dynamic_deephit_predictions_from_h5(
             path, keys_to_exclude=list(keys_to_exclude))
-    return out
-
-
-def dataset_filepath(config_manager, split="test"):
-    """Mirrors the dataset naming in predict.plot_random_predictions()."""
-    cm = config_manager
-    if cm.cohort != "all" and cm.unit != "all":
-        name = f"{split}_{cm.cohort}_{cm.unit.lower()}_dynamic_deephit_dataset.h5"
-    elif cm.cohort == "all" and cm.unit != "all":
-        name = f"{split}_{cm.unit.lower()}_dynamic_deephit_dataset.h5"
-    else:
-        name = f"{split}_dynamic_deephit_dataset.h5"
-    return os.path.join(cm.get_data_dir, cm.data_config["shard_dir"],
-                        f"split_{cm.split_num}", "training_set", name)
-
-
-def load_dataset(model_or_config, split="test"):
-    """Pre-normalised DDH dataset for one split (accepts a LoadedModel or a config manager)."""
-    cm = model_or_config.config_manager if isinstance(model_or_config, LoadedModel) else model_or_config
-    return ShardProcessor.load_dynamic_deephit_dataset_from_h5(dataset_filepath(cm, split))
-
-
-def load_datasets(models, splits=("train", "val", "test")):
-    """
-    {split: dataset} loaded once and shared by every model passed (e.g. both variants:
-    the action columns are dropped inside the training Dataset, not in these files).
-    Raises if the models would read different dataset files.
-    """
-    flat = []
-    for x in (models.values() if isinstance(models, dict) else models):
-        flat.extend(x.values() if isinstance(x, dict) else [x])
-    out = {}
-    for split in splits:
-        paths = {dataset_filepath(m.config_manager, split) for m in flat}
-        if len(paths) != 1:
-            raise ValueError(f"models read different {split} dataset files: {sorted(paths)}")
-        out[split] = ShardProcessor.load_dynamic_deephit_dataset_from_h5(paths.pop())
     return out
 
 

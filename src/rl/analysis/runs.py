@@ -687,3 +687,22 @@ register_family(FamilySpec(name="cql", detect=_path_contains("cql_with_logprobs"
 register_family(FamilySpec(name="sarsa", detect=lambda d: _path_contains("basic_q")(d) and not _path_contains("fqe")(d)))
 register_family(FamilySpec(name="fqe", detect=_path_contains("fqe")))
 register_family(FamilySpec(name="bc", detect=_path_contains("bc_with_logprobs")))
+
+# ---- Dynamic-DeepHit -------------------------------------------------------------
+DDH_FAMILY = "dynamic_deephit"
+
+
+def _ddh_data_identity(record: "RunRecord", cm) -> DataIdentity:
+    """
+    Dynamic-DeepHit runs are not trained on RL inputs. Their identity is the job folder
+    the seeds share (config_manager.pkl, seed-averaged health score) plus the input
+    variant, so every seed of a variant has the same identity and the variants differ.
+    """
+    job = os.path.dirname(os.path.normpath(record.run_dir))
+    variant = f"ddh include_actions_in_state={record.hyperparams.get('include_actions_in_state')}"
+    return DataIdentity(state_source=job, state_seed=None, reward_source=job,
+                        reward_seed=None, seed_mode=variant)
+
+
+register_family(FamilySpec(name=DDH_FAMILY, detect=_path_contains("dynamic_deephit_results"),
+                           data_identity=_ddh_data_identity))

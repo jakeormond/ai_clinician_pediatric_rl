@@ -28,6 +28,7 @@ Checks:
 from __future__ import annotations
 
 import gc
+import os
 import warnings
 from typing import Any, Dict, Iterable, Optional, Tuple
 
@@ -393,3 +394,118 @@ def bellman_check(models: Dict[Any, Any], processors: Dict[Any, Any], gamma=None
         r["matches_own"] = (best == mk) if mk in processors else None
         rows[f"model {mk}"] = r
     return pd.DataFrame(rows).T
+
+
+# =============================================================================
+# Dynamic-DeepHit prediction files and the seed-averaged (ensemble) health score
+# =============================================================================
+# The ensemble file sits in the job folder holding the seeds' run folders and is written by
+# evaluate_dynamic_deephit_final_seeds.build_ensemble_health_score. Datasets:
+#   health_score (N,)          mean across seeds -> the shared reward source
+#   health_score_sd (N,)       across-seed SD
+#   health_score_seeds (N, S)  each seed's score, columns in the order of the 'seeds' attribute
+#   stay_ids, index_ptr, event, feature_names (bytes), carry_forward_ind, response_zero_ind
+# Attributes: seeds (averaged DDH seeds), include_actions_in_state (variant).
+# It has no predictions/entropy/model_outputs: states always come from each seed's own file.
+
+ENSEMBLE_REQUIRED_KEYS = ("health_score", "health_score_seeds", "stay_ids", "index_ptr")
+
+
+def ddh_prediction_path(directory, split) -> str:
+    import os
+    return os.path.join(directory, f"{split}_predictions.h5")
+
+
+def is_ensemble_file(path) -> bool:
+    """True if path is a complete seed-averaged health-score file."""
+    import os
+    import h5py
+    if not os.path.isfile(path):
+        return False
+    try:
+        with h5py.File(path, "r") as f:
+            return all(k in f for k in ENSEMBLE_REQUIRED_KEYS)
+    except OSError:
+        return False
+
+
+def load_ensemble_health_score(directory_or_path, split=None, keys=None) -> Dict[str, Any]:
+    """
+    Read the seed-averaged health score: load_ensemble_health_score(job_dir, "train") or
+    load_ensemble_health_score(path_to_file). keys: datasets to read (default all).
+    Returns the datasets plus 'seeds' (list of int), 'include_actions_in_state' (str) and
+    'path'; feature_names are decoded to str.
+    """
+    import h5py
+    path = directory_or_path if split is None else ddh_prediction_path(directory_or_path, split)
+    with h5py.File(path, "r") as f:
+        missing = [k for k in ENSEMBLE_REQUIRED_KEYS if k not in f]
+        if missing:
+            raise ValueError(f"{path} is not a complete ensemble file (missing {missing})")
+        wanted = list(f.keys()) if keys is None else list(keys)
+        absent = [k for k in wanted if k not in f]
+        if absent:
+            raise KeyError(f"{path} has no {absent}; available: {sorted(f.keys())}")
+        out = {k: f[k][()] for k in wanted}
+        out["seeds"] = [int(s) for s in f.attrs["seeds"]]
+        out["include_actions_in_state"] = str(f.attrs.get("include_actions_in_state", "unknown"))
+    if "feature_names" in out:
+        out["feature_names"] = [n.decode("utf-8") if isinstance(n, bytes) else str(n)
+                                for n in out["feature_names"]]
+    out["path"] = path
+    return out
+
+
+# =============================================================================
+# Dynamic-DeepHit datasets (pre-normalised h5 files, one per split)
+# =============================================================================
+# Moved from evaluate_dynamic_deephit_final_seeds (dataset_filepath, load_dataset, load_datasets).
+# `model_or_config` is a config manager, or anything with a .config_manager attribute (a
+# LoadedModel); the config manager must already have its paths mapped for this machine.
+
+def _config_manager_of(model_or_config):
+    return getattr(model_or_config, "config_manager", model_or_config)
+
+
+def ddh_dataset_path(config_manager, split="test") -> str:
+    """Path of the split's Dynamic-DeepHit dataset file; mirrors predict.plot_random_predictions()."""
+    import os
+    cm = _config_manager_of(config_manager)
+    if cm.cohort != "all" and cm.unit != "all":
+        name = f"{split}_{cm.cohort}_{cm.unit.lower()}_dynamic_deephit_dataset.h5"
+    elif cm.cohort == "all" and cm.unit != "all":
+        name = f"{split}_{cm.unit.lower()}_dynamic_deephit_dataset.h5"
+    else:
+        name = f"{split}_dynamic_deephit_dataset.h5"
+    return os.path.join(cm.get_data_dir, cm.data_config["shard_dir"],
+                        f"split_{cm.split_num}", "training_set", name)
+
+
+def load_ddh_dataset(model_or_config, split="test") -> Dict[str, Any]:
+    """Pre-normalised Dynamic-DeepHit dataset for one split."""
+    from src.data.data_processor_for_shards import ShardProcessor
+    return ShardProcessor.load_dynamic_deephit_dataset_from_h5(ddh_dataset_path(model_or_config, split))
+
+
+def load_ddh_datasets(models, splits=("train", "val", "test")) -> Dict[str, Dict[str, Any]]:
+    """
+    {split: dataset}, loaded once and shared by every model passed (a {variant: {seed: model}} dict,
+    a {seed: model} dict or a list of models; both variants may be passed, since the action columns
+    are dropped inside the training Dataset, not in these files). Raises, before reading anything,
+    if the models would read different files for a split or any file is missing.
+    """
+    from src.data.data_processor_for_shards import ShardProcessor
+    flat = []
+    for x in (models.values() if isinstance(models, dict) else models):
+        flat.extend(x.values() if isinstance(x, dict) else [x])
+    paths = {}
+    for split in splits:
+        found = {ddh_dataset_path(m, split) for m in flat}
+        if len(found) != 1:
+            raise ValueError(f"models read different {split} dataset files: {sorted(found)}")
+        paths[split] = found.pop()
+    missing = {s: p for s, p in paths.items() if not os.path.isfile(p)}
+    if missing:
+        raise FileNotFoundError("dataset files not found (check the path mappings):\n  "
+                                + "\n  ".join(f"{s}: {p}" for s, p in missing.items()))
+    return {s: ShardProcessor.load_dynamic_deephit_dataset_from_h5(p) for s, p in paths.items()}

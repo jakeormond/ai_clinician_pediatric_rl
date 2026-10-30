@@ -183,12 +183,18 @@ class ConfigManager:
                                 action_inclusion_folder = "without_actions"
                                 prediction_type_dir = None
 
-                            self.best_results_path = os.path.join(
+                            path_parts = [
                                 self.paths["supervised_final_model_dir"],
-                                f"split_{self.split_num}", 'sepsis', self.action_dir,
+                                f"split_{self.split_num}",
+                                "sepsis",
+                                self.action_dir,
                                 action_inclusion_folder,
                                 prediction_type_dir,
-                                "best_results.json"
+                                "best_results.json",
+                            ]
+
+                            self.best_results_path = os.path.join(
+                                *(part for part in path_parts if part is not None)
                             )
                     else:
                         if self.reward_cohort == 'all':

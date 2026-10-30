@@ -73,7 +73,7 @@ python -u -m src.scripts.supervised.supervised_learning \
     --n_epochs 500 \
     --final_timestep_only True \
     --action_dir combined_hourly_iv-vasoactive_inotropic_score \
-    --include_actions_in_state True \
+    --include_actions_in_state False \
     --actions_shift True \
     --start_time $START_TIME 
 

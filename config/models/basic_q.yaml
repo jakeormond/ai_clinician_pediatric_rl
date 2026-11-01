@@ -7,7 +7,7 @@
   
     n_episodes: 1000  # How many episodes run during evaluation
     
-    reward_type: "health_score" # "terminal" # "health_score"
+    # reward_type: "health_score" # "terminal" # "health_score"
     discount: 0.975  # Discount factor
     terminal_discount: 0.998 # discount for terminal health-score-based rewards
     
@@ -36,7 +36,7 @@
 
 
     # Early stopping parameters (fixed for all combinations)
-    early_stopping_flag: True  # Whether to use early stopping
+    early_stopping_flag: False  # Whether to use early stopping
     patience: 15       # Stop if no improvement for 15 evaluations
     eval_freq: 1        # Evaluate every 20 epochs  
     min_delta: 0.0001   # Minimum improvement threshold

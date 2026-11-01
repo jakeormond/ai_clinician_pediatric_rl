@@ -70,7 +70,7 @@ python -u -m src.scripts.supervised.supervised_learning \
     --seeds 0 1 2 3 4 \
     --cohort all \
     --unit all \
-    --n_epochs 500 \
+    --n_epochs 100 \
     --final_timestep_only True \
     --action_dir combined_hourly_iv-vasoactive_inotropic_score \
     --include_actions_in_state False \

@@ -484,6 +484,8 @@ def single_split_training(config_manager):
     if config_manager.search_variant == 'random_search':
         logger.info(" Hyperparameter tuning mode enabled.")
 
+        config_manager.training_config['seed'] = config_manager.seed
+
         train_processor, val_processor, test_processor = create_processor_from_shards(
                         config_manager, 
                         normalize=True

@@ -449,6 +449,8 @@ class ConfigManager:
                     "five_splits",
                 )
 
+                reward_path = self.paths['supervised_final_model_dir']
+
                 split_name = f"split_{self.split_num}"
                 
                 if self.cohort is not None and self.cohort != "all":
@@ -514,13 +516,13 @@ class ConfigManager:
 
                     # check if there is a folder inside final_model_dir that begins with "choc"
                     inner_folders = [f for f in os.listdir(path) if os.path.isdir(os.path.join(path, f))]
-                    choc_folders = [f for f in inner_folders if f.startswith(self.hospital.lower())]
-                    if len(choc_folders) > 1:
-                        raise ValueError("Multiple choc folders found in final_model_dir, please specify one")
-                    elif len(choc_folders) == 1:
-                        path = os.path.join(path, choc_folders[0])
+                    hospital_folders = [f for f in inner_folders if f.startswith(self.hospital.lower())]
+                    if len(hospital_folders) > 1:
+                        raise ValueError("Multiple hospital folders found in final_model_dir, please specify one")
+                    elif len(hospital_folders) == 1:
+                        path = os.path.join(path, hospital_folders[0])
                     else:
-                        raise ValueError("No choc folders found in final_model_dir, please specify one")
+                        raise ValueError("No hospital folders found in final_model_dir, please specify one")
 
                     # model_folders = [f for f in os.listdir(final_model_dir) if os.path.isdir(os.path.join(final_model_dir, f))]
                     # if len(model_folders) > 1:
@@ -533,7 +535,10 @@ class ConfigManager:
                     elif key == "reward_model_dir":
                         self._data_config['reward_path'] = path 
 
-            if self._data_config['use_behavior_cloning_latents']:
+            if (
+                'use_behavior_cloning_latents' in self._data_config
+                and self._data_config['use_behavior_cloning_latents']
+            ):
                 bc_latents_path = os.path.join(
                     self.paths['bc_transformer_final_model_dir'], 
                     "five_splits"

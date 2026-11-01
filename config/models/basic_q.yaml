@@ -20,7 +20,7 @@
 
     # seeds 
     use_fixed_seed: True # # Whether to use a fixed seed for reproducibility, otherwise randomly generated
-    seed: 42 # Seed value to use if use_fixed_seed is True
+    # seed: 42 # Seed value to use if use_fixed_seed is True
    
     # add reward to vaso dosing as positive control expt
     add_reward_to_vaso_dosing: False  # Whether to add reward to vaso dosing as positive control expt - this is added as a reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory

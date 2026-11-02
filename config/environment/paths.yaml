@@ -10,7 +10,7 @@ local:
   mimic_iv:
     experiments_dir: "/home/jake/Documents/AI_Clinician/experiments"
     supervised_final_model_dir: "/home/jake/Documents/AI_Clinician/models/dynamic_deephit_results/mimic_iv/"
-    rl_models_dir: "/home/jake/Documents/AI_Clinician/rl_models/mimic_iv/"
+    rl_models_dir: "/home/jake/Documents/AI_Clinician/models/rl_models/mimic_iv/"
     data_dir: "/home/jake/Documents/AI_Clinician/mimic_iv_3.1_data"
     code_dir: "/home/jake/Documents/AI_Clinician/mimic_iv_3.1_code/mimic_iv_icu_data_processing"
   

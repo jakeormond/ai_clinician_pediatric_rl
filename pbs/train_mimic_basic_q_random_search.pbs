@@ -62,7 +62,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --hospital mimic_iv \
     --experiment_type reinforcement_learning \
     --model_type basic_q \
-    --reward_type health_score \
+    --reward_type terminal \
     --mode single_split \
     --split_num 0 \
     --search_variant random_search \
@@ -73,7 +73,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --cohort sepsis \
     --unit ICU \
     --reward_cohort all \
-    --include_actions_in_state False \
+    --include_actions_in_state True \
     --start_time $START_TIME \
 
 exit_code=$?

@@ -7,29 +7,6 @@
 
 
 
-
-        {
-            "name": "mimic_iv_transformer_fixed",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.scripts.supervised.supervised_learning",
-            "args": [
-                "--hospital", "mimic_iv", 
-                "--experiment_type", "supervised_learning",
-                "--model_type", "dynamic_deephit_transformer", 
-                "--prediction_type", "discharge_mortality_tte",
-                "--mode", "single_split", 
-                "--split_num", "1",
-                "--search_variant", "fixed_hyperparameters",
-                "--final_timestep_only", "True",                
-                "--cohort", "all",
-                "--n_epochs", "2",
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
-        },
-
         {
             "name": "choc_transformer_fixed",
             "type": "debugpy",
@@ -423,32 +400,7 @@
         },
 
         
-        {
-            "name": "basic_q_mimic",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.scripts.rl.reinforcement_learning",
-            "args": [
-                "--hospital", "mimic_iv", 
-                "--experiment_type", "reinforcement_learning",
-                "--model_type", "basic_q", 
-                "--reward_type", "health_score",
-                "--mode", "single_split", 
-                "--split_num", "0",
-                "--search_variant", "random_search",
-                "--n_search_iterations", "10",
-                "--n_epochs", "200",
-                "--cohort", "sepsis",
-                "--unit", "ICU",
-                "--reward_cohort", "all",
-                "--action_mode", "continuous_only",
-                "--include_actions_in_state", "True",
-                "--seeds", "0",
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "envFile": "${workspaceFolder}/.env"
-        },
+
 
             
         {
@@ -626,6 +578,64 @@
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env"
         },
+
+
+        {
+            "name": "basic_q_mimic",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.rl.reinforcement_learning",
+            "args": [
+                "--hospital", "mimic_iv", 
+                "--experiment_type", "reinforcement_learning",
+                "--model_type", "basic_q", 
+                "--reward_type", "health_score",
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--search_variant", "random_search",
+                "--n_search_iterations", "10",
+                "--n_epochs", "200",
+                "--cohort", "sepsis",
+                "--unit", "ICU",
+                "--reward_cohort", "all",
+                "--action_mode", "continuous_only",
+                "--include_actions_in_state", "True",
+                "--seeds", "0",
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+
+        {
+            "name": "basic_q_mimic_best_with_seeds",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.rl.reinforcement_learning",
+            "args": [
+                "--hospital", "mimic_iv", 
+                "--experiment_type", "reinforcement_learning",
+                "--model_type", "basic_q", 
+                "--reward_type", "health_score",
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--search_variant", "best_hyperparameters",
+                "--seeds", "0", "1", "2", "3", "4",
+                "--n_epochs", "200",
+                "--cohort", "sepsis",
+                "--unit", "ICU",
+                "--reward_cohort", "all",
+                "--include_actions_in_state", "True",
+                "--action_mode", "continuous_only",
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
+
+
 
         {
             "name": "fqe_choc",

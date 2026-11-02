@@ -463,7 +463,7 @@ class ConfigManager:
                     self.actions = actions_name             
                 
                 if self.reward_cohort == 'restricted':
-                    if self.cohort != 'all' and self.unit != 'all':                    
+                    if self.cohort != 'all' and self.unit != 'all' and self.unit != 'ICU': # ICU is mimic and isn't in a specific icu folder                    
                         split_name = os.path.join(split_name, f"{self.cohort}_{self.unit.lower()}")
                 elif self.reward_cohort == 'picu':
                     split_name = os.path.join(split_name, f"{self.unit.lower()}")

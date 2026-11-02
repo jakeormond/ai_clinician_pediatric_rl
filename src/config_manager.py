@@ -198,12 +198,19 @@ class ConfigManager:
                             )
                     else:
                         if self.reward_cohort == 'all':
-                            self.best_results_path = os.path.join(
-                                self.paths["rl_models_dir"], self.model_type,
-                                f"split_{self.split_num}", self.cohort.lower(), self.actions,
-                                f"{self.unit.lower()}_patients_health_score_from_full_dataset",
-                                f"best_results_{self.reward_type}.json"
-                            )
+                            if self.hospital == "choc":
+                                self.best_results_path = os.path.join(
+                                    self.paths["rl_models_dir"], self.model_type,
+                                    f"split_{self.split_num}", self.cohort.lower(), self.actions,
+                                    f"{self.unit.lower()}_patients_health_score_from_full_dataset",
+                                    f"best_results_{self.reward_type}.json"
+                                )
+                            else: # mimic_iv
+                                self.best_results_path = os.path.join(
+                                    self.paths["rl_models_dir"], self.model_type,
+                                    f"split_{self.split_num}", self.cohort.lower(), self.actions,
+                                    f"best_results_{self.reward_type}.json"
+                                )
                         else:
                             if self.reward_cohort == 'restricted':
                                 self.best_results_path = os.path.join(

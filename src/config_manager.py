@@ -222,7 +222,7 @@ class ConfigManager:
                                     self.paths["rl_models_dir"], self.model_type,
                                     f"split_{self.split_num}", self.cohort.lower(), self.actions,
                                     action_inclusion_folder, reward_type_dir,
-                                    f"best_results_{self.reward_type}.json"
+                                    f"best_results.json"
                                 )
                         else:
                             if self.reward_cohort == 'restricted':

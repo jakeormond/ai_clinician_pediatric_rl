@@ -206,9 +206,22 @@ class ConfigManager:
                                     f"best_results_{self.reward_type}.json"
                                 )
                             else: # mimic_iv
+                                if self.include_actions_in_state == 'True':
+                                    action_inclusion_folder = "with_actions"
+                                else:
+                                    action_inclusion_folder = "without_actions"
+
+                                if self.reward_type == "health_score":
+                                    reward_type_dir = "health_score_change_only"
+                                elif self.reward_type == "terminal":
+                                    reward_type_dir = "terminal_reward_only"
+                                else:
+                                    reward_type_dir = self.reward_type
+
                                 self.best_results_path = os.path.join(
                                     self.paths["rl_models_dir"], self.model_type,
                                     f"split_{self.split_num}", self.cohort.lower(), self.actions,
+                                    action_inclusion_folder, reward_type_dir,
                                     f"best_results_{self.reward_type}.json"
                                 )
                         else:

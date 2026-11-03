@@ -486,6 +486,10 @@ def single_split_training(config_manager):
 
         config_manager.training_config['seed'] = config_manager.seed
 
+        if hasattr(config_manager, 'cql_alpha') and config_manager.cql_alpha is not None:
+            logger.info(f"Setting cql_alpha to fixed value {config_manager.cql_alpha} for hyperparameter tuning.")
+            config_manager.training_config['cql_alpha'] = config_manager.cql_alpha  # set in training_config for logging
+
         train_processor, val_processor, test_processor = create_processor_from_shards(
                         config_manager, 
                         normalize=True

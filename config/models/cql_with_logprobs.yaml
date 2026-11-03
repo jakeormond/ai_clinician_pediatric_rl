@@ -19,8 +19,8 @@
     terminal_reward_scale: 10.  # the scale of terminal reward 
 
     # seeds 
-    # use_fixed_seed: True # # Whether to use a fixed seed for reproducibility, otherwise randomly generated
-    # seed: 42 # Seed value to use if use_fixed_seed is True
+    use_fixed_seed: True # # Whether to use a fixed seed for reproducibility, otherwise randomly generated
+    seed: 0 # Seed value to use if use_fixed_seed is True
 
     # add reward to vaso dosing as positive control expt
     add_reward_to_vaso_dosing: False  # Whether to add reward to vaso dosing as positive control expt - this is added as a reward for trajectories that end in mortality (negative) or survival (positive) to incentivize the model to learn from the final outcome of the trajectory
@@ -64,7 +64,14 @@
     actor_loss_gate_entropy_scale: 0. # 0.02 # 5.e-4
     actor_loss_mag_entropy_scale: 0. # 5.e-4
 
-    vaso_mean_reg_scale: 0. # [0.0005, 0.001, 0.002, 0.005] # [0.001, 0.005, 0.01, 0.025]  
+    vaso_mean_floor: -2.939
+    vaso_mean_floor_scale: 0.05
+    vaso_gate_logit_bound: 4.0
+    vaso_gate_logit_bound_scale: 0.05
+
+    fluid_mean_reg_scale: 0.05
+    vaso_mean_reg_scale: 0.05
+
     
     use_compressed_latents: False  # Whether to use compressed latents as states instead of raw features or transformer output - specific to basic Q model, not used for TD3-BC or CQL
 

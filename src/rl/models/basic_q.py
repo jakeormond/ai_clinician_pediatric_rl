@@ -710,8 +710,27 @@ def get_evaluator(state_dim, action_dim, config_manager):
             "picu_patients_health_score_from_restricted_dataset")
         else:
             raise ValueError(f"Unknown reward_cohort: {reward_cohort}. Must be 'picu' or 'restricted'.")
+    elif unit.lower() == 'icu': # mimic iv
+        # if config_manager.include_actions_in_state == 'True':
+        #     action_inclusion = 'with_actions'
+        # else:
+        #     action_inclusion = 'without_actions'
+
+        # if config_manager.reward_type == 'health_score':
+        #     reward_type_folder = 'health_score_change_only'
+        # elif config_manager.reward_type == 'terminal':
+        #     reward_type_folder = 'terminal_only'
+        # elif config_manager.reward_type == 'terminal_bellman':
+        #     reward_type_folder = 'terminal_bellman'
+        # else:
+        #     raise ValueError(f"Unknown reward_type: {config_manager.reward_type}. Must be 'health_score', 'terminal', or 'terminal_bellman'.")
+
+        # model_path = os.path.join(model_path, 
+        #     f"{action_inclusion}/{reward_type_folder}/five_seeds")
+        pass
+    
     else:
-        raise ValueError(f"Unknown unit: {unit}. Must be 'picu'.")
+        raise ValueError(f"Unknown unit: {unit}. Must be 'picu' or 'icu'.")
 
     if config_manager.include_actions_in_state == 'True':
         model_path = os.path.join(model_path, "with_actions")
@@ -722,26 +741,23 @@ def get_evaluator(state_dim, action_dim, config_manager):
         if reward_type == 'terminal':             
                 # load sorted_runs_health_score.csv
                 sorted_runs_path = os.path.join(model_path, "sorted_runs_terminal.csv")
-                if os.path.exists(sorted_runs_path):
-                    sorted_runs = pd.read_csv(sorted_runs_path)
-                    # get the last row, which has the best run
-                    best_run = sorted_runs.iloc[0]
-                    best_run_folder = best_run['run_dir']
-                    model_path = os.path.join(model_path, best_run_folder)
+                if not os.path.exists(sorted_runs_path):       
+                    model_path = os.path.join(model_path, "terminal_only")             
+                    sorted_runs_path = os.path.join(model_path, "sorted_runs.csv")
         
         elif reward_type == 'health_score':
             # load sorted_runs_health_score.csv
             sorted_runs_path = os.path.join(model_path, "sorted_runs_health_score.csv")
-            if os.path.exists(sorted_runs_path):
-                sorted_runs = pd.read_csv(sorted_runs_path)
-                # get the last row, which has the best run
-                best_run = sorted_runs.iloc[0]
-                best_run_folder = best_run['run_dir']
-                model_path = os.path.join(model_path, best_run_folder)
-            else:
-                #### not using ######
-                raise ValueError("Health score scale is not 0.0, but this is not supported in the current implementation.")
-        
+            if not os.path.exists(sorted_runs_path):
+                model_path = os.path.join(model_path, "health_score_change_only")
+                sorted_runs_path = os.path.join(model_path, "sorted_runs.csv")
+            
+        sorted_runs = pd.read_csv(sorted_runs_path)
+        best_run = sorted_runs.iloc[0]
+        # best_run_folder = best_run['run_dir']
+        best_run_folder = best_run['run']
+        model_path = os.path.join(model_path, best_run_folder)
+
     else:
         model_path = os.path.join(model_path, "without_actions", "five_seeds")    
         # we need to find the right model because we only have the five seeds here

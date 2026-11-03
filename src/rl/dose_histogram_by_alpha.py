@@ -129,6 +129,7 @@ def _select_alphas(actions, alphas_to_show) -> list:
 
 
 def _grid(n, ncols):
+    ncols = max(1, min(ncols, n))          # no empty columns: one alpha gives a one-panel figure
     nrows = int(np.ceil(n / ncols))
     fig, axes = plt.subplots(nrows, ncols, figsize=(4.2 * ncols, 3.1 * nrows), sharex=True, sharey=True, squeeze=False)
     for ax in axes.flat[n:]:
@@ -167,8 +168,8 @@ def plot_dose_histograms(actions, clinician, dim, dim_name, alphas_to_show: Opti
         ax.set_ylabel("fraction of nonzero doses")
     axes.flat[0].legend(frameon=False, fontsize=8)
     n_seeds = len(next(iter(actions.values())))
-    fig.suptitle(f"{dim_name}: distribution of nonzero recommended doses by alpha "
-                 f"(mean across {n_seeds} seeds; band = min-max)", fontsize=11, fontweight="bold")
+    fig.suptitle(f"{dim_name}: nonzero recommended doses by alpha\n"
+                 f"mean of {n_seeds} seeds; band = min-max", fontsize=11, fontweight="bold", wrap=True)
     fig.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
@@ -203,8 +204,8 @@ def plot_dose_histograms_at_clinician_zero(actions, clinician, dim, dim_name,
     for ax in axes[:, 0]:
         ax.set_ylabel("fraction of clinician-zero states")
     n_seeds = len(next(iter(actions.values())))
-    fig.suptitle(f"{dim_name}: model dose where the clinician gave none ({int(mask.sum())} states; "
-                 f"mean across {n_seeds} seeds; band = min-max)", fontsize=11, fontweight="bold")
+    fig.suptitle(f"{dim_name}: model dose where clinician gave none\n"
+                 f"{int(mask.sum())} states; mean of {n_seeds} seeds; band = min-max", fontsize=11, fontweight="bold", wrap=True)
     fig.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")

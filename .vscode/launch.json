@@ -599,7 +599,7 @@
                 "--unit", "ICU",
                 "--reward_cohort", "all",
                 "--action_mode", "continuous_only",
-                "--include_actions_in_state", "True",
+                "--include_actions_in_state", "False",
                 "--seeds", "0",
             ],
             "console": "integratedTerminal",

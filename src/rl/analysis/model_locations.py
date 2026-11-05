@@ -35,7 +35,7 @@ HOSPITALS: Dict[str, dict] = {
 HOSPITAL_ALIASES = {"mimiciv": "mimic_iv"}          # accepted spellings -> folder name on disk
 REWARD_TYPES = ("health_score_change_only", "terminal_only", "terminal_bellman")   # RL models only
 # model type -> folder name under rl_models/<hospital>/ (the cql folder is spelled log_probs on disk; others to confirm)
-RL_FOLDERS = {"basic_q": "basic_q", "cql_with_logprobs": "cql_with_log_probs", "fqe": "fqe",
+RL_FOLDERS = {"basic_q": "basic_q", "cql_with_logprobs": "cql_with_logprobs", "fqe": "fqe",
               "bc_with_logprobs": "bc_with_log_probs"}
 
 ACTION_INCLUSION = ("with_actions", "without_actions")

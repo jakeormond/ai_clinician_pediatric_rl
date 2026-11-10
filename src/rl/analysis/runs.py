@@ -575,6 +575,22 @@ class Study:
                 if (seeds is None or s in seeds) and (keys is None or k in keys)]
         return Study(runs, self.group_by, self.name)
 
+    def complete(self, seeds=None, verbose=True) -> "Study":
+        """
+        Only the groups that have every expected seed (default: every seed present in any group).
+        Groups missing a seed are dropped whole, so every remaining group has the same seeds
+        (matched critics, equal-sized across-seed bands). Pass seeds explicitly, e.g. range(5), to
+        fix the rule in advance instead of letting it depend on what happens to be on disk.
+        """
+        expected = set(seeds) if seeds is not None else set(self.seeds(common=False))
+        keep = [k for k, g in self.groups.items() if expected <= set(g)]
+        if verbose:
+            for k, g in self.groups.items():
+                if k not in keep:
+                    print(f"  dropped {_fmt_key(self.group_by, k)}: missing seeds {sorted(expected - set(g), key=str)}")
+            print(f"Study {self.name!r}: kept {len(keep)} of {len(self.groups)} group(s) with seeds {sorted(expected, key=str)}")
+        return self.subset(keys=keep)
+
     # ---- tables and checks ----
     def table(self, columns: Optional[List[str]] = None) -> pd.DataFrame:
         """One row per run: group key, seed, selected effective hyperparameters, data identity."""

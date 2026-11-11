@@ -129,3 +129,58 @@ def candidate_table(sweep: pd.DataFrame, fluid: pd.DataFrame, vaso: pd.DataFrame
             "fluid_fire_mean", "fluid_fire_max", "fluid_w1", "fluid_low_share",
             "vaso_fire_mean", "vaso_fire_min", "vaso_w1", "vaso_low_share", "degenerate_seeds"]
     return out[cols].round(round_to)
+
+
+# alpha_candidate_table.py  (add; needs `import numpy as np, pandas as pd`)
+def _col(columns, alpha):
+    return columns[np.isclose(np.asarray(columns, dtype=float), alpha)][0]
+
+def _row(summary, alpha):
+    idx = summary.index
+    return summary.loc[idx[np.isclose(np.asarray(idx, dtype=float), alpha)][0]]
+
+def final_model_table(alpha, splits, clin, summarize_metrics):
+    """
+    alpha: selected alpha.
+    splits: {"Validation": (adv, dm), "Test": (adv, dm)} where
+        adv = the per-alpha advantage/occupancy summary (rows (metric, stat), one column per alpha)
+        dm  = {"Fluid": per-seed dose-metrics frame, "Vaso": ...}
+    clin: {"Validation": {"Fluid": ref, "Vaso": ref}, "Test": {...}} from clinician_reference.
+    summarize_metrics: dose_hist.summarize_metrics
+    Returns a DataFrame: one row per metric, columns = splits + clinician reference.
+    """
+    metrics = [("fire_rate", "fire rate: mean (range)", True),
+               ("w1", "W1 to clinician", False),
+               ("low_share", "low-dose share", False),
+               ("median_nz", "median nonzero dose", False)]
+    cols = {}
+    for split, (adv, dm) in splits.items():
+        a = adv[_col(adv.columns, alpha)]
+        r = {
+            "SARSA advantage, normalised: mean (SD)":
+                f"{a[('sarsa_adv_norm','mean')]:.3f} ({a[('sarsa_adv_norm','std')]:.3f})",
+            "Own-critic advantage, normalised: mean (min)":
+                f"{a[('own_adv_norm','mean')]:.4f} ({a[('own_adv_norm','min')]:.4f})",
+            "Support: mean (worst seed)":
+                f"{a[('occupancy_frac','mean')]:.3f} ({a[('occupancy_frac','min')]:.3f})",
+        }
+        summ = {name: _row(summarize_metrics(dm[name]), alpha) for name in dm}
+        for key, label, show_range in metrics:
+            for name, m in summ.items():
+                d = 4 if key == "low_share" else 3
+                v = f"{m[(key,'mean')]:.{d}f}"
+                if show_range:
+                    v += f" ({m[(key,'min')]:.3f}-{m[(key,'max')]:.3f})"
+                r[f"{name} {label}"] = v
+        cols[split] = pd.Series(r)
+    df = pd.DataFrame(cols)
+
+    ref = {}
+    for key, label, _ in metrics:
+        if key == "w1":
+            continue
+        for name in next(iter(clin.values())):
+            d = 4 if key == "low_share" else 3
+            ref[f"{name} {label}"] = " / ".join(f"{clin[s][name][key]:.{d}f}" for s in clin)
+    df["Clinician (val / test)"] = pd.Series(ref)
+    return df.fillna("")

@@ -1547,6 +1547,8 @@ def load_trained_actor(state_dim, action_dim, config_manager):
 			"picu_patients_health_score_from_restricted_dataset")
 		else:
 			raise ValueError(f"Unknown reward_cohort: {reward_cohort}. Must be 'picu' or 'restricted'.")
+	elif unit.lower() == 'icu': # mimic iv
+		pass
 	else:
 		raise ValueError(f"Unknown unit: {unit}. Must be 'picu'.")
 
@@ -1625,6 +1627,10 @@ def load_trained_actor(state_dim, action_dim, config_manager):
 			raise FileNotFoundError(f"alpha_sweep directory not found: {alpha_sweep_path}")
 
 		for run_folder in sorted(os.listdir(alpha_sweep_path)):
+			# if run_folder is not a directory, skip it
+			if not os.path.isdir(os.path.join(alpha_sweep_path, run_folder)):
+				continue
+
 			run_path = os.path.join(alpha_sweep_path, run_folder)
 			for inner_run_folder in sorted(os.listdir(run_path)):
 				inner_run_path = os.path.join(run_path, inner_run_folder)

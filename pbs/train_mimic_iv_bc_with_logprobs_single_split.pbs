@@ -64,6 +64,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --model_type bc_with_logprobs \
     --mode single_split \
     --split_num 0 \
+    --seeds 0 \
     --search_variant random_search \
     --n_search_iterations 20 \
     --n_epochs 500 \

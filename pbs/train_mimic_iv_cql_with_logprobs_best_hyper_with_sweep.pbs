@@ -69,7 +69,7 @@ python -u -m src.scripts.rl.reinforcement_learning \
     --split_num 0 \
     --search_variant single_hyperparameter_sweep \
     --hyperparameter_to_sweep cql_alpha \
-    --values 0.05 \
+    --values 0.1 \
     --seeds 0 1 2 3 4 \
     --n_epochs 20 \
     --action_mode continuous_only \

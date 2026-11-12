@@ -513,30 +513,34 @@ def single_split_training(config_manager):
     elif config_manager.search_variant == 'single_hyperparameter_sweep':
         logger.info(" Single hyperparameter sweep mode enabled.")
 
-        for value in config_manager.values:
-            hyperparams = get_fixed_hyperparameters(config_manager)
-            hyperparams[config_manager.hyperparameter_to_sweep] = value
-            logger.info(f"Training with {config_manager.hyperparameter_to_sweep}={value}...")
-
-            if config_manager.hyperparameter_to_sweep == 'vaso_reward_coefficient':
-                # set add_reward_to_vaso_dosing to True
-                hyperparams['add_reward_to_vaso_dosing'] = True
-            if config_manager.hyperparameter_to_sweep != 'cql_alpha':
-                # set add_reward_to_vent_dosing to True
-                hyperparams['cql_alpha'] = config_manager.cql_alpha
-                logger.info(f"Setting cql_alpha to fixed value {config_manager.cql_alpha} for this sweep.")
+        for seed in config_manager.seeds:
+            config_manager.training_config['seed'] = seed
+            logger.info(f"Training with fixed hyperparameters for seed {seed}...")
             
-            train_processor, val_processor, test_processor = create_processor_from_shards(
-                            config_manager, 
-                            normalize=True
-                        )
+            for value in config_manager.values:
+                hyperparams = get_fixed_hyperparameters(config_manager)
+                hyperparams[config_manager.hyperparameter_to_sweep] = value
+                logger.info(f"Training with {config_manager.hyperparameter_to_sweep}={value}...")
 
-            # train model
-            train_with_hyperparameters(
-                train_processor, 
-                val_processor, 
-                config_manager, 
-                hyperparams,
+                if config_manager.hyperparameter_to_sweep == 'vaso_reward_coefficient':
+                    # set add_reward_to_vaso_dosing to True
+                    hyperparams['add_reward_to_vaso_dosing'] = True
+                if config_manager.hyperparameter_to_sweep != 'cql_alpha':
+                    # set add_reward_to_vent_dosing to True
+                    hyperparams['cql_alpha'] = config_manager.cql_alpha
+                    logger.info(f"Setting cql_alpha to fixed value {config_manager.cql_alpha} for this sweep.")
+                
+                train_processor, val_processor, test_processor = create_processor_from_shards(
+                                config_manager, 
+                                normalize=True
+                            )
+
+                # train model
+                train_with_hyperparameters(
+                    train_processor, 
+                    val_processor, 
+                    config_manager, 
+                    hyperparams,
             )        
 
     elif config_manager.search_variant == 'best_hyperparameters' and \

@@ -158,12 +158,25 @@ class ConfigManager:
                     self.search_variant == "best_hyperparameters_fixed_cql_alpha" or \
                     self.search_variant == "single_hyperparameter_sweep":
                     if self.model_type == "bc_with_logprobs":
-                        self.best_results_path = os.path.join(
-                            self.paths["rl_models_dir"], self.model_type,
-                            f"split_{self.split_num}", self.cohort.lower(), self.actions,
-                            f"{self.unit.lower()}_patients",
-                            "best_results.json"
-                        )
+                        if self.hospital == "choc":
+                            self.best_results_path = os.path.join(
+                                self.paths["rl_models_dir"], self.model_type,
+                                f"split_{self.split_num}", self.cohort.lower(), self.actions,
+                                f"{self.unit.lower()}_patients",
+                                "best_results.json"
+                            )
+                        else: # mimic_iv
+                            if self.include_actions_in_state == 'True':
+                                action_inclusion_folder = "with_actions"
+                            else:
+                                action_inclusion_folder = "without_actions"
+                            self.best_results_path = os.path.join(
+                                self.paths["rl_models_dir"], self.model_type,
+                                f"split_{self.split_num}", self.cohort.lower(), self.actions,
+                                action_inclusion_folder,
+                                "best_results.json"
+                            )
+
                     elif self.model_type == "dynamic_deephit_transformer":
                         if self.hospital == "choc":
                             self.best_results_path = os.path.join(

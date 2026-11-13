@@ -33,10 +33,10 @@ HOSPITALS: Dict[str, dict] = {
 }
 
 HOSPITAL_ALIASES = {"mimiciv": "mimic_iv"}          # accepted spellings -> folder name on disk
-REWARD_TYPES = ("health_score_change_only", "terminal_only", "terminal_bellman")   # RL models only
+REWARD_TYPES = ("health_score_change_only", "terminal_only", "terminal_bellman", "none")   # RL models only - none is bc_with_logprobs
 # model type -> folder name under rl_models/<hospital>/ (the cql folder is spelled log_probs on disk; others to confirm)
 RL_FOLDERS = {"basic_q": "basic_q", "cql_with_logprobs": "cql_with_logprobs", "fqe": "fqe",
-              "bc_with_logprobs": "bc_with_log_probs"}
+              "bc_with_logprobs": "bc_with_logprobs"}
 
 ACTION_INCLUSION = ("with_actions", "without_actions")
 DDH_PURPOSES = ("for_rewards", "for_states")        # only for Dynamic-DeepHit trained with actions
@@ -77,9 +77,13 @@ def _rl(model_type):
         # action_inclusion says which Dynamic-DeepHit variant supplies the RL states. Its position in the
         # tree is a guess (mirroring the DDH layout) until confirmed; folders below reward_type (discount,
         # sweep name) are not fixed here yet, so the path stops at the reward type.
-        return os.path.join(models_root, "rl_models", hospital, RL_FOLDERS[model_type], "split_0", "sepsis",
-                            HOSPITALS[hospital]["actions"], _choose("action_inclusion", action_inclusion, ACTION_INCLUSION),
-                            _choose("reward_type (needed for RL models)", reward_type, REWARD_TYPES))
+        if reward_type == "none":
+            return os.path.join(models_root, "rl_models", hospital, RL_FOLDERS[model_type], "split_0", "sepsis",
+                                HOSPITALS[hospital]["actions"], _choose("action_inclusion", action_inclusion, ACTION_INCLUSION))
+        else:
+            return os.path.join(models_root, "rl_models", hospital, RL_FOLDERS[model_type], "split_0", "sepsis",
+                                HOSPITALS[hospital]["actions"], _choose("action_inclusion", action_inclusion, ACTION_INCLUSION),
+                                _choose("reward_type (needed for RL models)", reward_type, REWARD_TYPES))
     return build
 
 

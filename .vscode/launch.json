@@ -1169,6 +1169,31 @@
             "envFile": "${workspaceFolder}/.env"
         },
 
+        {
+            "name": "mimic_bc_with_logprobs_best_with_seeds",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.scripts.rl.reinforcement_learning",
+            "args": [
+                "--hospital", "mimic_iv", 
+                "--experiment_type", "reinforcement_learning",
+                "--model_type", "bc_with_logprobs", 
+                "--mode", "single_split", 
+                "--split_num", "0",
+                "--search_variant", "best_hyperparameters",
+                "--seeds", "0", "1", "2", "3", "4",
+                "--cohort", "sepsis",
+                "--unit", "ICU",
+                "--reward_cohort", "all",
+                "--n_epochs", "500",
+                "--include_actions_in_state", "True",
+                "--action_mode", "continuous_only",
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env"
+        },
+
 
         {
             "name": "choc_implicit_q_learning_fixed",

@@ -355,14 +355,52 @@ def _load_bc(record: RunRecord, state_dim: int, device) -> LoadedModel:
     """
     from src.rl.models.bc_with_logprobs import Actor as BCActor
     ckpt = _read_checkpoint(record, device)
-    actor = BCActor(state_dim=state_dim, hidden_dim=_require(record, "hidden_dim"), dropout=_require(record, "dropout"),
-                    fluid_gate_hidden=record.hyperparams.get("fluid_gate_hidden", 0)).to(device)
-    actor.load_state_dict(ckpt["actor_state_dict"])
+    sd = ckpt.get("actor_state_dict", ckpt.get("actor"))
+    if sd is None:
+        raise KeyError(f"{record.label}: no 'actor_state_dict' or 'actor' in the checkpoint (keys: {list(ckpt)})")
+    # fluid_gate_hidden is read from the checkpoint's own weight shapes: results.json has been seen to omit it, which
+    # silently built a plain linear gate and a state_dict mismatch. Whatever was saved is what was trained.
+    if "fluid_gate.0.weight" in sd:
+        fluid_gate_hidden = sd["fluid_gate.0.weight"].shape[0]
+    elif "fluid_gate.weight" in sd:
+        fluid_gate_hidden = 0
+    else:
+        raise KeyError(f"{record.label}: no fluid_gate weights in the checkpoint (keys: {list(sd)[:15]})")
+    saved = record.hyperparams.get("fluid_gate_hidden")
+    if saved is not None and int(saved) != int(fluid_gate_hidden):
+        warnings.warn(f"{record.label}: results.json says fluid_gate_hidden={saved} but the checkpoint has "
+                      f"{fluid_gate_hidden}; using the checkpoint's")
+    # dropout does not affect the weights and the loaded model is in eval mode, so a missing value is harmless
+    actor = BCActor(state_dim=state_dim, hidden_dim=_require(record, "hidden_dim"),
+                    dropout=record.hyperparams.get("dropout", 0.1), fluid_gate_hidden=fluid_gate_hidden).to(device)
+    # strict=False only for the two calibration buffers that older checkpoints lack (they keep their identity
+    # defaults); any other mismatch is a real error
+    res = actor.load_state_dict(sd, strict=False)
+    missing = [k for k in res.missing_keys if k not in ("fluid_gate_calib_scale", "fluid_gate_calib_bias")]
+    if missing or res.unexpected_keys:
+        raise ValueError(f"{record.label}: BC state_dict mismatch: missing={missing}, unexpected={res.unexpected_keys}")
+    for p in actor.parameters():
+        p.requires_grad_(False)
     return LoadedModel(record=record, components={"actor": actor},
                        loader_extras={"config_manager": record.load_config_manager()})
 
 
-register_loader("bc", _load_bc)
+def _bc_actor_outputs(model: LoadedModel, s: torch.Tensor) -> Dict[str, torch.Tensor]:
+    """
+    BC hurdle actor, same keys as the CQL actor's outputs: deterministic action, gate probabilities, raw
+    (pre-sigmoid) magnitude means and stds. (BC's forward has no 'deterministic' argument.)
+    """
+    actions, _, _, dist = model.actor(s, return_dist=True)
+    f_p, v_p, f_raw, v_raw, f_std, v_std = dist
+    f_logit, v_logit = model.actor._dists(s)[:2]          # raw gate logits (no calibration, like forward's default)
+    return {"actions": actions,
+            "f_p": f_p.squeeze(-1), "v_p": v_p.squeeze(-1),
+            "f_gate_logit": f_logit.squeeze(-1), "v_gate_logit": v_logit.squeeze(-1),
+            "f_raw_mean": f_raw.squeeze(-1), "v_raw_mean": v_raw.squeeze(-1),
+            "f_std": f_std.squeeze(-1), "v_std": v_std.squeeze(-1)}
+
+
+register_loader("bc", _load_bc, actor_outputs=_bc_actor_outputs)
 
 
 # ---- Dynamic-DeepHit -------------------------------------------------------------

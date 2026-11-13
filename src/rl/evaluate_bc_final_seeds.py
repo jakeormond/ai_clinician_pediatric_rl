@@ -1,301 +1,427 @@
 """
-Analysis support for the 5 final BC ("behavioral cloning") seed models --
-mirrors the structure of evaluate_cql_alpha_sweep.py / evaluate_terminal_reward_models.py.
+src/rl/evaluate_bc_final_seeds.py
 
-BC's trained actor is used downstream as the behavior-policy density
-estimate for weighted importance sampling (WIS) -- see log_prob_for_wis
-in cql_with_logprobs.py, which borrows BC's fitted magnitude std as its
-bandwidth. Getting this loader (and, eventually, BC's own std-floor/
-mean-saturation diagnostics) right matters directly for WIS quality.
+Evaluation of the final behaviour-cloning (BC) seed models, written against the generic analysis API
+(src/rl/analysis: runs.py, models.py, data.py). The BC actor is the behaviour density pi_b in WIS, so what matters
+is whether it is a good DENSITY of the logged actions, not whether its point predictions are close:
+
+  - log-likelihood against a no-state baseline (constant gate rate + one Gaussian over logit dose)
+  - gate calibration (does a predicted fire probability of 0.3 mean 30% of the time?), per drug
+  - magnitude calibration (are the logged logit-doses ~N(0,1) in units of BC's own mean and std?)
+  - all of the above by severity (the sickest hours are where vaso is given and WIS weights are made)
+  - agreement across seeds, and how much of a stay's gate log-likelihood comes from zero-fluid hours
+
+Conventions
+  * models: {seed: LoadedModel} (family 'bc'); procs: {seed: processor}, each seed on ITS OWN states
+    (store.processor(model, split)); every function takes the two dicts, keyed by the same seeds.
+  * Log-likelihoods use the same arithmetic as the WIS code (hurdle: gate + fired * magnitude, Gaussian in
+    logit-dose space with the logit Jacobian), checked against the actor's own log_prob_of_action by
+    check_loglik_matches.
+  * Data loading lives in analysis/data.py; this file only computes on processors it is given.
 """
 
-import os
-import json
-import pickle
+from __future__ import annotations
+
+from typing import Dict
+
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy import stats
+from scipy.special import expit
 
-import torch
+from src.rl.analysis import data as D
 
-from .models.bc_with_logprobs import Actor
+DRUGS = {"fluid": ("f", 0), "vaso": ("v", 1)}          # name -> (actor output prefix, action column)
+CLAMP = 1e-4                                            # dose clamp before the logit, as in the WIS code
+
+# Seed colours: first five categorical slots of the project's validated palette (adjacent-pair CVD and
+# normal-vision checks pass). Three of them are under 3:1 contrast on white, so every seed also gets its own
+# marker and a legend entry; colour is never the only cue.
+SEED_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]
+SEED_MARKERS = ["o", "s", "^", "D", "v"]
+INK, MUTE, GRID = "#222222", "#6b6b6b", "#e6e6e6"
 
 
-def load_actor(reward_type, model_dir, state_dim, device=None):
+# =============================================================================
+# Per-row quantities
+# =============================================================================
+
+def _logit(x):
+    x = np.clip(x, CLAMP, 1 - CLAMP)
+    return np.log(x / (1 - x))
+
+
+def bc_rows(model, p) -> Dict[str, Dict[str, np.ndarray]]:
     """
-    Loads one trained BC actor (+ its config_manager and hyperparameters)
-    from a specific, already-resolved run directory.
-
-    reward_type: expected reward type for this model (e.g. 'health_score')
-        -- used only as a SANITY CHECK against the loaded config_manager's
-        own .reward_type, not to resolve any path (model_dir is already
-        fully resolved by the caller). A mismatch prints a warning rather
-        than raising, since this is meant to catch accidental mix-ups
-        without being overly strict about config_manager's exact attribute
-        name/presence.
-
-    model_dir: path to one specific run's directory (containing
-        results.json, config_manager.pkl, and final_model.pt).
-
-    state_dim: passed in directly (e.g. from Dynamic DeepHit's d_model)
-        since BC's Actor, like CQL's, does not store this itself.
-
-    Returns: (actor, config_manager, hyperparams)
+    For one BC model on its processor: per drug, per RL row, the logged dose, whether it fired, BC's fire
+    probability, BC's raw (logit-space) mean and std, the logged logit-dose and its z-score under BC.
     """
-    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    results_path = os.path.join(model_dir, "results.json")
-    with open(results_path, "r") as f:
-        results = json.load(f)
-    hyperparams = results["hyperparameters"]
-
-    config_manager_path = os.path.join(model_dir, "config_manager.pkl")
-    if not os.path.isfile(config_manager_path):
-        # sometimes config_manager.pkl sits in the parent directory instead
-        # (e.g. shared across a run's seed subfolders) -- check there before
-        # giving up.
-        parent_config_manager_path = os.path.join(os.path.dirname(model_dir), "config_manager.pkl")
-        if os.path.isfile(parent_config_manager_path):
-            config_manager_path = parent_config_manager_path
-        else:
-            raise FileNotFoundError(
-                f"No config_manager.pkl found at {os.path.join(model_dir, 'config_manager.pkl')} "
-                f"or in the parent directory ({parent_config_manager_path})."
-            )
-
-    with open(config_manager_path, "rb") as f:
-        config_manager = pickle.load(f)
-    cm_reward_type = getattr(config_manager, "reward_type", None)
-    if cm_reward_type is not None and cm_reward_type != reward_type:
-        print(f"Warning: requested reward_type='{reward_type}' but "
-              f"config_manager.reward_type='{cm_reward_type}' for {model_dir}")
-
-    final_model_path = os.path.join(model_dir, "final_model.pt")
-    checkpoint = torch.load(final_model_path, map_location=device, weights_only=False)
-
-    # BC's checkpoint key naming has some uncertainty (Q_Learner/CQL's
-    # checkpoints use "actor_state_dict"; BC.state_dict() itself returns
-    # a dict keyed "actor" -- depending on which path your training.py
-    # checkpoint-saving branch takes for 'bc_with_logprobs', either could
-    # be correct). Check both explicitly rather than guessing silently.
-    if "actor_state_dict" in checkpoint:
-        actor_state_dict = checkpoint["actor_state_dict"]
-    elif "actor" in checkpoint:
-        actor_state_dict = checkpoint["actor"]
-    else:
-        raise KeyError(
-            f"Could not find actor weights in checkpoint at {final_model_path}. "
-            f"Checked keys 'actor_state_dict' and 'actor'; available keys were: "
-            f"{list(checkpoint.keys())}. Update load_actor() with the correct key."
-        )
-
-    # Infer fluid_gate_hidden DIRECTLY from the checkpoint's own weight shapes,
-    # rather than trusting hyperparams/results.json to have recorded it --
-    # results.json may not log every hyperparameter key (confirmed: some
-    # fluid_gate_hidden runs' results.json omitted it entirely, causing a
-    # silent fallback to 0 and a state_dict key mismatch). Reading the
-    # checkpoint's actual structure can't be wrong, since it IS the
-    # structure that was actually saved.
-    if "fluid_gate.0.weight" in actor_state_dict:
-        fluid_gate_hidden = actor_state_dict["fluid_gate.0.weight"].shape[0]
-    elif "fluid_gate.weight" in actor_state_dict:
-        fluid_gate_hidden = 0
-    else:
-        raise KeyError(
-            f"Could not find fluid_gate weights in checkpoint at {final_model_path} "
-            f"under either 'fluid_gate.weight' (plain Linear) or 'fluid_gate.0.weight' "
-            f"(Sequential MLP). Available keys: {list(actor_state_dict.keys())}"
-        )
-
-    actor = Actor(
-        state_dim=state_dim,
-        hidden_dim=hyperparams["hidden_dim"],
-        dropout=hyperparams.get("dropout", 0.1),
-        fluid_gate_hidden=fluid_gate_hidden,
-    ).to(device)
-
-    load_result = actor.load_state_dict(actor_state_dict, strict=False)
-    # strict=False tolerates OLDER checkpoints (e.g. saved before the
-    # fluid_gate_calib_scale/bias buffers existed) missing those two keys --
-    # they simply keep their default, no-op (identity) values in that case.
-    # Anything else missing/unexpected would indicate a real mismatch, so
-    # we still check and warn explicitly rather than silencing everything.
-    unexpected_missing = [k for k in load_result.missing_keys if k not in
-                          ("fluid_gate_calib_scale", "fluid_gate_calib_bias")]
-    if unexpected_missing or load_result.unexpected_keys:
-        print(f"Warning: unexpected state_dict mismatch loading {model_dir}: "
-              f"missing={unexpected_missing}, unexpected={load_result.unexpected_keys}")
-
-    actor.eval()
-    for p in actor.parameters():
-        p.requires_grad_(False)
-
-    return actor, config_manager, hyperparams
+    out = model.actor_outputs(D.states(p))
+    act = D.actions(p)
+    thr = float(getattr(model.actor, "zero_threshold", D.NONZERO))
+    rows = {}
+    for drug, (k, col) in DRUGS.items():
+        dose = act[:, col].astype(np.float64)
+        mean = out[f"{k}_raw_mean"].astype(np.float64)
+        std = out[f"{k}_std"].astype(np.float64)
+        logit = _logit(dose)
+        if f"{k}_gate_logit" in out:                     # exact: scored from the raw gate logit
+            gl = out[f"{k}_gate_logit"].astype(np.float64)
+            prob = expit(gl)
+        else:                                            # older models.py: float32 probabilities only
+            prob = out[f"{k}_p"].astype(np.float64)
+            pc = np.clip(prob, 1e-12, 1 - 1e-12)
+            gl = np.log(pc / (1 - pc))
+        rows[drug] = {"dose": dose, "fired": dose > thr, "p": prob, "gate_logit": gl,
+                      "raw_mean": mean, "std": std, "logit": logit, "z": (logit - mean) / std}
+    return rows
 
 
-def get_bc_actor_actions(model_entry, processor, batch_size=1024,
-                           device="cuda" if torch.cuda.is_available() else "cpu"):
+def _gate_loglik(fired, gate_logit, smooth=0.0):
     """
-    BC-compatible drop-in replacement for action_distribution_sweep.get_actor_actions
-    (which calls the CQL-style actor(state, deterministic=True) signature --
-    BC's Actor.forward has no `deterministic` kwarg at all, since it only
-    ever computes the deterministic path internally). Pass this function as
-    `get_actor_actions_fn` to run_action_distribution_stage3 /
-    plot_dose_histograms / plot_dose_histograms_at_clinician_zero.
+    Gate log-likelihood from the raw logit. smooth=0 is the plain Bernoulli log-probability of the logged
+    fire / no-fire. smooth>0 is what the BC actor's log_prob_of_action reports: the negative BCE against labels
+    smoothed to y*(1-2s)+s (the actor uses s = 0.02), i.e. log p - s*logit when fired and log(1-p) + s*logit when not.
     """
-    actor = model_entry[0] if isinstance(model_entry, (list, tuple)) else model_entry
-    actor.eval()
-
-    traj_end_inds = np.where(processor.rl_dataset["dones"] == 1)[0]
-    traj_start_inds = np.concatenate(([0], traj_end_inds + 1))
-    stay_ids = processor.dynamic_deephit_dataset["stay_ids"]
-
-    n_total = processor.rl_dataset["states"].shape[0]
-    action_dim = processor.rl_dataset["actions"].shape[1]
-    actions_all = torch.zeros(n_total, action_dim, dtype=torch.float32).to(device)
-
-    for stay_id in stay_ids:
-        stay_idx = np.where(stay_ids == stay_id)[0][0]
-        start, end = traj_start_inds[stay_idx], traj_start_inds[stay_idx + 1]
-        states = torch.as_tensor(processor.rl_dataset["states"][start:end], dtype=torch.float32).to(device)
-
-        n_batches = int(np.ceil(states.shape[0] / batch_size))
-        for i in range(n_batches):
-            s, e = i * batch_size, min((i + 1) * batch_size, states.shape[0])
-            states_batch = states[s:e]
-            with torch.no_grad():
-                actions, _, _ = actor(states_batch)
-            actions_all[start + s:start + e] = actions
-
-    return actions_all
+    y = fired * (1 - 2 * smooth) + smooth
+    return -(y * np.logaddexp(0, -gate_logit) + (1 - y) * np.logaddexp(0, gate_logit))
 
 
-def get_gate_probs(model_entry, processor, batch_size=1024,
-                    device="cuda" if torch.cuda.is_available() else "cpu"):
+def _drug_loglik(fired, dose, logit, gate_logit, mean, std, smooth=0.0):
+    """(gate log-lik, magnitude log-lik) per row; magnitude is 0 where the drug was not given. Scalars broadcast."""
+    gate = _gate_loglik(fired, gate_logit, smooth)
+    a = np.clip(dose, CLAMP, 1 - CLAMP)
+    z = (logit - mean) / std
+    mag = -0.5 * z ** 2 - np.log(std) - 0.5 * np.log(2 * np.pi) - np.log(a * (1 - a) + 1e-6)
+    return gate, np.where(fired, mag, 0.0)
+
+
+def bc_loglik(rows, gate_smooth=0.0) -> Dict[str, Dict[str, np.ndarray]]:
     """
-    Returns (f_p, v_p) as numpy arrays, shape (n_timesteps,) -- the raw
-    fluid/vaso gate firing PROBABILITIES (pre-threshold), for every state
-    in the processor's dataset. Same trajectory-batching pattern as
-    check_std_floor.get_both_std, but extracting f_p/v_p instead of std.
+    {drug: {'gate': ..., 'mag': ...}} per-row log-likelihood of the logged action under BC.
+    gate_smooth=0: plain Bernoulli (a proper density; use for calibration and for comparing with the baseline).
+    gate_smooth=actor.gate_smooth (0.02): exactly what actor.log_prob_of_action returns, i.e. the density WIS divides by.
     """
-    actor = model_entry[0] if isinstance(model_entry, (list, tuple)) else model_entry
-    actor.eval()
-
-    traj_end_inds = np.where(processor.rl_dataset["dones"] == 1)[0]
-    traj_start_inds = np.concatenate(([0], traj_end_inds + 1))
-    stay_ids = processor.dynamic_deephit_dataset["stay_ids"]
-
-    n_total = processor.rl_dataset["states"].shape[0]
-    f_p_all = torch.zeros(n_total, dtype=torch.float32)
-    v_p_all = torch.zeros(n_total, dtype=torch.float32)
-
-    for stay_id in stay_ids:
-        stay_idx = np.where(stay_ids == stay_id)[0][0]
-        start, end = traj_start_inds[stay_idx], traj_start_inds[stay_idx + 1]
-        states = torch.as_tensor(processor.rl_dataset["states"][start:end], dtype=torch.float32).to(device)
-
-        n_batches = int(np.ceil(states.shape[0] / batch_size))
-        for i in range(n_batches):
-            s, e = i * batch_size, min((i + 1) * batch_size, states.shape[0])
-            states_batch = states[s:e]
-            with torch.no_grad():
-                _, _, _, (f_p, v_p, f_raw_mean, v_raw_mean, f_std, v_std) = actor(states_batch, return_dist=True)
-            f_p_all[start + s:start + e] = f_p.squeeze(-1).cpu()
-            v_p_all[start + s:start + e] = v_p.squeeze(-1).cpu()
-
-    return f_p_all.numpy(), v_p_all.numpy()
+    out = {}
+    for drug, r in rows.items():
+        gate, mag = _drug_loglik(r["fired"], r["dose"], r["logit"], r["gate_logit"], r["raw_mean"], r["std"], gate_smooth)
+        out[drug] = {"gate": gate, "mag": mag}
+    return out
 
 
-def check_gate_calibration_by_seed(models_by_seed, processor, clinician_actions, zero_threshold=1e-4):
+def marginal_reference(train_p, threshold=D.NONZERO) -> Dict[str, Dict[str, float]]:
     """
-    For each seed, checks whether the raw gate probability (f_p, v_p)
-    genuinely distinguishes clinician-zero from clinician-nonzero states,
-    or whether it's uniformly high (a real calibration failure) regardless
-    of what the clinician actually did.
+    The no-state baseline density, fitted on the TRAIN actions: per drug a constant fire rate and one Gaussian over
+    the logit-dose of fired hours. BC has to beat this for its states to be telling WIS anything.
     """
-    clinician_actions_np = clinician_actions.cpu().numpy() if torch.is_tensor(clinician_actions) else np.asarray(clinician_actions)
-    clinician_fluid_fired = clinician_actions_np[:, 0] > zero_threshold
-    clinician_vaso_fired = clinician_actions_np[:, 1] > zero_threshold
-
-    for seed_idx, model_entry in enumerate(models_by_seed):
-        f_p, v_p = get_gate_probs(model_entry, processor)
-
-        print(f"=== Seed {seed_idx} ===")
-        for name, p, fired_mask in [("Fluid", f_p, clinician_fluid_fired), ("Vaso", v_p, clinician_vaso_fired)]:
-            p_at_zero = p[~fired_mask]
-            p_at_nonzero = p[fired_mask]
-            pct_over_half_at_zero = (p_at_zero > 0.5).mean() * 100
-            print(f"  {name} gate probability (f_p):")
-            print(f"    At clinician-ZERO states:    mean={p_at_zero.mean():.3f}, median={np.median(p_at_zero):.3f}, "
-                  f"p10={np.percentile(p_at_zero,10):.3f}, p90={np.percentile(p_at_zero,90):.3f}, "
-                  f"%>0.5={pct_over_half_at_zero:.1f}%")
-            print(f"    At clinician-NONZERO states: mean={p_at_nonzero.mean():.3f}, median={np.median(p_at_nonzero):.3f}, "
-                  f"p10={np.percentile(p_at_nonzero,10):.3f}, p90={np.percentile(p_at_nonzero,90):.3f}")
-        print()
+    act = D.actions(train_p)
+    ref = {}
+    for drug, (_, col) in DRUGS.items():
+        dose = act[:, col].astype(np.float64)
+        fired = dose > threshold
+        lg = _logit(dose[fired])
+        ref[drug] = {"rate": float(fired.mean()), "mu": float(lg.mean()), "sd": float(lg.std())}
+    return ref
 
 
-def check_fluid_gate_wis_impact(models_by_seed, processor, clinician_actions, zero_threshold=1e-4):
+def marginal_loglik(rows, ref, gate_smooth=0.0) -> Dict[str, Dict[str, np.ndarray]]:
+    out = {}
+    for drug, r in rows.items():
+        m = ref[drug]
+        rate = min(max(m["rate"], 1e-12), 1 - 1e-12)
+        gate, mag = _drug_loglik(r["fired"], r["dose"], r["logit"], np.log(rate / (1 - rate)), m["mu"], m["sd"],
+                                 gate_smooth)
+        out[drug] = {"gate": gate, "mag": mag}
+    return out
+
+
+# =============================================================================
+# Checks
+# =============================================================================
+
+def check_loglik_matches(models, procs, n=5000, tol=1e-3):
     """
-    Quantifies how much the fluid gate's miscalibration at clinician-zero
-    states could distort WIS importance weights, WITHOUT needing the
-    target (CQL) policy -- two complementary views:
-
-      1. Direct probability mass: what probability does BC actually assign
-         to the real "no fluid" decision at these states (1 - f_p), vs.
-         the analogous, well-calibrated vaso number (1 - v_p) at
-         clinician-zero-vaso states, as a "what good looks like" reference.
-
-      2. Trajectory-level compounding: for each patient trajectory, what
-         FRACTION of the total gate-related negative-log-likelihood (i.e.
-         "surprise") comes specifically from zero-fluid states, vs.
-         everything else (nonzero-fluid gate decisions + all vaso gate
-         decisions). A large fraction here means this single, known
-         calibration issue could dominate that trajectory's resulting
-         importance weight; a small fraction means it's a minor
-         correction relative to everything else already being modeled.
+    This file's per-row log-likelihood (summed over both drugs) against the actor's own log_prob_of_action on the
+    first n rows of each seed. Raises on a mismatch, so the quantities below are known to be built from the density
+    WIS divides by. The actor's gate term is label-smoothed (actor.gate_smooth); that smoothing is applied here for
+    the comparison, and the average shift it causes relative to a plain Bernoulli gate is printed (per hour; a
+    negative value raises every WIS log-ratio by that much, so it grows with stay length).
     """
-    clinician_actions_np = clinician_actions.cpu().numpy() if torch.is_tensor(clinician_actions) else np.asarray(clinician_actions)
-    clinician_fluid_fired = clinician_actions_np[:, 0] > zero_threshold
-    clinician_vaso_fired = clinician_actions_np[:, 1] > zero_threshold
+    import torch
+    for seed, m in models.items():
+        p = procs[seed]
+        rows = bc_rows(m, p)
+        sm = float(getattr(m.actor, "gate_smooth", 0.0))
+        ll = bc_loglik(rows, sm)
+        plain = bc_loglik(rows, 0.0)
+        shift = np.mean(sum(ll[d]["gate"] - plain[d]["gate"] for d in DRUGS))
+        print(f"  seed {seed}: gate_smooth={sm}; mean shift of the behaviour log-lik from smoothing {shift:+.4f} nats/hour")
+        mine = sum(ll[d]["gate"] + ll[d]["mag"] for d in DRUGS)[:n]
+        s = torch.as_tensor(D.states(p)[:n], dtype=torch.float32, device=m.device)
+        a = torch.as_tensor(D.actions(p)[:n], dtype=torch.float32, device=m.device)
+        with torch.no_grad():
+            theirs = m.actor.log_prob_of_action(s, a).reshape(-1).cpu().numpy().astype(np.float64)
+        err = float(np.max(np.abs(mine - theirs)))
+        print(f"  seed {seed}: max |difference| over {len(mine)} rows = {err:.2e}")
+        if err > tol:
+            raise ValueError(f"seed {seed}: log-likelihood here differs from actor.log_prob_of_action by {err:.3g}")
 
-    traj_end_inds = np.where(processor.rl_dataset["dones"] == 1)[0]
-    traj_start_inds = np.concatenate(([0], traj_end_inds + 1))
-    n_traj = len(traj_end_inds)
 
-    for seed_idx, model_entry in enumerate(models_by_seed):
-        f_p, v_p = get_gate_probs(model_entry, processor)
-        eps = 1e-8
+# =============================================================================
+# Tables
+# =============================================================================
 
-        # --- 1. direct probability mass at clinician-zero states ---
-        prob_correct_fluid_zero = 1 - f_p[~clinician_fluid_fired]
-        prob_correct_vaso_zero = 1 - v_p[~clinician_vaso_fired]
+def loglik_table(models, procs, ref, gate_smooth=0.0) -> pd.DataFrame:
+    """
+    Per seed and drug: BC against the no-state baseline, in nats. gate_* are per row; mag_* per fired row.
+    gain_per_row = (gate gain) + fired share * (magnitude gain): what the states add per hour. Positive = BC beats
+    the baseline. gate_smooth=0 (default) scores both as plain Bernoulli densities; pass 'actor' to score BC with
+    its own label-smoothed gate (what WIS uses; the baseline is smoothed the same way).
+    """
+    recs = []
+    for seed, m in models.items():
+        rows = bc_rows(m, procs[seed])
+        sm = float(m.actor.gate_smooth) if gate_smooth == "actor" else float(gate_smooth)
+        bc, mg = bc_loglik(rows, sm), marginal_loglik(rows, ref, sm)
+        for drug in DRUGS:
+            f = rows[drug]["fired"]
+            gate_gain = bc[drug]["gate"].mean() - mg[drug]["gate"].mean()
+            mag_gain = (bc[drug]["mag"][f] - mg[drug]["mag"][f]).mean() if f.any() else np.nan
+            recs.append({"seed": seed, "drug": drug, "fired_share": f.mean(),
+                         "gate_ll_bc": bc[drug]["gate"].mean(), "gate_ll_base": mg[drug]["gate"].mean(),
+                         "mag_ll_bc": bc[drug]["mag"][f].mean() if f.any() else np.nan,
+                         "mag_ll_base": mg[drug]["mag"][f].mean() if f.any() else np.nan,
+                         "gain_per_row": gate_gain + f.mean() * (0.0 if np.isnan(mag_gain) else mag_gain)})
+    return pd.DataFrame(recs).set_index(["seed", "drug"])
 
-        print(f"=== Seed {seed_idx} ===")
-        print(f"  Probability BC assigns to the REAL 'no fluid' decision, at clinician-zero-fluid states:")
-        print(f"    median={np.median(prob_correct_fluid_zero):.3f}, mean={prob_correct_fluid_zero.mean():.3f}")
-        print(f"  Probability BC assigns to the REAL 'no vaso' decision, at clinician-zero-vaso states (reference -- well calibrated):")
-        print(f"    median={np.median(prob_correct_vaso_zero):.3f}, mean={prob_correct_vaso_zero.mean():.3f}")
 
-        # --- 2. trajectory-level compounding ---
-        f_gate_lp_all = np.log(np.where(clinician_fluid_fired, f_p, 1 - f_p) + eps)
-        v_gate_lp_all = np.log(np.where(clinician_vaso_fired, v_p, 1 - v_p) + eps)
+def _auc(p, y):
+    """Rank-based AUROC of p for the binary y."""
+    y = np.asarray(y, dtype=bool)
+    n1, n0 = int(y.sum()), int((~y).sum())
+    if n1 == 0 or n0 == 0:
+        return np.nan
+    ranks = stats.rankdata(p)
+    return float((ranks[y].sum() - n1 * (n1 + 1) / 2) / (n1 * n0))
 
-        zero_fluid_mask = ~clinician_fluid_fired
 
-        fractions = []
-        for t in range(n_traj):
-            start, end = traj_start_inds[t], traj_start_inds[t + 1]
-            f_gate_lp_traj = f_gate_lp_all[start:end]
-            v_gate_lp_traj = v_gate_lp_all[start:end]
-            zero_fluid_traj = zero_fluid_mask[start:end]
+def gate_reliability(rows, drug, n_bins=10) -> pd.DataFrame:
+    """Equal-count bins of predicted fire probability: mean prediction against the observed fire rate."""
+    p, y = rows[drug]["p"], rows[drug]["fired"].astype(float)
+    edges = np.unique(np.quantile(p, np.linspace(0, 1, n_bins + 1)))
+    b = np.clip(np.digitize(p, edges[1:-1]), 0, len(edges) - 2)
+    recs = [{"bin": i, "n": int((b == i).sum()), "mean_pred": p[b == i].mean(), "obs_rate": y[b == i].mean()}
+            for i in range(len(edges) - 1) if (b == i).any()]
+    return pd.DataFrame(recs)
 
-            total_gate_nll = -(f_gate_lp_traj.sum() + v_gate_lp_traj.sum())
-            zero_fluid_nll = -f_gate_lp_traj[zero_fluid_traj].sum()
 
-            if total_gate_nll > eps:
-                fractions.append(zero_fluid_nll / total_gate_nll)
+def gate_summary(models, procs, n_bins=10) -> pd.DataFrame:
+    """
+    Per seed and drug: what BC predicts at hours where the clinician gave / did not give the drug, plus Brier score,
+    expected calibration error (equal-count bins) and AUROC.
+    """
+    recs = []
+    for seed, m in models.items():
+        rows = bc_rows(m, procs[seed])
+        for drug in DRUGS:
+            p, f = rows[drug]["p"], rows[drug]["fired"]
+            rel = gate_reliability(rows, drug, n_bins)
+            ece = float((rel["n"] * (rel["mean_pred"] - rel["obs_rate"]).abs()).sum() / rel["n"].sum())
+            recs.append({"seed": seed, "drug": drug, "obs_rate": f.mean(), "mean_pred": p.mean(),
+                         "p_at_zero_mean": p[~f].mean(), "p_at_zero_over_half": (p[~f] > 0.5).mean(),
+                         "p_at_given_mean": p[f].mean(), "brier": float(np.mean((p - f) ** 2)),
+                         "ece": ece, "auroc": _auc(p, f)})
+    return pd.DataFrame(recs).set_index(["seed", "drug"])
 
-        fractions = np.array(fractions)
-        print(f"  Fraction of each trajectory's TOTAL gate log-likelihood magnitude coming from "
-              f"zero-fluid states specifically (n={n_traj} trajectories):")
-        print(f"    median={np.median(fractions)*100:.1f}%, mean={fractions.mean()*100:.1f}%, "
-              f"p90={np.percentile(fractions,90)*100:.1f}%")
-        print()
+
+def magnitude_summary(models, procs) -> pd.DataFrame:
+    """
+    Fired hours only, per seed and drug: the z-score of the logged logit-dose under BC's own mean and std. A
+    calibrated density has mean ~0, sd ~1 and few |z| > 3. Also BC's std (floor / spread) and the share of doses
+    sitting on the upper clamp (a pile-up there inflates z whatever BC does).
+    """
+    recs = []
+    for seed, m in models.items():
+        rows = bc_rows(m, procs[seed])
+        for drug in DRUGS:
+            r, f = rows[drug], rows[drug]["fired"]
+            z, sd = r["z"][f], r["std"][f]
+            recs.append({"seed": seed, "drug": drug, "n_fired": int(f.sum()), "z_mean": z.mean(), "z_sd": z.std(),
+                         "frac_abs_z_gt3": (np.abs(z) > 3).mean(), "frac_abs_z_gt10": (np.abs(z) > 10).mean(),
+                         "std_min": sd.min(), "std_p50": np.median(sd), "std_p95": np.percentile(sd, 95),
+                         "frac_at_upper_clamp": (r["dose"][f] >= 1 - CLAMP).mean()})
+    return pd.DataFrame(recs).set_index(["seed", "drug"])
+
+
+def calibration_by_severity(models, procs, edges) -> pd.DataFrame:
+    """
+    Per seed, drug and severity bin (0 = sickest; edges from the TRAIN health score, see data.severity_edges):
+    observed fire rate vs BC's mean fire probability, and for fired hours the observed mean logit-dose vs BC's mean,
+    with the z-score mean / sd. Shows where in the severity range BC is off.
+    """
+    recs = []
+    for seed, m in models.items():
+        p = procs[seed]
+        rows = bc_rows(m, p)
+        sev = D.severity_bin(D.health_score(p)[0], edges)
+        for drug in DRUGS:
+            r = rows[drug]
+            for b in range(len(edges) - 1):
+                sel = sev == b
+                if not sel.any():
+                    continue
+                f = sel & r["fired"]
+                recs.append({"seed": seed, "drug": drug, "severity_bin": b, "n": int(sel.sum()),
+                             "obs_rate": r["fired"][sel].mean(), "mean_pred": r["p"][sel].mean(),
+                             "obs_logit": r["logit"][f].mean() if f.any() else np.nan,
+                             "bc_logit": r["raw_mean"][f].mean() if f.any() else np.nan,
+                             "z_mean": r["z"][f].mean() if f.any() else np.nan,
+                             "z_sd": r["z"][f].std() if f.sum() > 1 else np.nan})
+    return pd.DataFrame(recs)
+
+
+def cross_seed_agreement(models, procs) -> Dict[str, pd.DataFrame]:
+    """
+    Spearman correlation, between seeds, of BC's fire probability on the same patient-hours. The rows must be the
+    same hours (check_rows_aligned is applied; each seed still uses its own states, so this is what a change of
+    state embedding plus BC seed does to the density).
+    """
+    D.check_rows_aligned(procs)
+    probs = {s: bc_rows(m, procs[s]) for s, m in models.items()}
+    seeds = list(models)
+    out = {}
+    for drug in DRUGS:
+        mat = np.eye(len(seeds))
+        for i in range(len(seeds)):
+            for j in range(i + 1, len(seeds)):
+                rho = stats.spearmanr(probs[seeds[i]][drug]["p"], probs[seeds[j]][drug]["p"])[0]
+                mat[i, j] = mat[j, i] = rho
+        out[drug] = pd.DataFrame(mat, index=seeds, columns=seeds)
+    return out
+
+
+def fluid_gate_wis_impact(models, procs, gate_smooth="actor") -> pd.DataFrame:
+    """
+    How much the fluid gate at zero-fluid hours could distort a stay's weight, per seed:
+      p_no_fluid_*  : probability BC gives the logged 'no fluid' at zero-fluid hours (fluid), and the same for
+                      'no vaso' at zero-vaso hours (reference: the better-calibrated gate)
+      share_*       : per stay, the share of the total gate negative log-likelihood (both drugs) that comes from
+                      zero-fluid hours (median / mean / p90 over stays), with the gate as WIS sees it
+                      (gate_smooth='actor'); pass 0 for the plain Bernoulli gate
+    """
+    recs = []
+    for seed, m in models.items():
+        p = procs[seed]
+        rows = bc_rows(m, p)
+        f, v = rows["fluid"], rows["vaso"]
+        sm = float(m.actor.gate_smooth) if gate_smooth == "actor" else float(gate_smooth)
+        ll = bc_loglik(rows, sm)
+        lp_f, lp_v = ll["fluid"]["gate"], ll["vaso"]["gate"]
+        tid = D.trajectory_ids(p)
+        total = np.bincount(tid, weights=-(lp_f + lp_v))
+        zero_f = np.bincount(tid, weights=-lp_f * (~f["fired"]))
+        share = (zero_f / total)[total > 1e-8]
+        recs.append({"seed": seed,
+                     "p_no_fluid_median": np.median(1 - f["p"][~f["fired"]]), "p_no_fluid_mean": (1 - f["p"][~f["fired"]]).mean(),
+                     "p_no_vaso_median": np.median(1 - v["p"][~v["fired"]]), "p_no_vaso_mean": (1 - v["p"][~v["fired"]]).mean(),
+                     "share_zero_fluid_median": np.median(share), "share_zero_fluid_mean": share.mean(),
+                     "share_zero_fluid_p90": np.percentile(share, 90), "n_stays": len(share)})
+    return pd.DataFrame(recs).set_index("seed")
+
+
+# =============================================================================
+# Plots
+# =============================================================================
+
+def _style(ax):
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    for sp in ("left", "bottom"):
+        ax.spines[sp].set_color("#bdbdbd")
+    ax.grid(color=GRID, lw=0.8)
+    ax.set_axisbelow(True)
+    ax.tick_params(colors=INK)
+
+
+def _seed_style(i):
+    return SEED_COLORS[i % len(SEED_COLORS)], SEED_MARKERS[i % len(SEED_MARKERS)]
+
+
+def plot_gate_reliability(models, procs, n_bins=10, save_path=None):
+    """Reliability of the fire probability, one panel per drug, one line per seed; histogram of predictions below."""
+    fig, axes = plt.subplots(2, 2, figsize=(9, 6.5), gridspec_kw={"height_ratios": [3, 1]}, constrained_layout=True)
+    for i, (seed, m) in enumerate(models.items()):
+        col, mk = _seed_style(i)
+        rows = bc_rows(m, procs[seed])
+        for j, drug in enumerate(DRUGS):
+            rel = gate_reliability(rows, drug, n_bins)
+            axes[0, j].plot(rel["mean_pred"], rel["obs_rate"], marker=mk, color=col, lw=1.4, ms=5, label=f"seed {seed}")
+            axes[1, j].hist(rows[drug]["p"], bins=np.linspace(0, 1, 41), histtype="step", color=col, lw=1.2)
+    for j, drug in enumerate(DRUGS):
+        ax = axes[0, j]
+        ax.plot([0, 1], [0, 1], color=MUTE, lw=1, ls="--")
+        ax.set_title(f"{drug} gate", loc="left", color=INK, fontsize=11)
+        ax.set_xlabel("mean predicted fire probability (equal-count bins)", color=INK)
+        ax.set_ylabel("observed fire rate", color=INK)
+        _style(ax)
+        axes[1, j].set_yscale("log")
+        axes[1, j].set_xlabel("predicted fire probability", color=INK)
+        axes[1, j].set_ylabel("hours", color=INK)
+        _style(axes[1, j])
+    axes[0, 0].legend(frameon=False, fontsize=8)
+    if save_path:
+        fig.savefig(save_path, dpi=200, bbox_inches="tight")
+    return fig
+
+
+def plot_magnitude_z(models, procs, lim=6, save_path=None):
+    """Distribution of the logged logit-dose in BC's own units (fired hours). N(0,1) dashed; values beyond +-lim pile at the edge."""
+    fig, axes = plt.subplots(1, 2, figsize=(9, 3.8), sharey=True, constrained_layout=True)
+    grid = np.linspace(-lim, lim, 400)
+    for i, (seed, m) in enumerate(models.items()):
+        col, _ = _seed_style(i)
+        rows = bc_rows(m, procs[seed])
+        for j, drug in enumerate(DRUGS):
+            z = rows[drug]["z"][rows[drug]["fired"]]
+            axes[j].hist(np.clip(z, -lim, lim), bins=np.linspace(-lim, lim, 61), density=True, histtype="step",
+                         color=col, lw=1.3, label=f"seed {seed}")
+    for j, drug in enumerate(DRUGS):
+        axes[j].plot(grid, stats.norm.pdf(grid), color=MUTE, lw=1, ls="--", label="N(0,1)")
+        axes[j].set_title(f"{drug} magnitude (fired hours)", loc="left", color=INK, fontsize=11)
+        axes[j].set_xlabel(f"(logged logit-dose - BC mean) / BC std, clipped at +-{lim}", color=INK)
+        _style(axes[j])
+    axes[0].set_ylabel("density", color=INK)
+    axes[0].legend(frameon=False, fontsize=8)
+    if save_path:
+        fig.savefig(save_path, dpi=200, bbox_inches="tight")
+    return fig
+
+
+def plot_calibration_by_severity(tbl, save_path=None):
+    """
+    Rows = drug, columns = (fire rate, mean logit-dose of fired hours). Observed in dark ink, BC per seed in colour.
+    x = severity bin, 0 = sickest.
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(9.5, 6.5), sharex=True, constrained_layout=True)
+    seeds = sorted(tbl["seed"].unique(), key=str)
+    for j, drug in enumerate(DRUGS):
+        d = tbl[tbl["drug"] == drug]
+        obs = d.groupby("severity_bin")[["obs_rate", "obs_logit"]].mean()
+        axes[j, 0].plot(obs.index, obs["obs_rate"], color=INK, lw=2.2, label="observed")
+        axes[j, 1].plot(obs.index, obs["obs_logit"], color=INK, lw=2.2, label="observed")
+        for i, s in enumerate(seeds):
+            col, mk = _seed_style(i)
+            ds = d[d["seed"] == s]
+            axes[j, 0].plot(ds["severity_bin"], ds["mean_pred"], color=col, marker=mk, ms=4, lw=1.2, label=f"BC seed {s}")
+            axes[j, 1].plot(ds["severity_bin"], ds["bc_logit"], color=col, marker=mk, ms=4, lw=1.2)
+        axes[j, 0].set_ylabel(f"{drug}: fire rate", color=INK)
+        axes[j, 1].set_ylabel(f"{drug}: mean logit-dose (fired hours)", color=INK)
+        for k in (0, 1):
+            _style(axes[j, k])
+    for k in (0, 1):
+        axes[1, k].set_xlabel("severity bin (0 = sickest)", color=INK)
+    axes[0, 0].legend(frameon=False, fontsize=8)
+    if save_path:
+        fig.savefig(save_path, dpi=200, bbox_inches="tight")
+    return fig

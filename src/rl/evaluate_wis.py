@@ -400,6 +400,87 @@ def log_prob_for_wis_clipped_components(cql_actor, bc_actor, state, action, logi
     return {"fluid_lp": fluid_lp, "vaso_lp": vaso_lp}
 
 
+# The BC actor's log_prob_of_action scores the fire/no-fire gate against LABEL-SMOOTHED targets (it was trained that way),
+# which lowers the behaviour log-likelihood by about 0.12 nats per hour relative to the plain Bernoulli log-probability
+# that log_prob_for_wis_clipped uses for the target. That inconsistency inflates every log-ratio by ~+0.12 per hour and
+# compounds with stay length (see the BC-vs-itself control). WIS therefore scores the behaviour gate with this smoothing:
+# 0.0 = plain Bernoulli, consistent with the target; None = leave the actor's own setting.
+BEHAVIOR_GATE_SMOOTH = 0.0
+
+# Which density scores the BEHAVIOUR (the BC):
+#   "clipped": the same function as the target, log_prob_for_wis_clipped with the BC as its own target. Same plain gate,
+#              same z_clip and logit_clip, so a policy identical to the BC gets log-ratio exactly 0 on every row. Without
+#              this, rows where the logged dose sits far in the BC's lower tail (|z| > 10, tiny fired doses) were scored
+#              -0.5*z^2 (e.g. -147) by the behaviour but clipped to -50 by the target, giving single-row log-ratios of +20
+#              to +100 that decided whole stays.
+#   "actor":   the BC actor's own log_prob_of_action (label-smoothed gate, no z clip), with BEHAVIOR_GATE_SMOOTH.
+BEHAVIOR_DENSITY = "clipped"
+
+# Coarsened action space. The CQL fluid gate is saturated (fires on ~99.9% of hours), so its "no fluid" probability is ~0
+# and every hour the clinician gave none is scored at the 1e-8 floor, although the policy's own dose there is often tiny.
+# Setting this to e.g. {"fluid": 0.1, "vaso": 0.05} evaluates BOTH densities on the coarsened actions: a dose below the
+# threshold counts as "none" for the policy, the BC and the logged action alike. The policy's/BC's probability of "none"
+# is then (1 - p) + p * Phi((logit(tau) - mean) / std); doses above tau keep their gate x logit-Normal density.
+# Choose each tau just below the smallest dose clinicians actually give (fluid ~0.13, vaso ~0.07). None = off (the
+# validated exact-zero version). Cache files are named with the setting, so versions never overwrite each other.
+ACTION_COARSENING = None
+
+
+def _coarsening_suffix():
+    if not ACTION_COARSENING:
+        return ""
+    return "_tau" + "-".join(f"{k[0]}{v:g}" for k, v in sorted(ACTION_COARSENING.items()))
+
+
+def coarse_components(cql_actor, bc_actor, state, action, tau, logit_clip=8.0, z_clip=10.0, std_source="bc"):
+    """
+    Per-drug log-density of the logged action on the coarsened action space (see ACTION_COARSENING). Same clips, floor
+    and std choice as log_prob_for_wis_clipped_components. Returns {fluid,vaso}_{lp, gate_lp, mag_lp}: the gate part is
+    log P(none) when the logged dose is below tau and log p otherwise; the magnitude part is the clipped logit-Normal
+    density with its Jacobian, only when the dose is at least tau.
+    """
+    import math
+    f_gl, v_gl, f_m, v_m, f_sc, v_sc = cql_actor._dists(state)
+    if logit_clip is not None:
+        f_m, v_m = f_m.clamp(-logit_clip, logit_clip), v_m.clamp(-logit_clip, logit_clip)
+    if std_source == "bc":
+        _, _, _, (_, _, _, _, f_sd, v_sd) = bc_actor(state, return_dist=True)
+    else:
+        f_sd, v_sd = f_sc, v_sc
+    LOG_2PI = 1.8378770664093453
+    out = {}
+    for d, col, gl, m, sd in (("fluid", 0, f_gl, f_m, f_sd), ("vaso", 1, v_gl, v_m, v_sd)):
+        t = float(tau[d])
+        dose = action[:, col:col + 1]
+        none = (dose < t).float()
+        p = torch.sigmoid(gl)
+        cdf = 0.5 * (1 + torch.erf((math.log(t / (1 - t)) - m) / (sd * math.sqrt(2))))
+        p_none = (1 - p) + p * cdf
+        a = dose.clamp(1e-4, 1 - 1e-4)
+        z = ((torch.logit(a) - m) / sd).clamp(-z_clip, z_clip) if z_clip is not None else (torch.logit(a) - m) / sd
+        mag = -0.5 * z ** 2 - torch.log(sd) - 0.5 * LOG_2PI - torch.log(a * (1 - a) + 1e-6)
+        gate_lp = (none * torch.log(p_none + 1e-8) + (1 - none) * torch.log(p + 1e-8)).squeeze(-1)
+        mag_lp = ((1 - none) * mag).squeeze(-1)
+        out[f"{d}_gate_lp"], out[f"{d}_mag_lp"], out[f"{d}_lp"] = gate_lp, mag_lp, gate_lp + mag_lp
+    return out
+
+
+class _gate_smooth:
+    """Temporarily set actor.gate_smooth (no-op if value is None or the actor has no such attribute)."""
+    def __init__(self, actor, value):
+        self.actor, self.value, self.old = actor, value, None
+
+    def __enter__(self):
+        if self.value is not None and hasattr(self.actor, "gate_smooth"):
+            self.old = self.actor.gate_smooth
+            self.actor.gate_smooth = self.value
+        return self
+
+    def __exit__(self, *exc):
+        if self.old is not None:
+            self.actor.gate_smooth = self.old
+
+
 def compute_drug_split_log_probs(
         cql_actor, bc_actor, states, actions,
         batch_size=1024, device="cuda" if torch.cuda.is_available() else "cpu",
@@ -447,13 +528,27 @@ def compute_drug_split_log_probs(
         s = states_t[i:i + batch_size].to(device)
         a = actions_t[i:i + batch_size].to(device)
 
-        b_components = bc_actor.log_prob_of_action(s, a, return_components=True)
-        if isinstance(b_components, tuple):
-            # matches cql_with_logprobs.Actor.log_prob_of_action's contract:
-            # (total_lp, components_dict) when return_components=True
-            _, b_components = b_components
-        b_fluid = b_components["fluid_gate_lp"] + b_components["fluid_fired"] * b_components["fluid_mag_lp"]
-        b_vaso = b_components["vaso_gate_lp"] + b_components["vaso_fired"] * b_components["vaso_mag_lp"]
+        if ACTION_COARSENING:
+            b_c = coarse_components(bc_actor, bc_actor, s, a, ACTION_COARSENING, logit_clip=logit_clip, z_clip=z_clip, std_source="cql")
+            t_c = coarse_components(cql_actor, bc_actor, s, a, ACTION_COARSENING, logit_clip=logit_clip, z_clip=z_clip)
+            fluid_behavior_lp[i:i + batch_size] = b_c["fluid_lp"].detach().cpu().numpy()
+            vaso_behavior_lp[i:i + batch_size] = b_c["vaso_lp"].detach().cpu().numpy()
+            fluid_target_lp[i:i + batch_size] = t_c["fluid_lp"].detach().cpu().numpy()
+            vaso_target_lp[i:i + batch_size] = t_c["vaso_lp"].detach().cpu().numpy()
+            continue
+        if BEHAVIOR_DENSITY == "clipped":
+            bc_c = log_prob_for_wis_clipped_components(bc_actor, bc_actor, s, a, logit_clip=logit_clip, z_clip=z_clip,
+                                                       std_source="cql")
+            b_fluid, b_vaso = bc_c["fluid_lp"], bc_c["vaso_lp"]
+        else:
+            with _gate_smooth(bc_actor, BEHAVIOR_GATE_SMOOTH):
+                b_components = bc_actor.log_prob_of_action(s, a, return_components=True)
+            if isinstance(b_components, tuple):
+                # matches cql_with_logprobs.Actor.log_prob_of_action's contract:
+                # (total_lp, components_dict) when return_components=True
+                _, b_components = b_components
+            b_fluid = b_components["fluid_gate_lp"] + b_components["fluid_fired"] * b_components["fluid_mag_lp"]
+            b_vaso = b_components["vaso_gate_lp"] + b_components["vaso_fired"] * b_components["vaso_mag_lp"]
 
         t_components = log_prob_for_wis_clipped_components(
             cql_actor, bc_actor, s, a, logit_clip=logit_clip, z_clip=z_clip,
@@ -510,7 +605,18 @@ def compute_behavior_and_target_log_probs(
         s = states_t[i:i + batch_size].to(device)
         a = actions_t[i:i + batch_size].to(device)
 
-        b_lp = bc_actor.log_prob_of_action(s, a)
+        if ACTION_COARSENING:
+            b_c = coarse_components(bc_actor, bc_actor, s, a, ACTION_COARSENING, logit_clip=logit_clip, z_clip=z_clip, std_source="cql")
+            t_c = coarse_components(cql_actor, bc_actor, s, a, ACTION_COARSENING, logit_clip=logit_clip, z_clip=z_clip, std_source=std_source)
+            b_lp, t_lp = b_c["fluid_lp"] + b_c["vaso_lp"], t_c["fluid_lp"] + t_c["vaso_lp"]
+            behavior_lp[i:i + batch_size] = b_lp.detach().cpu().numpy()
+            target_lp[i:i + batch_size] = t_lp.detach().cpu().numpy()
+            continue
+        if BEHAVIOR_DENSITY == "clipped":
+            b_lp = log_prob_for_wis_clipped(bc_actor, bc_actor, s, a, logit_clip=logit_clip, z_clip=z_clip, std_source="cql")
+        else:
+            with _gate_smooth(bc_actor, BEHAVIOR_GATE_SMOOTH):
+                b_lp = bc_actor.log_prob_of_action(s, a)
         if logit_clip is None and z_clip is None:
             t_lp = cql_actor.log_prob_for_wis(s, a, bc_actor)
         else:
@@ -1305,6 +1411,34 @@ def plot_length_vs_log_weight(length_weight_result, save_path=None):
     return fig
 
 
+def log_weight_profile(trajectories, gamma, n_bins=10):
+    """Stays ranked by total log-ratio and split into bins: what sits at each end of the ranking?"""
+    L = np.array([t["length"] for t in trajectories])
+    lw = np.array([t["log_ratio"].sum() for t in trajectories])
+    G = discounted_returns(trajectories, gamma)
+    mort = np.array([t["mortality"] for t in trajectories], dtype=float)
+    rows = []
+    for b, idx in enumerate(np.array_split(np.argsort(lw), n_bins)):
+        rows.append({"bin": b, "n": len(idx), "mean_log_w": lw[idx].mean(),
+                     "log_ratio_per_step": (lw[idx] / L[idx]).mean(), "median_length": np.median(L[idx]),
+                     "mortality": mort[idx].mean(), "mean_return": G[idx].mean()})
+    rho = {name: float(stats.spearmanr(lw, x)[0]) for name, x in (("length", L), ("return", G), ("mortality", mort))}
+    return rows, rho
+
+
+def fixed_horizon_wis(trajectories, gamma, horizon, wcap_values):
+    """
+    Trajectory-level WIS on the first `horizon` hours of every stay lasting at least that long (equal exposure for all
+    stays), minus the mean return of the same stays. If the trajectory-level gain is a length artefact it shrinks here.
+    Returns (n stays kept, null, {cap: policy - null}).
+    """
+    kept = [dict(t, log_ratio=t["log_ratio"][:horizon], rewards=t["rewards"][:horizon], length=horizon)
+            for t in trajectories if t["length"] >= horizon]
+    null = discounted_returns(kept, gamma).mean()
+    diffs = {cap: compute_trajectory_wis(kept, gamma, weight_cap_percentile=cap)["value"] - null for cap in wcap_values}
+    return len(kept), float(null), diffs
+
+
 def bootstrap_wis_ci(trajectories, gamma, estimator="both", n_bootstrap=1000,
                       ci=(2.5, 97.5), random_state=None, weight_cap_percentile=None):
     """
@@ -1494,20 +1628,30 @@ def models_signature(cql_models, bc_models):
             "bc": {str(k): m.record.run_dir for k, m in sorted(_by_seed(bc_models).items(), key=lambda kv: str(kv[0]))}}
 
 
+def cql_alpha_tag(cql_models):
+    """'alpha0.0325': the models' own cql_alpha (must be the same for every seed), for naming cached files."""
+    from src.rl.evaluate_fqe_final_seeds import _by_seed
+    alphas = {m.record.get("cql_alpha") for m in _by_seed(cql_models).values()}
+    if len(alphas) != 1 or None in alphas:
+        raise ValueError(f"expected one cql_alpha across the CQL seeds, found {alphas}")
+    return f"alpha{alphas.pop():g}" + _coarsening_suffix()
+
+
 def get_wis_log_probs(cql_model, bc_model, processor, split, cache_dir=None, batch_size=1024,
-                      device="cuda" if torch.cuda.is_available() else "cpu", logit_clip=8.0, z_clip=10.0, std_source="bc"):
+                      device="cuda" if torch.cuda.is_available() else "cpu", logit_clip=8.0, z_clip=10.0, std_source="bc",
+                      tag=None):
     """
     Per-hour behaviour and target log-probabilities for one seed: the expensive forward pass of WIS. With cache_dir
-    they are saved once per (split, seed) and reused by every later call (any cap, any bootstrap setting), as long as
+    they are saved once per (tag, split, seed) and reused by every later call (any cap, any bootstrap setting), as long as
     the models, the clipping settings and the number of rows are unchanged; otherwise they are recomputed.
     """
     path = None
     if cache_dir:
         meta = {"cql": cql_model.record.run_dir, "bc": bc_model.record.run_dir, "split": split, "seed": str(cql_model.seed),
                 "n_rows": int(len(processor.rl_dataset["rewards"])), "logit_clip": logit_clip, "z_clip": z_clip,
-                "std_source": std_source}
+                "std_source": std_source, "behavior_density": BEHAVIOR_DENSITY, "behavior_gate_smooth": BEHAVIOR_GATE_SMOOTH, "action_coarsening": ACTION_COARSENING}
         os.makedirs(cache_dir, exist_ok=True)
-        path = os.path.join(cache_dir, f"wis_logprobs_{split}_seed{cql_model.seed}.npz")
+        path = os.path.join(cache_dir, f"wis_logprobs_{tag + '_' if tag else ''}{split}_seed{cql_model.seed}.npz")
         if os.path.isfile(path):
             d = np.load(path, allow_pickle=False)
             if json.loads(str(d["meta"])) == meta:
@@ -1719,14 +1863,20 @@ def run_wis_across_seeds(
     return results
 
 
-def run_wis_for_models(cql_models, bc_models, store, split="test", gamma=None, cache_dir=None, **kwargs):
+def run_wis_for_models(cql_models, bc_models, store, split="test", gamma=None, cache_dir=None, tag="auto",
+                       cache_results=True, **kwargs):
     """
     The same pipeline for models loaded with the analysis API ({seed: LoadedModel}, see models.load_study_models).
     gamma=None (default) uses the CQL models' saved discount.
     Each seed is scored on ITS OWN states (the seed's Dynamic-DeepHit embedding) and on its own matched BC seed.
     kwargs go to wis_one_seed (cap_percentile, weight_cap_percentile, n_bootstrap, include_myopic, ...).
-    cache_dir: if given, the per-hour log-probabilities (the slow forward pass) are saved there once per seed and
-    reused by every later call, whatever the cap.
+
+    cache_dir: if given, two things are saved there, named with `tag` so that runs with different cql_alpha never
+    overwrite each other (tag="auto" reads cql_alpha from the models, e.g. 'alpha0.0325'; pass a string to override):
+      - the per-hour log-probabilities (the slow forward pass), once per seed, reused whatever the cap;
+      - (cache_results=True) the finished results, one file per split and cap, e.g. wis_results_alpha0.0325_val_cap25.pkl,
+        reloaded instantly when the models and settings are unchanged. Loaded results hold no actor objects, so the
+        diagnostics that need them (e.g. print_dominant_trajectory_report) need cache_results=False.
     Returns the same list of per-seed result dicts as run_wis_across_seeds, so the plotting functions work unchanged.
     """
     from src.rl.evaluate_cql_alpha_sweep import check_judge_matches
@@ -1735,15 +1885,33 @@ def run_wis_for_models(cql_models, bc_models, store, split="test", gamma=None, c
     if set(cql) != set(bc):
         raise KeyError(f"CQL seeds {sorted(cql, key=str)} and BC seeds {sorted(bc, key=str)} differ")
     gamma = _resolve_gamma(gamma, cql_models)
-    results = []
-    for seed in sorted(cql, key=str):
-        check_judge_matches(cql[seed], bc[seed])          # same seed and same state embedding
-        processor = store.processor(cql[seed], split)
-        print(f"\n=== Seed {seed} ===")
-        lp = get_wis_log_probs(cql[seed], bc[seed], processor, split, cache_dir=cache_dir,
-                               **{k: kwargs[k] for k in ("batch_size", "device", "logit_clip", "z_clip", "std_source") if k in kwargs})
-        results.append(wis_one_seed(cql[seed].actor, bc[seed].actor, processor, seed, gamma=gamma, logprobs=lp, **kwargs))
-    return results
+    if cache_dir and tag == "auto":
+        tag = cql_alpha_tag(cql_models)
+    elif tag == "auto":
+        tag = None
+
+    def compute():
+        results = []
+        for seed in sorted(cql, key=str):
+            check_judge_matches(cql[seed], bc[seed])          # same seed and same state embedding
+            processor = store.processor(cql[seed], split)
+            print(f"\n=== Seed {seed} ===")
+            lp = get_wis_log_probs(cql[seed], bc[seed], processor, split, cache_dir=cache_dir, tag=tag,
+                                   **{k: kwargs[k] for k in ("batch_size", "device", "logit_clip", "z_clip", "std_source") if k in kwargs})
+            results.append(wis_one_seed(cql[seed].actor, bc[seed].actor, processor, seed, gamma=gamma, logprobs=lp, **kwargs))
+        return results
+
+    if cache_dir and cache_results:
+        meta = {"models": models_signature(cql_models, bc_models), "split": split, "gamma": gamma, "settings": kwargs,
+                "behavior_density": BEHAVIOR_DENSITY, "behavior_gate_smooth": BEHAVIOR_GATE_SMOOTH, "action_coarsening": ACTION_COARSENING}
+        cap = kwargs.get("weight_cap_percentile")
+        step_cap = kwargs.get("cap_percentile")
+        name = "uncapped" if cap is None else f"cap{cap:g}"
+        if step_cap is not None:
+            name += f"_stepcap{step_cap:g}"
+        path = os.path.join(cache_dir, f"wis_results_{tag}_{split}_{name}.pkl")
+        return cached_results(path, compute, meta=meta)
+    return compute()
 
 
 # ---------------------------------------------------------------------------
@@ -2000,17 +2168,22 @@ def run_weight_truncation_sweep(
                 "step_ci_upper": ci["stepwise"]["ci_upper"],
                 "baseline_mean": baseline_mean,
                 "baseline_sem": baseline_sem,
+                # each estimator's OWN null (policy = clinician): the trajectory-level null is the mean return, the
+                # stepwise null is sum_t gamma^t * mean reward among stays active at t -- they are not the same number
+                "traj_null": ci["minus_null"]["trajectory"]["null"],
+                "step_null": ci["minus_null"]["stepwise"]["null"],
             }
             sweep_rows.append(row)
             print(f"  wcap={wcap:5.1f}  traj={row['traj_value']:.3f} "
                   f"(traj ESS {100 * row['traj_ess_frac']:.1f}%)  "
-                  f"step={row['step_value']:.3f} (step ESS {100 * step_ess_frac:.1f}%)")
+                  f"step={row['step_value']:.3f} (step ESS {100 * step_ess_frac:.1f}%)  "
+                  f"[nulls {row['traj_null']:.3f} / {row['step_null']:.3f}]")
 
     return sweep_rows
 
 
 def run_weight_truncation_sweep_for_models(cql_models, bc_models, store, wcap_values, split="test", gamma=None,
-                                           cache_dir=None, **kwargs):
+                                           cache_dir=None, tag="auto", **kwargs):
     """
     run_weight_truncation_sweep for models loaded with the analysis API ({seed: LoadedModel}): each seed is swept on
     ITS OWN states and its matched BC seed. kwargs go to run_weight_truncation_sweep (n_bootstrap, std_source, ...).
@@ -2022,16 +2195,293 @@ def run_weight_truncation_sweep_for_models(cql_models, bc_models, store, wcap_va
     if set(cql) != set(bc):
         raise KeyError(f"CQL seeds {sorted(cql, key=str)} and BC seeds {sorted(bc, key=str)} differ")
     gamma = _resolve_gamma(gamma, cql_models)
+    if cache_dir and tag == "auto":
+        tag = cql_alpha_tag(cql_models)
+    elif tag == "auto":
+        tag = None
     rows = []
     for seed in sorted(cql, key=str):
         check_judge_matches(cql[seed], bc[seed])
         processor = store.processor(cql[seed], split)
-        lp = get_wis_log_probs(cql[seed], bc[seed], processor, split, cache_dir=cache_dir,
+        lp = get_wis_log_probs(cql[seed], bc[seed], processor, split, cache_dir=cache_dir, tag=tag,
                                **{k: kwargs[k] for k in ("batch_size", "device", "logit_clip", "z_clip", "std_source") if k in kwargs})
         rows.extend(run_weight_truncation_sweep(
             [(cql[seed].actor, None, None, {"seed": seed})], [(bc[seed].actor, None, {"seed": seed})],
             processor, wcap_values, gamma=gamma, precomputed_lp={seed: lp}, **kwargs))
     return rows
+
+
+def _control_log_probs(bi, bj, pi, pj, mode, split, cache_dir=None, batch_size=1024,
+                       device="cuda" if torch.cuda.is_available() else "cpu", logit_clip=8.0, z_clip=10.0):
+    """Behaviour log-probs of BC seed i on its states and target log-probs of BC seed j on ITS states (same rows), cached."""
+    path = None
+    if cache_dir:
+        meta = {"mode": mode, "behaviour": bi.record.run_dir, "target": bj.record.run_dir, "split": split,
+                "seed": str(bi.seed), "n_rows": int(len(pi.rl_dataset["rewards"])), "logit_clip": logit_clip, "z_clip": z_clip,
+                "behavior_density": BEHAVIOR_DENSITY, "behavior_gate_smooth": BEHAVIOR_GATE_SMOOTH, "action_coarsening": ACTION_COARSENING}
+        os.makedirs(cache_dir, exist_ok=True)
+        path = os.path.join(cache_dir, f"wis_control_{mode}{_coarsening_suffix()}_{split}_seed{bi.seed}.npz")
+        if os.path.isfile(path):
+            d = np.load(path, allow_pickle=False)
+            if json.loads(str(d["meta"])) == meta:
+                print(f"  control log-probs loaded from {path}")
+                return d["behavior_lp"], d["target_lp"]
+            warnings.warn(f"{path} was made with different models or settings; recomputing")
+    A = pi.rl_dataset["actions"]
+    kw = dict(batch_size=batch_size, device=device, logit_clip=logit_clip, z_clip=z_clip, std_source="cql")
+    b_lp, _ = compute_behavior_and_target_log_probs(bi.actor, bi.actor, pi.rl_dataset["states"], A, **kw)
+    _, t_lp = compute_behavior_and_target_log_probs(bj.actor, bj.actor, pj.rl_dataset["states"], A, **kw)
+    if path:
+        np.savez(path, behavior_lp=b_lp, target_lp=t_lp, meta=json.dumps(meta))
+    return b_lp, t_lp
+
+
+def run_bc_control_sweep(bc_models, store, wcap_values, gamma, mode="cross", split="val", n_bootstrap=300,
+                         cache_dir=None, cache_results=True, **kwargs):
+    """
+    Null control for the weight-truncation sweep: the "target policy" is itself a behaviour clone, so its true
+    value is the clinician's and both estimators should sit at their nulls.
+      mode="self":  target = behaviour = BC seed i (weights would be exactly 1 if the two densities were consistent;
+                    any drift measures the smoothed-vs-plain gate inconsistency).
+      mode="cross": target = BC seed i+1 (next seed), behaviour = BC seed i (a clinician-like policy with a realistic
+                    spread of weights).
+    Each BC is scored on its own state embedding (rows are aligned across seeds, which is checked), and the target uses
+    its own std. Returns the same flat list of per-(seed, cap) rows as run_weight_truncation_sweep_for_models, so
+    plot_weight_truncation_sweep works unchanged.
+    cache_dir: saves the log-probabilities per seed and the finished sweep, named with the mode
+    (wis_control_<mode>_<split>_...), so controls never collide with the CQL files.
+    """
+    from src.rl.evaluate_fqe_final_seeds import _by_seed
+    if mode not in ("self", "cross"):
+        raise ValueError("mode must be 'self' or 'cross'")
+    by = _by_seed(bc_models)
+    seeds = sorted(by, key=str)
+
+    def compute():
+        rows = []
+        for k, i in enumerate(seeds):
+            j = i if mode == "self" else seeds[(k + 1) % len(seeds)]
+            bi, bj = by[i], by[j]
+            pi, pj = store.processor(bi, split), store.processor(bj, split)
+            if pi.rl_dataset["actions"].shape != pj.rl_dataset["actions"].shape or \
+                    not np.allclose(pi.rl_dataset["actions"], pj.rl_dataset["actions"]):
+                raise ValueError(f"BC seeds {i} and {j} are not row-aligned")
+            b_lp, t_lp = _control_log_probs(bi, bj, pi, pj, mode, split, cache_dir=cache_dir,
+                                            **{k2: kwargs[k2] for k2 in ("batch_size", "device", "logit_clip", "z_clip") if k2 in kwargs})
+            print(f"seed {i} (target BC {j}): mean log-ratio per hour {np.mean(t_lp - b_lp):+.3f}")
+            rows.extend(run_weight_truncation_sweep(
+                [(bj.actor, None, None, {"seed": i})], [(bi.actor, None, {"seed": i})], pi, wcap_values,
+                gamma=gamma, n_bootstrap=n_bootstrap, precomputed_lp={i: (b_lp, t_lp)}, std_source="cql",
+                **{k2: v for k2, v in kwargs.items() if k2 in ("random_state", "logit_clip", "z_clip")}))
+        return rows
+
+    if cache_dir and cache_results:
+        meta = {"mode": mode, "split": split, "gamma": gamma, "caps": list(wcap_values), "n_bootstrap": n_bootstrap,
+                "bc": {str(k): m.record.run_dir for k, m in sorted(by.items(), key=lambda kv: str(kv[0]))}, "settings": kwargs,
+                "behavior_density": BEHAVIOR_DENSITY, "behavior_gate_smooth": BEHAVIOR_GATE_SMOOTH, "action_coarsening": ACTION_COARSENING}
+        return cached_results(os.path.join(cache_dir, f"wis_control_{mode}{_coarsening_suffix()}_{split}_sweep.pkl"), compute, meta=meta)
+    return compute()
+
+
+# ---------------------------------------------------------------------------
+# Where does the CQL policy's log-ratio come from?
+# ---------------------------------------------------------------------------
+
+_DECOMP_KEYS = ("fluid_gate_lr", "fluid_mag_lr", "vaso_gate_lr", "vaso_mag_lr",
+                "fluid_p_cql", "fluid_p_bc", "vaso_p_cql", "vaso_p_bc",
+                "fluid_mean_cql", "fluid_mean_bc", "vaso_mean_cql", "vaso_mean_bc")
+_COMPONENTS = ("fluid_gate", "fluid_mag", "vaso_gate", "vaso_mag")
+
+
+def _gate_lp(gate_logit, fired):
+    """Plain Bernoulli gate log-probability with the same 1e-8 floor log_prob_for_wis_clipped uses."""
+    p = torch.sigmoid(gate_logit)
+    return fired * torch.log(p + 1e-8) + (1 - fired) * torch.log(1 - p + 1e-8)
+
+
+def log_ratio_components(cql_actor, bc_actor, states, actions, batch_size=1024,
+                         device="cuda" if torch.cuda.is_available() else "cpu", logit_clip=8.0, z_clip=10.0):
+    """
+    Per-row log-ratio (policy density minus behaviour density) split into four parts: fluid gate, fluid magnitude, vaso
+    gate, vaso magnitude (a magnitude part is 0 on rows where that drug was not given). Uses the same densities as the
+    WIS runs (target: CQL actor with BC's std; behaviour: the BC scored by the same clipped function), so the four parts
+    add up to the log-ratio WIS uses. Also returns, per drug, the policy's and BC's fire probability and raw logit-dose
+    mean at every row. Returns {key: float32 array (n,)} for the keys in _DECOMP_KEYS.
+    """
+    cql_actor.eval(); bc_actor.eval()
+    S = torch.as_tensor(states, dtype=torch.float32)
+    A = torch.as_tensor(actions, dtype=torch.float32)
+    out = {k: [] for k in _DECOMP_KEYS}
+    thr = cql_actor.zero_threshold
+    with torch.no_grad():
+        for i in range(0, S.shape[0], batch_size):
+            s, a = S[i:i + batch_size].to(device), A[i:i + batch_size].to(device)
+            tot_t = log_prob_for_wis_clipped_components(cql_actor, bc_actor, s, a, logit_clip=logit_clip, z_clip=z_clip, std_source="bc")
+            tot_b = log_prob_for_wis_clipped_components(bc_actor, bc_actor, s, a, logit_clip=logit_clip, z_clip=z_clip, std_source="cql")
+            gt, gb = cql_actor._dists(s), bc_actor._dists(s)       # (f_gate_logit, v_gate_logit, f_raw_mean, v_raw_mean, f_std, v_std)
+            if ACTION_COARSENING:
+                ct = coarse_components(cql_actor, bc_actor, s, a, ACTION_COARSENING, logit_clip=logit_clip, z_clip=z_clip, std_source="bc")
+                cb = coarse_components(bc_actor, bc_actor, s, a, ACTION_COARSENING, logit_clip=logit_clip, z_clip=z_clip, std_source="cql")
+            for d, col in (("fluid", 0), ("vaso", 1)):
+                if ACTION_COARSENING:
+                    vals = {f"{d}_gate_lr": ct[f"{d}_gate_lp"] - cb[f"{d}_gate_lp"], f"{d}_mag_lr": ct[f"{d}_mag_lp"] - cb[f"{d}_mag_lp"],
+                            f"{d}_p_cql": torch.sigmoid(gt[col]).squeeze(-1), f"{d}_p_bc": torch.sigmoid(gb[col]).squeeze(-1),
+                            f"{d}_mean_cql": gt[2 + col].squeeze(-1), f"{d}_mean_bc": gb[2 + col].squeeze(-1)}
+                    for k, v in vals.items():
+                        out[k].append(v.detach().cpu().numpy())
+                    continue
+                fired = (a[:, col:col + 1] > thr).float()
+                g_t, g_b = _gate_lp(gt[col], fired).squeeze(-1), _gate_lp(gb[col], fired).squeeze(-1)
+                m_t, m_b = tot_t[f"{d}_lp"] - g_t, tot_b[f"{d}_lp"] - g_b
+                vals = {f"{d}_gate_lr": g_t - g_b, f"{d}_mag_lr": m_t - m_b,
+                        f"{d}_p_cql": torch.sigmoid(gt[col]).squeeze(-1), f"{d}_p_bc": torch.sigmoid(gb[col]).squeeze(-1),
+                        f"{d}_mean_cql": gt[2 + col].squeeze(-1), f"{d}_mean_bc": gb[2 + col].squeeze(-1)}
+                for k, v in vals.items():
+                    out[k].append(v.detach().cpu().numpy())
+    return {k: np.concatenate(v).astype(np.float32) for k, v in out.items()}
+
+
+def decomposition_tables(comp, actions, boundaries, zero_threshold=1e-4):
+    """
+    From the per-row parts of log_ratio_components:
+      groups: one row per drug x (clinician gave / withheld): rows, mean and median log-ratio, its gate and magnitude parts,
+              the share of ALL the negative (and positive) log-ratio mass that falls in that group, the policy's and BC's
+              mean fire probability, and the median dose the policy / BC / clinician would give.
+      stays:  at stay level, for each of the four parts: its mean and sd of the per-stay sum, its variance share
+              Cov(part, total)/Var(total) of the stay's total log-ratio (the shares add to 1), and its rank correlation
+              with stay length.
+    """
+    import pandas as pd
+    from scipy.special import expit
+    actions = np.asarray(_to_numpy(actions), dtype=np.float64)       # the processor holds a torch tensor
+    drugs = (("fluid", 0), ("vaso", 1))
+    total = {d: comp[f"{d}_gate_lr"].astype(np.float64) + comp[f"{d}_mag_lr"] for d, _ in drugs}
+    neg_all = sum(np.clip(total[d], None, 0).sum() for d, _ in drugs)
+    pos_all = sum(np.clip(total[d], 0, None).sum() for d, _ in drugs)
+    rows = []
+    for d, col in drugs:
+        thr = zero_threshold[d] if isinstance(zero_threshold, dict) else zero_threshold
+        fired = actions[:, col] >= thr if isinstance(zero_threshold, dict) else actions[:, col] > thr
+        for name, m in (("gave", fired), ("withheld", ~fired)):
+            x = total[d][m]
+            rows.append({"drug": d, "clinician": name, "n": int(m.sum()), "frac_rows": float(m.mean()),
+                         "mean_lr": x.mean(), "median_lr": np.median(x),
+                         "mean_gate_lr": comp[f"{d}_gate_lr"][m].mean(), "mean_mag_lr": comp[f"{d}_mag_lr"][m].mean(),
+                         "share_neg_mass": np.clip(x, None, 0).sum() / neg_all, "share_pos_mass": np.clip(x, 0, None).sum() / pos_all,
+                         "policy_fire_p": comp[f"{d}_p_cql"][m].mean(), "bc_fire_p": comp[f"{d}_p_bc"][m].mean(),
+                         "policy_dose_median": float(np.median(expit(comp[f"{d}_mean_cql"][m]))),
+                         "bc_dose_median": float(np.median(expit(comp[f"{d}_mean_bc"][m]))),
+                         "logged_dose_median": float(np.median(actions[m, col])) if name == "gave" else np.nan})
+    starts = np.array([b[0] for b in boundaries]); ends = np.array([b[1] for b in boundaries])
+    length = ends - starts
+
+    def per_stay(x):
+        cs = np.concatenate([[0.0], np.cumsum(x, dtype=np.float64)])
+        return cs[ends] - cs[starts]
+
+    parts = {f"{d}_{k}": per_stay(comp[f"{d}_{k}_lr"]) for d, _ in drugs for k in ("gate", "mag")}
+    tot = sum(parts.values())
+    srows = []
+    for name in _COMPONENTS:
+        p = parts[name]
+        srows.append({"component": name, "mean_stay_sum": p.mean(), "sd_stay_sum": p.std(),
+                      "variance_share": float(np.cov(p, tot)[0, 1] / tot.var(ddof=1)),
+                      "spearman_length": float(stats.spearmanr(p, length)[0])})
+    srows.append({"component": "total", "mean_stay_sum": tot.mean(), "sd_stay_sum": tot.std(), "variance_share": 1.0,
+                  "spearman_length": float(stats.spearmanr(tot, length)[0])})
+    return pd.DataFrame(rows), pd.DataFrame(srows)
+
+
+def run_decomposition_for_models(cql_models, bc_models, store, split="val", cache_dir=None, tag="auto", **kwargs):
+    """
+    log_ratio_components + decomposition_tables for every seed-matched (CQL, BC) pair, each on its own states.
+    cache_dir saves the per-row parts per seed (wis_decomp_<tag>_<split>_seed<k>.npz); the tables are recomputed from them.
+    If the WIS log-probability file for the same seed exists, checks that the four parts add up to its log-ratio.
+    Returns a list of {"seed", "groups", "stays"} dicts.
+    """
+    from src.rl.evaluate_cql_alpha_sweep import check_judge_matches
+    from src.rl.evaluate_fqe_final_seeds import _by_seed
+    cql, bc = _by_seed(cql_models), _by_seed(bc_models)
+    if set(cql) != set(bc):
+        raise KeyError(f"CQL seeds {sorted(cql, key=str)} and BC seeds {sorted(bc, key=str)} differ")
+    if tag == "auto":
+        tag = cql_alpha_tag(cql_models) if cache_dir else None
+    clips = {k: kwargs[k] for k in ("logit_clip", "z_clip") if k in kwargs}
+    results = []
+    for seed in sorted(cql, key=str):
+        check_judge_matches(cql[seed], bc[seed])
+        p = store.processor(cql[seed], split)
+        S, A = p.rl_dataset["states"], p.rl_dataset["actions"]
+        comp, path = None, None
+        meta = {"cql": cql[seed].record.run_dir, "bc": bc[seed].record.run_dir, "split": split, "seed": str(seed),
+                "n_rows": int(len(A)), "behavior_density": BEHAVIOR_DENSITY, "action_coarsening": ACTION_COARSENING, **{k: clips.get(k, 8.0 if k == "logit_clip" else 10.0) for k in ("logit_clip", "z_clip")}}
+        if cache_dir:
+            os.makedirs(cache_dir, exist_ok=True)
+            path = os.path.join(cache_dir, f"wis_decomp_{tag}_{split}_seed{seed}.npz")
+            if os.path.isfile(path):
+                d = np.load(path, allow_pickle=False)
+                if json.loads(str(d["meta"])) == meta:
+                    print(f"seed {seed}: parts loaded from {path}")
+                    comp = {k: d[k] for k in _DECOMP_KEYS}
+                else:
+                    warnings.warn(f"{path} was made with different models or settings; recomputing")
+        if comp is None:
+            print(f"seed {seed}: computing parts")
+            comp = log_ratio_components(cql[seed].actor, bc[seed].actor, S, A, **{k: v for k, v in kwargs.items() if k in ("batch_size", "device", "logit_clip", "z_clip")})
+            if path:
+                np.savez(path, meta=json.dumps(meta), **comp)
+        if cache_dir:
+            lp_path = os.path.join(cache_dir, f"wis_logprobs_{tag}_{split}_seed{seed}.npz")
+            if os.path.isfile(lp_path):
+                d = np.load(lp_path, allow_pickle=False)
+                diff = np.abs(sum(comp[f"{k}_lr"] for k in ("fluid_gate", "fluid_mag", "vaso_gate", "vaso_mag")) - (d["target_lp"] - d["behavior_lp"])).max()
+                print(f"   check: parts add up to the WIS log-ratio, max |difference| {diff:.2e}" + ("" if diff < 1e-2 else "   <-- DO NOT TRUST"))
+        groups, stays = decomposition_tables(comp, A, get_trajectory_boundaries(p), zero_threshold=(ACTION_COARSENING or getattr(cql[seed].actor, "zero_threshold", 1e-4)))
+        results.append({"seed": seed, "groups": groups, "stays": stays})
+    return results
+
+
+def summarize_decomposition(results):
+    """Mean across seeds of the group and stay tables, plus min and max of the headline shares."""
+    import pandas as pd
+    g = pd.concat([r["groups"].assign(seed=r["seed"]) for r in results])
+    s = pd.concat([r["stays"].assign(seed=r["seed"]) for r in results])
+    num_g = [c for c in g.columns if c not in ("drug", "clinician", "seed")]
+    gm = g.groupby(["drug", "clinician"], sort=False)[num_g].mean()
+    for c in ("share_neg_mass", "mean_lr"):
+        gm[c + "_min"] = g.groupby(["drug", "clinician"], sort=False)[c].min()
+        gm[c + "_max"] = g.groupby(["drug", "clinician"], sort=False)[c].max()
+    sm = s.groupby("component", sort=False)[[c for c in s.columns if c not in ("component", "seed")]].mean()
+    return gm, sm
+
+
+def plot_decomposition(results, save_path=None):
+    """(a) share of all negative log-ratio mass by drug x clinician-gave/withheld, per seed; (b) stay-level variance share by part."""
+    import pandas as pd
+    g = pd.concat([r["groups"].assign(seed=r["seed"]) for r in results])
+    s = pd.concat([r["stays"].assign(seed=r["seed"]) for r in results])
+    s = s[s.component != "total"]
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.2))
+    labels = [f"{d}\nclinician {c}" for d, c in (("fluid", "gave"), ("fluid", "withheld"), ("vaso", "gave"), ("vaso", "withheld"))]
+    for i, (d, c) in enumerate((("fluid", "gave"), ("fluid", "withheld"), ("vaso", "gave"), ("vaso", "withheld"))):
+        v = g[(g.drug == d) & (g.clinician == c)]["share_neg_mass"].values
+        axes[0].bar(i, v.mean(), color="#2a78d6", alpha=0.35, width=0.6)
+        axes[0].scatter(np.full(len(v), i) + np.linspace(-0.12, 0.12, len(v)), v, s=18, color="#2a78d6", zorder=3)
+    axes[0].set_xticks(range(4)); axes[0].set_xticklabels(labels, fontsize=8)
+    axes[0].set_ylabel("share of all negative log-ratio mass"); axes[0].set_title("(a) where the policy loses density", fontsize=10)
+    for i, comp_name in enumerate(_COMPONENTS):
+        v = s[s.component == comp_name]["variance_share"].values
+        axes[1].bar(i, v.mean(), color="#eb6834", alpha=0.35, width=0.6)
+        axes[1].scatter(np.full(len(v), i) + np.linspace(-0.12, 0.12, len(v)), v, s=18, color="#eb6834", zorder=3)
+    axes[1].set_xticks(range(4)); axes[1].set_xticklabels([c.replace("_", "\n") for c in _COMPONENTS], fontsize=8)
+    axes[1].set_ylabel("share of variance of a stay's total log-ratio"); axes[1].set_title("(b) what spreads the stay weights", fontsize=10)
+    for ax in axes:
+        ax.spines[["top", "right"]].set_visible(False)
+    fig.suptitle(f"Log-ratio decomposition ({len(results)} seeds; dots = seeds, bar = mean)", fontsize=11, fontweight="bold")
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight"); print(f"Saved to {save_path}")
+    return fig
 
 
 def plot_weight_truncation_sweep(sweep_rows, estimator="trajectory", save_path=None):
@@ -2099,9 +2549,15 @@ def plot_weight_truncation_sweep(sweep_rows, estimator="trajectory", save_path=N
 
     ax1.plot(x, mean_values, color=color, linewidth=2.8, label="mean across seeds", zorder=10)
 
-    baseline_mean = sweep_rows[0]["baseline_mean"]
+    # the estimator's own null; older sweep_rows without it fall back to the mean logged return (correct for the
+    # trajectory-level estimator only)
+    null_key = f"{prefix}_null"
+    if null_key not in sweep_rows[0]:
+        warnings.warn(f"sweep_rows has no '{null_key}' -- drawing the mean logged return, which is not the "
+                      f"{estimator} estimator's own null. Re-run the sweep.")
+    baseline_mean = sweep_rows[0].get(null_key, sweep_rows[0]["baseline_mean"])
     ax1.axhline(baseline_mean, color=BASELINE_COLOR, linestyle=":", linewidth=1.5,
-                label="clinician baseline (logged)")
+                label="this estimator's null (policy = clinician)")
 
     ax1.set_xticks(x)
     ax1.set_xticklabels([f"{wc:g}" for wc in wcap_values])

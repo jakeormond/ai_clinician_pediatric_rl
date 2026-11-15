@@ -2183,7 +2183,7 @@ def run_weight_truncation_sweep(
 
 
 def run_weight_truncation_sweep_for_models(cql_models, bc_models, store, wcap_values, split="test", gamma=None,
-                                           cache_dir=None, tag="auto", **kwargs):
+                                           cache_dir=None, tag="auto", cache_results=True, **kwargs):
     """
     run_weight_truncation_sweep for models loaded with the analysis API ({seed: LoadedModel}): each seed is swept on
     ITS OWN states and its matched BC seed. kwargs go to run_weight_truncation_sweep (n_bootstrap, std_source, ...).
@@ -2199,16 +2199,24 @@ def run_weight_truncation_sweep_for_models(cql_models, bc_models, store, wcap_va
         tag = cql_alpha_tag(cql_models)
     elif tag == "auto":
         tag = None
-    rows = []
-    for seed in sorted(cql, key=str):
-        check_judge_matches(cql[seed], bc[seed])
-        processor = store.processor(cql[seed], split)
-        lp = get_wis_log_probs(cql[seed], bc[seed], processor, split, cache_dir=cache_dir, tag=tag,
-                               **{k: kwargs[k] for k in ("batch_size", "device", "logit_clip", "z_clip", "std_source") if k in kwargs})
-        rows.extend(run_weight_truncation_sweep(
-            [(cql[seed].actor, None, None, {"seed": seed})], [(bc[seed].actor, None, {"seed": seed})],
-            processor, wcap_values, gamma=gamma, precomputed_lp={seed: lp}, **kwargs))
-    return rows
+    def compute():
+        rows = []
+        for seed in sorted(cql, key=str):
+            check_judge_matches(cql[seed], bc[seed])
+            processor = store.processor(cql[seed], split)
+            lp = get_wis_log_probs(cql[seed], bc[seed], processor, split, cache_dir=cache_dir, tag=tag,
+                                   **{k: kwargs[k] for k in ("batch_size", "device", "logit_clip", "z_clip", "std_source") if k in kwargs})
+            rows.extend(run_weight_truncation_sweep(
+                [(cql[seed].actor, None, None, {"seed": seed})], [(bc[seed].actor, None, {"seed": seed})],
+                processor, wcap_values, gamma=gamma, precomputed_lp={seed: lp}, **kwargs))
+        return rows
+
+    if cache_dir and cache_results:
+        meta = {"models": models_signature(cql_models, bc_models), "split": split, "gamma": gamma,
+                "caps": list(wcap_values), "settings": kwargs, "behavior_density": BEHAVIOR_DENSITY,
+                "behavior_gate_smooth": BEHAVIOR_GATE_SMOOTH, "action_coarsening": ACTION_COARSENING}
+        return cached_results(os.path.join(cache_dir, f"wis_sweep_{tag}_{split}.pkl"), compute, meta=meta)
+    return compute()
 
 
 def _control_log_probs(bi, bj, pi, pj, mode, split, cache_dir=None, batch_size=1024,

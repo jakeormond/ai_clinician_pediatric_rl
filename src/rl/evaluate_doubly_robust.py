@@ -34,6 +34,8 @@ resample stays (fixed critic and weights): they cover patient sampling, not crit
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -117,13 +119,6 @@ def doubly_robust_one_seed(cql, bc, fqe, processor, split, wcap_values, gamma, c
     trajs, _ = W.build_trajectory_data(processor, b_lp, t_lp)
     q_row, v_row = _critic_values(cql, fqe, processor)
 
-    LR, R, Q, V, L = dense_matrices([t["log_ratio"] for t in trajs], [t["rewards"] for t in trajs],
-                                    [q_row[t["start"]:t["end"]] for t in trajs],
-                                    [v_row[t["start"]:t["end"]] for t in trajs], [t["length"] for t in trajs])
-    n = len(L)
-    rng = np.random.default_rng(boot_seed)
-    boots = rng.integers(0, n, size=(n_boot, n))
-
     G0 = float(W.discounted_returns(trajs, gamma).mean())
     if sarsa is not None:                                            # unit check: SARSA clinician value vs observed return
         from src.rl.analysis import data as D
@@ -131,7 +126,18 @@ def doubly_robust_one_seed(cql, bc, fqe, processor, split, wcap_values, gamma, c
         v_mu = np.asarray(sarsa.q(D.states(processor), D.actions(processor), scaled=True))[first] * float(sarsa.reward_scale)
         if verbose:
             print(f"  unit check: SARSA V_mu {v_mu.mean():+.3f} vs observed return G0 {G0:+.3f} (reward units)")
+    return _dr_rows(trajs, q_row, v_row, cql.seed, wcap_values, gamma, n_boot, boot_seed, verbose)
 
+
+def _dr_rows(trajs, q_row, v_row, seed, wcap_values, gamma, n_boot, boot_seed, verbose=True):
+    """One result row per weight cap from per-stay trajectories and per-row critic values (reward units)."""
+    from src.rl import evaluate_wis as W
+    LR, R, Q, V, L = dense_matrices([t["log_ratio"] for t in trajs], [t["rewards"] for t in trajs],
+                                    [q_row[t["start"]:t["end"]] for t in trajs],
+                                    [v_row[t["start"]:t["end"]] for t in trajs], [t["length"] for t in trajs])
+    n = len(L)
+    boots = np.random.default_rng(boot_seed).integers(0, n, size=(n_boot, n))
+    G0 = float(W.discounted_returns(trajs, gamma).mean())
     rows = []
     for cap in wcap_values:
         est = dr_estimate(LR, R, Q, V, L, gamma, cap)
@@ -140,11 +146,11 @@ def doubly_robust_one_seed(cql, bc, fqe, processor, split, wcap_values, gamma, c
         for name, mine, theirs in (("stepwise WIS", est["step"], ref), ("stepwise null", est["null"], ref_null),
                                    ("DR null", est["dr_null"], ref_null)):
             if abs(mine - theirs) > 1e-6:
-                raise AssertionError(f"seed {cql.seed} cap {cap}: {name} {mine:.6f} does not match evaluate_wis {theirs:.6f}")
+                raise AssertionError(f"seed {seed} cap {cap}: {name} {mine:.6f} does not match evaluate_wis {theirs:.6f}")
         bs = [dr_estimate(LR, R, Q, V, L, gamma, cap, idx=ix) for ix in boots]
         d_dr = np.array([b["dr"] - b["null"] for b in bs])
         d_is = np.array([b["step"] - b["null"] for b in bs])
-        row = {"seed": cql.seed, "cap": cap, "n_stays": n,
+        row = {"seed": seed, "cap": cap, "n_stays": n,
                "dr": est["dr"], "null": est["null"], "dr_minus_null": est["dr"] - est["null"],
                "dr_lo": float(np.percentile(d_dr, 2.5)), "dr_hi": float(np.percentile(d_dr, 97.5)),
                "is_minus_null": est["step"] - est["null"],
@@ -158,8 +164,38 @@ def doubly_robust_one_seed(cql, bc, fqe, processor, split, wcap_values, gamma, c
     return rows
 
 
+def _cached_df(path, compute, meta):
+    """
+    Load a cached DataFrame if the file exists and was made with the same `meta`; otherwise compute it and save it.
+    Written to disk BEFORE returning, so a later error in the notebook cell cannot lose it.
+    """
+    import json
+    import pickle
+    import warnings
+    norm = lambda m: json.loads(json.dumps(m, default=str, sort_keys=True))
+    if os.path.isfile(path):
+        with open(path, "rb") as f:
+            saved = pickle.load(f)
+        if norm(saved["meta"]) == norm(meta):
+            print(f"  loaded from {path}")
+            return saved["df"]
+        warnings.warn(f"{path} was made with different models or settings; recomputing")
+    df = compute()
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "wb") as f:
+        pickle.dump({"meta": meta, "df": df}, f)
+    print(f"  saved to {path}")
+    return df
+
+
+def _run_dirs(models):
+    from src.rl.evaluate_fqe_final_seeds import _by_seed
+    return {str(k): m.record.run_dir for k, m in sorted(_by_seed(models).items(), key=lambda kv: str(kv[0]))}
+
+
 def run_doubly_robust(cql_models, bc_models, fqe_models, store, split="val", wcap_values=(10, 25, 50), gamma=None,
-                      cache_dir=None, tag="auto", n_boot=200, sarsa_models=None, boot_seed=0, verbose=True, **lp_kwargs):
+                      cache_dir=None, tag="auto", n_boot=200, sarsa_models=None, boot_seed=0, verbose=True,
+                      cache_results=True, **lp_kwargs):
     """
     DR for every seed: each CQL seed with its own BC seed, FQE critic and state embedding.
     wcap_values : weight-cap percentiles (same meaning as in the WIS sweep); ESS >= ~60% means cap <= 50.
@@ -182,14 +218,99 @@ def run_doubly_robust(cql_models, bc_models, fqe_models, store, split="val", wca
         tag = None
     if verbose:
         print(f"action coarsening: {W.ACTION_COARSENING}")
-    rows = []
-    for seed in sorted(cql, key=str):
-        if verbose:
-            print(f"\n=== Seed {seed} ===")
-        rows += doubly_robust_one_seed(cql[seed], bc[seed], fqe[seed], store.processor(cql[seed], split), split,
-                                       wcap_values, gamma, cache_dir=cache_dir, tag=tag, n_boot=n_boot,
-                                       boot_seed=boot_seed, sarsa=sarsa.get(seed), lp_kwargs=lp_kwargs, verbose=verbose)
-    return pd.DataFrame(rows)
+    def compute():
+        rows = []
+        for seed in sorted(cql, key=str):
+            if verbose:
+                print(f"\n=== Seed {seed} ===")
+            rows += doubly_robust_one_seed(cql[seed], bc[seed], fqe[seed], store.processor(cql[seed], split), split,
+                                           wcap_values, gamma, cache_dir=cache_dir, tag=tag, n_boot=n_boot,
+                                           boot_seed=boot_seed, sarsa=sarsa.get(seed), lp_kwargs=lp_kwargs, verbose=verbose)
+        return pd.DataFrame(rows)
+
+    if cache_dir and cache_results:
+        meta = {"cql": _run_dirs(cql_models), "bc": _run_dirs(bc_models), "fqe": _run_dirs(fqe_models), "split": split,
+                "caps": list(wcap_values), "gamma": gamma, "n_boot": n_boot, "boot_seed": boot_seed,
+                "action_coarsening": W.ACTION_COARSENING, "settings": lp_kwargs}
+        return _cached_df(os.path.join(cache_dir, f"wis_dr_{tag}_{split}.pkl"), compute, meta)
+    return compute()
+
+
+# =============================================================================
+# Control: DR for a behaviour clone as the "policy" (true effect = 0)
+# =============================================================================
+
+def sample_hurdle_actions(actor, states, rng_seed=0, batch_size=4096, device=None, logit_clip=8.0):
+    """One stochastic (fluid, vaso) action per row from a hurdle actor: gate ~ Bernoulli(p), dose = sigmoid(mean + std * N(0,1))."""
+    import torch
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    actor.eval()
+    g = torch.Generator(device="cpu").manual_seed(int(rng_seed))
+    S = torch.as_tensor(np.asarray(states), dtype=torch.float32)
+    out = []
+    with torch.no_grad():
+        for i in range(0, len(S), batch_size):
+            f_gl, v_gl, f_m, v_m, f_sd, v_sd = actor._dists(S[i:i + batch_size].to(device))
+            cols = []
+            for gl, m, sd in ((f_gl, f_m, f_sd), (v_gl, v_m, v_sd)):
+                gl, m, sd = gl.cpu(), m.cpu().clamp(-logit_clip, logit_clip), sd.cpu()
+                fire = (torch.rand(gl.shape, generator=g) < torch.sigmoid(gl)).float()
+                dose = torch.sigmoid(m + sd * torch.randn(m.shape, generator=g))
+                cols.append((fire * dose).reshape(-1))
+            out.append(torch.stack(cols, dim=1))
+    return torch.cat(out).numpy().astype(np.float64)
+
+
+def run_dr_bc_control(bc_models, sarsa_models, store, wcap_values=(10, 25, 50, 75, 90), gamma=None, split="val",
+                      cache_dir=None, n_boot=200, n_samples=8, boot_seed=0, verbose=True, cache_results=True, **lp_kwargs):
+    """
+    Null control for run_doubly_robust. The "policy" is the next BC seed (cross control of the WIS pipeline: behaviour
+    = BC seed i, target = BC seed i+1, each on its own state embedding), whose true value is the clinicians', so
+    dr_minus_null should scatter around 0 and its spread is the noise level of the estimator. Uses the same
+    weights/cap/coarsening (wis.ACTION_COARSENING) as the CQL run, and the SARSA critic of seed i (valid for
+    clinician-like behaviour) in place of FQE:  Qhat = SARSA(s, a_logged),  Vhat(s) = mean of SARSA(s, a_k) over
+    `n_samples` actions sampled from the target BC (its stochastic policy, so that the true value is the null, unlike
+    a deterministic action). Returns the same DataFrame as run_doubly_robust.
+    """
+    from src.rl import evaluate_wis as W
+    from src.rl.analysis import data as D
+    from src.rl.evaluate_cql_alpha_sweep import check_judge_matches
+    from src.rl.evaluate_fqe_final_seeds import _by_seed
+    by, sarsa = _by_seed(bc_models), _by_seed(sarsa_models)
+    gamma = float(gamma) if gamma is not None else W.discount_from_models(sarsa_models)
+    seeds = sorted(by, key=str)
+    if verbose:
+        print(f"action coarsening: {W.ACTION_COARSENING}; gamma {gamma}")
+    def compute():
+        rows = []
+        for k, i in enumerate(seeds):
+            j = seeds[(k + 1) % len(seeds)]
+            bi, bj, sa = by[i], by[j], sarsa[i]
+            check_judge_matches(bi, sa)
+            pi, pj = store.processor(bi, split), store.processor(bj, split)
+            if pi.rl_dataset["actions"].shape != pj.rl_dataset["actions"].shape or \
+                    not np.allclose(pi.rl_dataset["actions"], pj.rl_dataset["actions"]):
+                raise ValueError(f"BC seeds {i} and {j} are not row-aligned")
+            if verbose:
+                print(f"\n=== Seed {i} (target BC {j}) ===")
+            b_lp, t_lp = W._control_log_probs(bi, bj, pi, pj, "cross", split, cache_dir=cache_dir,
+                                              **{x: lp_kwargs[x] for x in ("batch_size", "device", "logit_clip", "z_clip") if x in lp_kwargs})
+            trajs, _ = W.build_trajectory_data(pi, b_lp, t_lp)
+            s, a = D.states(pi), D.actions(pi)
+            scale = float(sa.reward_scale)
+            q_row = np.asarray(sa.q(s, a, scaled=True), dtype=np.float64) * scale
+            sj = D.states(pj)
+            v_row = np.mean([np.asarray(sa.q(s, sample_hurdle_actions(bj.actor, sj, rng_seed=boot_seed * 1000 + m), scaled=True),
+                                        dtype=np.float64) for m in range(n_samples)], axis=0) * scale
+            rows += _dr_rows(trajs, q_row, v_row, i, wcap_values, gamma, n_boot, boot_seed, verbose)
+        return pd.DataFrame(rows)
+
+    if cache_dir and cache_results:
+        meta = {"bc": _run_dirs(bc_models), "sarsa": _run_dirs(sarsa_models), "split": split, "caps": list(wcap_values),
+                "gamma": gamma, "n_boot": n_boot, "n_samples": n_samples, "boot_seed": boot_seed,
+                "action_coarsening": W.ACTION_COARSENING, "settings": lp_kwargs}
+        return _cached_df(os.path.join(cache_dir, f"wis_dr_control{W._coarsening_suffix()}_{split}.pkl"), compute, meta)
+    return compute()
 
 
 # =============================================================================

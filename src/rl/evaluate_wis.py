@@ -421,9 +421,11 @@ BEHAVIOR_DENSITY = "clipped"
 # Setting this to e.g. {"fluid": 0.1, "vaso": 0.05} evaluates BOTH densities on the coarsened actions: a dose below the
 # threshold counts as "none" for the policy, the BC and the logged action alike. The policy's/BC's probability of "none"
 # is then (1 - p) + p * Phi((logit(tau) - mean) / std); doses above tau keep their gate x logit-Normal density.
-# Choose each tau just below the smallest dose clinicians actually give (fluid ~0.13, vaso ~0.07). None = off (the
-# validated exact-zero version). Cache files are named with the setting, so versions never overwrite each other.
-ACTION_COARSENING = None
+# Each tau is about the 1st percentile of the non-zero training doses (fluid ~0.12, vaso ~0.05-0.06), rounded; the
+# same values are used for every dataset. Default ON, since this is the evaluation used in the paper. Set to None to
+# switch it off (the plain exact-zero version). Cache files are named with the setting, so versions never overwrite
+# each other.
+ACTION_COARSENING = {"fluid": 0.1, "vaso": 0.05}
 
 
 def _coarsening_suffix():
@@ -2635,3 +2637,61 @@ def plot_wis_summary(res_by_cap, title="", uncapped=None, save_path=None):
     if save_path:
         fig.savefig(save_path, dpi=200, bbox_inches="tight")
     return fig
+
+# ---------------------------------------------------------------------------
+# Length diagnostics: is the trajectory-level estimate a stay-length artifact?
+# ---------------------------------------------------------------------------
+def load_cached_trajectories(store, cql_models, seed, cache_dir, kind="cql", split="val", tag=None):
+    """Rebuild one seed's trajectory data from the cached log-probs (no model forward pass).
+
+    kind="cql"   : the CQL-vs-BC log-probs written by the WIS sweep.
+    kind="cross" : the BC-vs-BC (i+1 target vs i behaviour) control log-probs.
+    """
+    tag = tag or cql_alpha_tag(cql_models)
+    names = {"cql": f"wis_logprobs_{tag}_{split}_seed{seed}.npz",
+             "cross": f"wis_control_cross{_coarsening_suffix()}_{split}_seed{seed}.npz"}
+    if kind not in names:
+        raise ValueError(f"kind must be one of {sorted(names)}, got {kind!r}")
+    d = np.load(os.path.join(cache_dir, names[kind]))
+    processor = store.processor(cql_models[seed], split)
+    return build_trajectory_data(processor, d["behavior_lp"], d["target_lp"])[0]
+
+
+def length_table(cql_models, store, cache_dir, kind="cql", split="val",
+                 caps=(25, 50, 90), horizons=(24, 48), gamma=None, tag=None):
+    """Per-seed table showing whether trajectory-level WIS is driven by stay length.
+
+    Columns: n_stays, mean_len, spearman_logratio_len (total log-ratio vs length),
+    mean_logratio_per_hour, and for each cap c: wlen_cap{c} (weight-averaged stay
+    length; compare with mean_len), full_cap{c} (full-length WIS minus null) and
+    h{h}_cap{c} (fixed-horizon WIS minus null).
+    """
+    import pandas as pd
+    gamma = discount_from_models(cql_models) if gamma is None else gamma
+    rows = []
+    for seed in sorted(cql_models):
+        trajs = load_cached_trajectories(store, cql_models, seed, cache_dir, kind, split, tag)
+        L = np.array([t["length"] for t in trajs], dtype=float)
+        tot = np.array([t["log_ratio"].sum() for t in trajs])
+        null_trajs = _null_trajectories(trajs)
+        r = {"seed": seed, "n_stays": len(trajs), "mean_len": L.mean(),
+             "spearman_logratio_len": stats.spearmanr(tot, L)[0],
+             "mean_logratio_per_hour": tot.sum() / L.sum()}
+        for c in caps:
+            tw = compute_trajectory_wis(trajs, gamma, weight_cap_percentile=c)
+            nw = compute_trajectory_wis(null_trajs, gamma, weight_cap_percentile=c)["value"]
+            w = np.asarray(tw["weights"], dtype=float)
+            w = w / w.sum()
+            r[f"wlen_cap{c}"] = float(w @ L)
+            r[f"full_cap{c}"] = tw["value"] - nw
+            for h in horizons:
+                _, _, d = fixed_horizon_wis(trajs, gamma, h, [c])
+                r[f"h{h}_cap{c}"] = d[c]
+        rows.append(r)
+    return pd.DataFrame(rows)
+
+
+def print_length_table(lt):
+    """Print the per-seed table and the across-seed means."""
+    print(lt.round(3).to_string(index=False))
+    print("\nmean over seeds:\n", lt.drop(columns="seed").mean().round(3).to_string())
